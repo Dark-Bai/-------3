@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ZoomIn, ZoomOut } from "lucide-react";
 import { isTv } from "@/lib/tv";
+import { FloatingWindow } from "./FloatingWindow";
 
 export interface PanelZoomProps {
   panelId?: string;
@@ -49,6 +50,11 @@ export function Panel({
         return { position: "fixed" as const, left: 24 / z, top: 24 / z, width: w / z, height: h / z, zIndex: 60, zoom: z };
       })()
     : undefined;
+
+  const handleToggleZoom = () => {
+    if (panelId && onToggleZoom) onToggleZoom(panelId);
+  };
+
   return (
     <>
       {tvOverlay && <div className="fixed left-0 right-0 top-0 bottom-0 z-[55] bg-black/70" />}
@@ -80,8 +86,8 @@ export function Panel({
           {panelId && onToggleZoom && (
             <button
               type="button"
-              onClick={() => onToggleZoom(panelId)}
-              title={isZoomed ? "缩小" : "放大"}
+              onClick={handleToggleZoom}
+              title={isZoomed ? "收回悬浮窗" : "弹出悬浮窗"}
               className={`flex h-[22px] w-[22px] items-center justify-center rounded border transition-colors ${
                 isZoomed
                   ? "border-[#d4943a]/60 bg-[#d4943a]/10 text-[#d4943a]"
@@ -96,6 +102,19 @@ export function Panel({
       {/* 面板体 — 报纸正文区域 */}
       <div className={`min-h-0 flex-1 text-[#6b5b3e] ${bodyClassName}`}>{children}</div>
       </section>
+
+      {/* 非 TV 模式: 悬浮窗口替代原地放大 */}
+      {!isTv && isZoomed && panelId && (
+        <FloatingWindow
+          id={panelId}
+          title={title}
+          icon={icon}
+          accent={accent}
+          onClose={handleToggleZoom}
+        >
+          {children}
+        </FloatingWindow>
+      )}
     </>
   );
 }

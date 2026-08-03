@@ -29,7 +29,8 @@ export function DashboardLayout({ rows }: { rows: PanelRowDef[] }) {
     () => ({ rowHeights: rows.map((r) => r.defaultH), rowWidths: rows.map((r) => r.panels.map((p) => p.defaultW)) }),
     [rows]
   );
-  const effLayout = isTv ? defaultLayout : layout;
+  // 非 TV 模式: 悬浮窗口替代原地放大, 布局始终保持默认
+  const effLayout = defaultLayout;
 
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-1 p-1" style={{ gap: '3px', padding: '3px' }}>
