@@ -18,6 +18,10 @@ export interface Quote {
   amount: number; // 万元
   turnover: number;
   time: string;
+  /** 成交量(手) */
+  vol?: number;
+  /** 振幅(%) */
+  amplitude?: number;
 }
 
 export interface FutureQuote {

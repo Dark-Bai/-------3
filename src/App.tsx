@@ -14,6 +14,8 @@ import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
 import { ChainPanel } from "@/components/dash/ChainPanel";
 import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
+import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
+import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
 import AiDashboard from "./AiDashboard";
 import GoodsDashboard from "./GoodsDashboard";
 import FinDashboard from "./FinDashboard";
@@ -110,10 +112,37 @@ function Dashboard() {
   );
 }
 
+/** 渲染所有打开的个股详情悬浮窗 */
+function StockDetailWindows() {
+  const { stocks, closeStockDetail } = useStockDetail();
+  return (
+    <>
+      {stocks.map((s) => (
+        <StockDetailWindow
+          key={s.code}
+          code={s.code}
+          name={s.name}
+          onClose={() => closeStockDetail(s.code)}
+        />
+      ))}
+    </>
+  );
+}
+
+/** 主面板 + 个股详情 Provider */
+function DashboardApp() {
+  return (
+    <StockDetailProvider>
+      <Dashboard />
+      <StockDetailWindows />
+    </StockDetailProvider>
+  );
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Dashboard />} />
+      <Route path="/" element={<DashboardApp />} />
       <Route path="/ai" element={<AiDashboard />} />
       <Route path="/goods" element={<GoodsDashboard />} />
       <Route path="/fin" element={<FinDashboard />} />

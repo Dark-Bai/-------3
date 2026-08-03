@@ -1,10 +1,11 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePolling } from "@/hooks/usePolling";
 import { useQuote } from "@/lib/market";
 import { api } from "@/lib/api";
 import { Spark } from "./Spark";
 import { clsChg, fmtPct, fmtPrice, fmtYuan } from "@/lib/format";
 import { isTv } from "@/lib/tv";
+import { useStockDetail } from "./StockDetailContext";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
@@ -108,7 +109,17 @@ export const QuoteRow = memo(function QuoteRow({
     [code, flow, visible]
   );
 
-  const Tag = onClick ? "button" : "div";
+  const { openStockDetail } = useStockDetail();
+
+  const handleClick = useCallback(() => {
+    if (onClick) {
+      onClick();
+    } else {
+      openStockDetail(code, name);
+    }
+  }, [onClick, openStockDetail, code, name]);
+
+  const Tag = "button";
   const skin =
     variant === "card"
       ? "border border-[#e0d5c0]/40 bg-[#ede4d4] hover:border-[#d4943a]/40 hover:bg-[#ede4d4]"
@@ -121,7 +132,7 @@ export const QuoteRow = memo(function QuoteRow({
       ref={(el: HTMLElement | null) => {
         rootRef.current = el;
       }}
-      onClick={onClick}
+      onClick={handleClick}
       className={`group block w-full rounded px-2 py-[4px] text-left transition-colors ${skin} ${
         active ? "bg-[#d4943a]/10 ring-1 ring-[#d4943a]/40" : ""
       }`}
