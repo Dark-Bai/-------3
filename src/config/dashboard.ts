@@ -20,6 +20,8 @@ export const INDICES: IndexDef[] = [
   { code: "usINX", label: "标普500", region: "US" },
   { code: "usVIX", label: "恐慌指数", region: "US" },
   { code: "usSOXX", label: "费城半导体", region: "US" },
+  { code: "usN225", label: "日经225", region: "US" },
+  { code: "usKS11", label: "韩国KOSPI", region: "US" },
 ];
 
 export const FOREX: IndexDef[] = [{ code: "whUSDCNY", label: "美元/人民币", region: "FX" }];

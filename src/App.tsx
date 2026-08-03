@@ -6,6 +6,7 @@ import { DashboardLayout, type PanelRowDef } from "@/components/dash/DashboardLa
 import { IndexPanel } from "@/components/dash/IndexPanel";
 import { CommodityPanel } from "@/components/dash/CommodityPanel";
 import { TreasuryPanel } from "@/components/dash/TreasuryPanel";
+import { CommodityTreasuryPanel } from "@/components/dash/CommodityTreasuryPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
 import { MoneyFlowPanel } from "@/components/dash/MoneyFlowPanel";
 import { RankPanel } from "@/components/dash/RankPanel";
@@ -73,8 +74,7 @@ const PANEL_ROWS: PanelRowDef[] = [
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2, mobileH: "h-[340px]" },
       { id: "moneyFlow", component: MoneyFlowPanel, defaultW: 0.2, mobileH: "h-[340px]" },
       { id: "rank", component: RankPanel, defaultW: 0.2, mobileH: "h-[340px]" },
-      { id: "commodity", component: CommodityPanel, defaultW: 0.2, mobileH: "h-[300px]" },
-      { id: "treasury", component: TreasuryPanel, defaultW: 0.2, mobileH: "h-[340px]" },
+      { id: "commodityTreasury", component: CommodityTreasuryPanel, defaultW: 0.4, mobileH: "h-[340px]" },
     ],
   },
   {
