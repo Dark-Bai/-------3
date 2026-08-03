@@ -11,7 +11,7 @@ const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 function IndexRow({ def, q, minute }: { def: IndexDef; q?: HubQuote; minute?: MinuteData }) {
   return (
-    <div className="flex items-center gap-1.5 rounded px-1 py-[1.5px] transition-colors hover:bg-[#ede4d4]">
+    <div className="flex flex-1 items-center gap-1.5 rounded px-1 transition-colors hover:bg-[#ede4d4]">
       <span className="w-6 shrink-0 rounded-sm bg-[#e0d5c0] text-center text-[8px] leading-3 text-[#8b7a5e]">{def.region}</span>
       <span className="w-[72px] shrink-0 truncate text-[11px] text-[#6b5b3e]">{def.label}</span>
       <span className={`w-[70px] shrink-0 text-right text-[12px] font-bold ${q ? clsChg(q.pct) : "text-[#a8987e]"}`} style={TNUM}>

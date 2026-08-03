@@ -63,9 +63,9 @@ const PANEL_ROWS: PanelRowDef[] = [
   {
     defaultH: 0.30,
     panels: [
-      { id: "index", component: IndexPanel, defaultW: 0.25, mobileH: "h-[560px]" },
-      { id: "sector", component: SectorPanel, defaultW: 0.4167, mobileH: "h-[560px]" },
-      { id: "news", component: NewsPanel, defaultW: 0.3333, mobileH: "h-[560px]" },
+      { id: "index", component: IndexPanel, defaultW: 0.3, mobileH: "h-[560px]" },
+      { id: "commodityTreasury", component: CommodityTreasuryPanel, defaultW: 0.3, mobileH: "h-[560px]" },
+      { id: "news", component: NewsPanel, defaultW: 0.4, mobileH: "h-[560px]" },
     ],
   },
   {
@@ -74,7 +74,7 @@ const PANEL_ROWS: PanelRowDef[] = [
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2, mobileH: "h-[340px]" },
       { id: "moneyFlow", component: MoneyFlowPanel, defaultW: 0.2, mobileH: "h-[340px]" },
       { id: "rank", component: RankPanel, defaultW: 0.2, mobileH: "h-[340px]" },
-      { id: "commodityTreasury", component: CommodityTreasuryPanel, defaultW: 0.4, mobileH: "h-[340px]" },
+      { id: "sector", component: SectorPanel, defaultW: 0.4, mobileH: "h-[340px]" },
     ],
   },
   {

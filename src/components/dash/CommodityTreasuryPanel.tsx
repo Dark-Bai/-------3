@@ -161,7 +161,7 @@ export function CommodityTreasuryPanel({ className = "", ...zoomProps }: { class
   }, []);
 
   return (
-    <Panel className={className} {...zoomProps} title="大宗商品 · 美债" icon="◧◆" accent="#a78bfa"
+    <Panel className={className} {...zoomProps} title="外围指数" icon="▦" accent="#d4943a"
       right={
         <span className="flex items-center gap-2 text-[10px] text-[#a8987e]">
           <span className="hidden sm:inline">拖拽排序</span>
