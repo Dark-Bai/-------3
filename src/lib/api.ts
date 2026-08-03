@@ -553,6 +553,7 @@ export interface PluginNewsAnalystData {
 /** 市场情绪插件数据结构 */
 export interface PluginMarketIndex {
   indexName: string;
+  currentPrice?: number;
   changePercent: number;
   upCount: number;
   downCount: number;
@@ -572,11 +573,42 @@ export interface PluginFearGreed {
   level: string;
   interpretation: string;
 }
+export interface PluginArbr {
+  ar: number;
+  br: number;
+  arJudgment: string;
+  brJudgment: string;
+  interpretation: string;
+  period: string;
+}
+export interface PluginVolumeAnalysis {
+  currentVolume: number;
+  avgVolume5: number;
+  ratio: number;
+  level: string;
+  interpretation: string;
+}
+export interface PluginDistributionInterval {
+  range: string;
+  count: number;
+  pct: number;
+}
+export interface PluginDistribution {
+  upCount: number;
+  downCount: number;
+  flatCount: number;
+  totalCount: number;
+  upPct: number;
+  downPct: number;
+  intervals: PluginDistributionInterval[];
+}
 export interface PluginMarketSentimentData {
-  arbr: null;
+  arbr: PluginArbr | null;
   marketIndex: PluginMarketIndex | null;
   limitUpDown: PluginLimitUpDown | null;
   fearGreed: PluginFearGreed | null;
+  volumeAnalysis: PluginVolumeAnalysis | null;
+  distribution: PluginDistribution | null;
   dataSuccess: boolean;
 }
 export function useOpenRouterUsage() {
