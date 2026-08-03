@@ -57,6 +57,7 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
   const [chainOverrides, setChainOverrides] = useState<Record<string, { segments: { stocks: ChainStock[] }[] }>>(() => loadJson(CHAIN_OVERRIDES_KEY, {}));
   const [editor, setEditor] = useState<{ mode: "add" | "update"; name: string; content: string } | null>(null);
   const [parseState, setParseState] = useState<{ loading: boolean; error: string; warnings: string[] }>({ loading: false, error: "", warnings: [] });
+  const [hidden, setHidden] = useState(false);
 
   // 合并内置链 + 自定义链（编辑覆盖）
   const mergedChains = useMemo(() =>
@@ -230,6 +231,18 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
         accent="#4a6b3f"
         right={
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setHidden((v) => !v)}
+              className={`flex h-[22px] items-center rounded px-1.5 text-[10px] font-medium transition-colors ${
+                hidden
+                  ? "border border-[#d4943a]/40 bg-[#d4943a]/15 text-[#d4943a]"
+                  : "border border-transparent text-[#a8987e] hover:border-[#e0d5c0] hover:text-[#6b5b3e]"
+              }`}
+              title={hidden ? "显示产业链上下游全景" : "隐藏产业链上下游全景"}
+            >
+              <span className="mr-1 text-[12px]">{hidden ? "◎" : "◉"}</span>
+              切换
+            </button>
             {allChains.map((c) => (
               <div key={c.id} className="group relative">
                 <button onClick={() => setChainId(c.id)}
@@ -253,6 +266,15 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
           </div>
         }
       >
+        {hidden ? (
+          <div className="flex h-full min-h-0 cursor-default items-center justify-center rounded border-2 border-dashed border-[#e0d5c0] bg-[#f5f0e6]/40">
+            <div className="select-none text-center">
+              <div className="text-[28px] text-[#d4c5a8]">⛓</div>
+              <div className="mt-2 text-[13px] font-medium text-[#c8b89a]">产业链上下游全景 · 已隐藏</div>
+              <div className="mt-1 text-[10px] text-[#d4c5a8]">点击标题右侧「显示」按钮恢复</div>
+            </div>
+          </div>
+        ) : (
         <div className="flex h-full min-h-0">
           <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 p-2" style={{ gridTemplateRows: "1fr auto" }}>
             {chain.segments.map((seg, si) => {
@@ -317,6 +339,7 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
             </div>
           </div>
         </div>
+        )}
       </Panel>
 
       {editor && (
