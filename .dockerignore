@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+*.log
+.DS_Store
+# 私有密钥与运行期积累数据, 绝不进入镜像
+server/.env
+server/data/
