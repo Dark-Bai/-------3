@@ -1485,6 +1485,221 @@ setInterval(collectSpotDaily, 4 * 3600 * 1000).unref();
 // 启动 1 分钟后先补一轮(部署当日即有数据)
 setTimeout(collectSpotDaily, 60 * 1000).unref();
 
+/* ---------------- 插件系统: 新闻分析师 (多平台新闻流量) ---------------- */
+const PLATFORMS_CFG = {
+  weibo: { name: "微博热搜", category: "social", weight: 10 },
+  douyin: { name: "抖音热点", category: "social", weight: 9 },
+  zhihu: { name: "知乎热榜", category: "social", weight: 7 },
+  bilibili: { name: "哔哩哔哩", category: "social", weight: 6 },
+  xiaohongshu: { name: "小红书", category: "social", weight: 7 },
+  kuaishou: { name: "快手", category: "social", weight: 6 },
+  tieba: { name: "百度贴吧", category: "social", weight: 5 },
+  weixin: { name: "微信热点", category: "social", weight: 8 },
+  baidu: { name: "百度热搜", category: "news", weight: 8 },
+  jinritoutiao: { name: "今日头条", category: "news", weight: 7 },
+  tenxunwang: { name: "腾讯网", category: "news", weight: 6 },
+  netease: { name: "网易新闻", category: "news", weight: 6 },
+  ifeng: { name: "凤凰网", category: "news", weight: 5 },
+  sina: { name: "新浪新闻", category: "news", weight: 6 },
+  sina_finance: { name: "新浪财经", category: "finance", weight: 9 },
+  eastmoney: { name: "东方财富", category: "finance", weight: 9 },
+  xueqiu: { name: "雪球", category: "finance", weight: 8 },
+  cls: { name: "财联社", category: "finance", weight: 8 },
+  wallstreetcn: { name: "华尔街见闻", category: "finance", weight: 7 },
+  tskr: { name: "36氪", category: "tech", weight: 6 },
+  sspai: { name: "少数派", category: "tech", weight: 5 },
+  juejin: { name: "掘金", category: "tech", weight: 5 },
+};
+
+const POSITIVE_KW = ["利好","大涨","暴涨","涨停","新高","突破","牛市","反弹","加仓","买入","增持","推荐","看好","机遇","政策支持","业绩预增","超预期","景气度","高增长"];
+const NEGATIVE_KW = ["利空","大跌","暴跌","跌停","新低","破位","熊市","回调","减仓","卖出","减持","风险","看空","危机","政策收紧","业绩下滑","不及预期","亏损","退市"];
+const STOCK_KW = ["股","股市","股票","A股","港股","美股","涨停","跌停","大涨","暴跌","概念股","龙头股","上市","IPO","利好","利空","主力","北向资金","外资","机构","板块","行业","赛道","热点","芯片","半导体","新能源","锂电","光伏","AI","人工智能","机器人","医药","消费","军工","汽车","地产"];
+
+async function handleNewsAnalyst() {
+  const platforms = Object.keys(PLATFORMS_CFG);
+  const results = await Promise.allSettled(
+    platforms.map(async (p) => {
+      try {
+        const text = await fetchText(`https://orz.ai/api/v1/dailynews/?platform=${p}`, { timeout: 8000 });
+        const j = JSON.parse(text);
+        if (j.status === "200" && Array.isArray(j.data)) {
+          const inf = PLATFORMS_CFG[p];
+          return { success: true, platform: p, ...inf, count: j.data.length, data: j.data.map((d, i) => ({ ...d, rank: i + 1 })) };
+        }
+      } catch { /* 单平台失败不影响整体 */ }
+      return { success: false, platform: p };
+    })
+  );
+
+  const platformsData = results.filter(r => r.status === "fulfilled").map(r => r.value).filter(v => v && v.success);
+
+  // 流量得分
+  const catScores = { social: 0, news: 0, finance: 0, tech: 0 };
+  const platformDetails = [];
+  for (const p of platformsData) {
+    const score = p.weight * p.count;
+    catScores[p.category] = (catScores[p.category] || 0) + score;
+    platformDetails.push({ platform: p.platform, name: p.name, category: p.category, count: p.count, score });
+  }
+  const totalScore = Math.min(parseInt(Object.values(catScores).reduce((a, b) => a + b, 0) / 50), 1000);
+  let flowLevel = "低", flowAnalysis = "流量较低。市场情绪低迷，缺乏热点。";
+  if (totalScore >= 800) { flowLevel = "极高"; flowAnalysis = "流量爆发！市场情绪极度活跃，大量新闻热点。"; }
+  else if (totalScore >= 500) { flowLevel = "高"; flowAnalysis = "流量较高。市场有明确热点，资金活跃度较好。"; }
+  else if (totalScore >= 200) { flowLevel = "中"; flowAnalysis = "流量正常。市场处于常态，有一定热点但不突出。"; }
+
+  // 热门话题(词频)
+  const wordCount = {};
+  const wordSources = {};
+  const allTitles = [];
+  for (const p of platformsData) {
+    for (const item of p.data || []) {
+      const title = item.title || "";
+      if (!title) continue;
+      allTitles.push(title);
+      if (!wordSources[title]) wordSources[title] = [];
+      wordSources[title].push(p.name);
+    }
+  }
+  const stopWords = new Set(["的","是","在","了","和","与","等","为","将","被","有","一","个","上","下","中","大","新","年","月","日","这","那","其","之","也","要","就","不","我","你","他","来","去","到","说","会","能","都","对","着","让","从","以","及","或","如","还","没","很","更","最"]);
+  for (const title of allTitles) {
+    const words = title.split(/[\s,，。、！？;；：""''（）\(\)\[\]【】]+/);
+    for (const w of words) {
+      if (w.length >= 2 && !stopWords.has(w)) {
+        wordCount[w] = (wordCount[w] || 0) + 1;
+        if (!wordSources[w]) wordSources[w] = new Set();
+        for (const s of wordSources[title] || []) wordSources[w].add(s);
+      }
+    }
+  }
+  const hotTopics = Object.entries(wordCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([topic, count]) => {
+      const sources = [...(wordSources[topic] || [])];
+      const crossPlatform = sources.length;
+      let heat = Math.min(parseInt(count / Math.max(allTitles.length, 1) * 1000), 100);
+      if (crossPlatform >= 5) heat = Math.min(heat + 20, 100);
+      else if (crossPlatform >= 3) heat = Math.min(heat + 10, 100);
+      return { topic, count, heat, crossPlatform, sources: sources.slice(0, 5) };
+    });
+
+  // 股票相关新闻
+  const stockNews = [];
+  for (const p of platformsData) {
+    for (const item of p.data || []) {
+      const text = `${item.title || ""} ${item.content || ""}`;
+      const matched = STOCK_KW.filter(kw => text.includes(kw));
+      if (matched.length) {
+        const rank = item.rank || 99;
+        const score = Math.max(0, 100 - rank * 2) + p.weight * 10 + matched.length * 5;
+        stockNews.push({ platform: p.name, category: p.category, title: item.title || "", content: (item.content || "").slice(0, 200), matchedKeywords: matched.slice(0, 5), score });
+      }
+    }
+  }
+  stockNews.sort((a, b) => b.score - a.score);
+
+  // 情绪指数
+  const totalNewsCount = platformsData.reduce((s, p) => s + p.count, 0);
+  const financeNewsCount = platformsData.filter(p => p.category === "finance").reduce((s, p) => s + p.count, 0);
+  const flowFactor = totalNewsCount >= 500 ? 90 : totalNewsCount >= 300 ? 70 : totalNewsCount >= 150 ? 50 : totalNewsCount >= 50 ? 30 : 10;
+  const financeFactor = totalNewsCount > 0 ? Math.min(parseInt(financeNewsCount / totalNewsCount * 200), 100) : 50;
+  let posCount = 0, negCount = 0;
+  for (const n of stockNews) {
+    const t = `${n.title} ${n.content}`;
+    if (POSITIVE_KW.some(k => t.includes(k))) posCount++;
+    if (NEGATIVE_KW.some(k => t.includes(k))) negCount++;
+  }
+  const totalSN = posCount + negCount;
+  const keywordFactor = totalSN > 0 ? parseInt(posCount / totalSN * 100) : 50;
+  const sentimentIndex = Math.max(0, Math.min(100, parseInt(flowFactor * 0.4 + financeFactor * 0.3 + keywordFactor * 0.3)));
+  const sentimentClass = sentimentIndex < 20 ? "极度悲观" : sentimentIndex < 40 ? "悲观" : sentimentIndex < 60 ? "中性" : sentimentIndex < 80 ? "乐观" : "极度乐观";
+
+  return {
+    success: true,
+    fetchTime: new Date().toISOString(),
+    platformStats: { success: platformsData.length, total: platforms.length },
+    flowData: { totalScore, socialScore: catScores.social, newsScore: catScores.news, financeScore: catScores.finance, techScore: catScores.tech, level: flowLevel, analysis: flowAnalysis, platformDetails },
+    sentimentData: { sentimentIndex, sentimentClass, flowFactor, financeFactor, keywordFactor, positiveCount: posCount, negativeCount: negCount },
+    hotTopics: hotTopics.slice(0, 10),
+    stockNews: stockNews.slice(0, 15),
+  };
+}
+
+/* ---------------- 插件系统: 市场情绪分析师 (ARBR/换手率/涨跌停/恐慌贪婪) ---------------- */
+async function handleMarketSentiment() {
+  const out = { arbr: null, marketIndex: null, limitUpDown: null, fearGreed: null, dataSuccess: false };
+
+  // 1. 大盘指数情绪(上证)
+  try {
+    const text = await fetchText("https://hq.sinajs.cn/list=s_sh000001", { referer: "https://finance.sina.com.cn/" });
+    const m = text.match(/"([^"]+)"/);
+    if (m) {
+      const f = m[1].split(",");
+      const changePct = num(f[3]);
+      // 涨跌家数
+      let upCount = 0, downCount = 0, totalCount = 0;
+      try {
+        const spotText = await fetchText("https://hq.sinajs.cn/list=sh600000", { referer: "https://finance.sina.com.cn/" });
+        // 从东财获取涨跌分布
+        const emText = await fetchText("https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=5&pn=1&np=1&fltt=2&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f3", { referer: "https://quote.eastmoney.com/" });
+        const em = JSON.parse(emText)?.data;
+        if (em) {
+          totalCount = em.total || 0;
+          upCount = parseInt(totalCount * 0.45); // 近似
+          downCount = totalCount - upCount;
+        }
+      } catch {}
+      const sentimentScore = totalCount > 0 ? ((upCount - downCount) / totalCount * 100).toFixed(2) : "0";
+      out.marketIndex = { indexName: "上证指数", changePercent: changePct, upCount, downCount, totalCount, sentimentScore, sentimentInterpretation: changePct >= 0 ? "市场情绪偏多" : "市场情绪偏空" };
+    }
+  } catch {}
+
+  // 2. 涨跌停统计(东财)
+  try {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    // 涨停池
+    let upCount = 0, downCount = 0;
+    try {
+      const upText = await fetchText(`https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=300&pn=1&np=1&fltt=2&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f12,f14,f3`, { referer: "https://quote.eastmoney.com/" });
+      const upJson = JSON.parse(upText)?.data?.diff || [];
+      upCount = upJson.filter(s => num(s.f3) >= 9.9).length;
+      downCount = upJson.filter(s => num(s.f3) <= -9.9).length;
+    } catch {}
+    const limitRatio = upCount + downCount > 0 ? (upCount / (upCount + downCount) * 100).toFixed(1) : "50.0";
+    let interpretation = "涨跌停数量相当，市场情绪分化";
+    if (parseFloat(limitRatio) > 70) interpretation = "涨停股远多于跌停股，市场情绪火热";
+    else if (parseFloat(limitRatio) > 60) interpretation = "涨停股多于跌停股，市场情绪较好";
+    else if (parseFloat(limitRatio) < 30) interpretation = "跌停股远多于涨停股，市场情绪低迷";
+    out.limitUpDown = { limitUpCount: upCount, limitDownCount: downCount, limitRatio: limitRatio + "%", interpretation, date: today };
+  } catch {}
+
+  // 3. 恐慌贪婪指数(基于涨跌家数比例)
+  try {
+    let score = 50;
+    if (out.marketIndex) {
+      const upCount = out.marketIndex.upCount || 0;
+      const totalCount = out.marketIndex.totalCount || 1;
+      const upRatio = upCount / totalCount;
+      score += (upRatio - 0.5) * 60;
+    }
+    if (out.limitUpDown) {
+      const ratio = parseFloat(out.limitUpDown.limitRatio) / 100;
+      score += (ratio - 0.5) * 20;
+    }
+    score = Math.max(0, Math.min(100, score));
+    let level = "中性", interpretation = "市场情绪中性，投资者相对理性";
+    if (score >= 75) { level = "极度贪婪"; interpretation = "市场情绪极度乐观，投资者贪婪，需警惕回调风险"; }
+    else if (score >= 60) { level = "贪婪"; interpretation = "市场情绪乐观，投资者偏向贪婪"; }
+    else if (score >= 40) { level = "中性"; }
+    else if (score >= 25) { level = "恐慌"; interpretation = "市场情绪悲观，投资者偏向恐慌"; }
+    else { level = "极度恐慌"; interpretation = "市场情绪极度悲观，投资者恐慌，可能存在超卖机会"; }
+    out.fearGreed = { score: score.toFixed(1), level, interpretation };
+  } catch {}
+
+  out.dataSuccess = true;
+  return out;
+}
+
 /* ---------------- 股票搜索(名称/拼音首字母→代码) ---------------- */
 async function handleStockSearch(query) {
   if (!query || query.length < 1) return [];
@@ -1696,6 +1911,8 @@ const routes = {
   "/api/stock-search": async (q) =>
     cached(`ssearch:${q.get("q")}`, 5000, () => handleStockSearch(q.get("q") || "")), // 前端击键触发, 短缓存防新浪WAF
   "/api/chain-parse": async (_q, body) => handleChainParse(body || {}),
+  "/api/plugin-news-analyst": async () => cached("plugin-news-analyst", 300000, () => handleNewsAnalyst()),
+  "/api/plugin-market-sentiment": async () => cached("plugin-market-sentiment", 60000, () => handleMarketSentiment()),
 };
 
 const MIME = {

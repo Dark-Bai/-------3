@@ -9,6 +9,7 @@ import { canonBoardName, unionBoards } from "@/lib/boards";
 import { CHAINS } from "@/config/dashboard";
 import type { Chain, ChainStock } from "@/config/dashboard";
 import { clsChg, fmtPct, fmtTime, fmtWan } from "@/lib/format";
+import { ChainPluginPanel } from "./ChainPluginPanel";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 const CHAIN_OVERRIDES_KEY = "market-dashboard.chain-overrides.v2";
@@ -226,9 +227,9 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
       <Panel
         className={className}
         {...zoomProps}
-        title="产业链上下游全景"
-        icon="⛓"
-        accent="#4a6b3f"
+        title={hidden ? "市场情绪" : "产业链上下游全景"}
+        icon={hidden ? "◉" : "⛓"}
+        accent={hidden ? "#d4943a" : "#4a6b3f"}
         right={
           <div className="flex items-center gap-1">
             <button
@@ -267,13 +268,7 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
         }
       >
         {hidden ? (
-          <div className="flex h-full min-h-0 cursor-default items-center justify-center rounded border-2 border-dashed border-[#e0d5c0] bg-[#f5f0e6]/40">
-            <div className="select-none text-center">
-              <div className="text-[28px] text-[#d4c5a8]">⛓</div>
-              <div className="mt-2 text-[13px] font-medium text-[#c8b89a]">产业链上下游全景 · 已隐藏</div>
-              <div className="mt-1 text-[10px] text-[#d4c5a8]">点击标题右侧「显示」按钮恢复</div>
-            </div>
-          </div>
+          <ChainPluginPanel className="h-full min-h-0" />
         ) : (
         <div className="flex h-full min-h-0">
           <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 p-2" style={{ gridTemplateRows: "1fr auto" }}>

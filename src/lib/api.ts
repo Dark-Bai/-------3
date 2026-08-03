@@ -494,9 +494,91 @@ export const api = {
   financeMain: (code: string) => get<FinanceMain>(`/api/finance-main?code=${encodeURIComponent(code)}`),
   financeBoard: (period = "") => get<FinanceBoard>(`/api/finance-board${period ? `?period=${encodeURIComponent(period)}` : ""}`),
   financeForecast: (period = "") => get<FinanceForecast>(`/api/finance-forecast${period ? `?period=${encodeURIComponent(period)}` : ""}`),
+  pluginNewsAnalyst: () => get<PluginNewsAnalystData>(`/api/plugin-news-analyst`),
+  pluginMarketSentiment: () => get<PluginMarketSentimentData>(`/api/plugin-market-sentiment`),
 };
 
-/** OpenRouter 用量轮询(1 小时) */
+/** 新闻分析师插件数据结构 */
+export interface PluginPlatformDetail {
+  platform: string;
+  name: string;
+  category: string;
+  count: number;
+  score: number;
+}
+export interface PluginFlowData {
+  totalScore: number;
+  socialScore: number;
+  newsScore: number;
+  financeScore: number;
+  techScore: number;
+  level: string;
+  analysis: string;
+  platformDetails: PluginPlatformDetail[];
+}
+export interface PluginSentimentData {
+  sentimentIndex: number;
+  sentimentClass: string;
+  flowFactor: number;
+  financeFactor: number;
+  keywordFactor: number;
+  positiveCount: number;
+  negativeCount: number;
+}
+export interface PluginHotTopic {
+  topic: string;
+  count: number;
+  heat: number;
+  crossPlatform: number;
+  sources: string[];
+}
+export interface PluginStockNews {
+  platform: string;
+  category: string;
+  title: string;
+  content: string;
+  matchedKeywords: string[];
+  score: number;
+}
+export interface PluginNewsAnalystData {
+  success: boolean;
+  fetchTime: string;
+  platformStats: { success: number; total: number };
+  flowData: PluginFlowData;
+  sentimentData: PluginSentimentData;
+  hotTopics: PluginHotTopic[];
+  stockNews: PluginStockNews[];
+}
+
+/** 市场情绪插件数据结构 */
+export interface PluginMarketIndex {
+  indexName: string;
+  changePercent: number;
+  upCount: number;
+  downCount: number;
+  totalCount: number;
+  sentimentScore: string;
+  sentimentInterpretation: string;
+}
+export interface PluginLimitUpDown {
+  limitUpCount: number;
+  limitDownCount: number;
+  limitRatio: string;
+  interpretation: string;
+  date: string;
+}
+export interface PluginFearGreed {
+  score: string;
+  level: string;
+  interpretation: string;
+}
+export interface PluginMarketSentimentData {
+  arbr: null;
+  marketIndex: PluginMarketIndex | null;
+  limitUpDown: PluginLimitUpDown | null;
+  fearGreed: PluginFearGreed | null;
+  dataSuccess: boolean;
+}
 export function useOpenRouterUsage() {
   return usePolling(() => api.openRouterUsage(), 3600000);
 }
