@@ -4,8 +4,8 @@ import type { BoardFlow } from "@/lib/api";
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 /** 流入红色系 / 流出绿色系(按排名渐变) */
-const REDS = ["#4a6b3f", "#f43f5e", "#fca5a5", "#fb923c", "#fdba74", "#e11d48", "#fecdd3", "#fda4af", "#fcd34d", "#fbbf24"];
-const GREENS = ["#b8533a", "#10b981", "#6ee7b7", "#059669", "#a7f3d0", "#4ade80", "#22c55e", "#86efac", "#16a34a", "#15803d"];
+const REDS = ["#b8533a", "#f43f5e", "#fca5a5", "#fb923c", "#fdba74", "#e11d48", "#fecdd3", "#fda4af", "#fcd34d", "#fbbf24"];
+const GREENS = ["#4a6b3f", "#10b981", "#6ee7b7", "#059669", "#a7f3d0", "#4ade80", "#22c55e", "#86efac", "#16a34a", "#15803d"];
 
 // 午休压缩点上下午刻度相邻, 用两端锚定防重叠; 首尾刻度防出界
 const X_TICKS: [number, string, "start" | "middle" | "end"][] = [

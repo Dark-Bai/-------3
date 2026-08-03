@@ -203,7 +203,7 @@ export const QuoteRow = memo(function QuoteRow({
             <span className="shrink-0 text-[9px] text-[#a8987e]">{compact ? "占" : "净占比"}</span>
             <span className="h-1 min-w-0 flex-1 self-center rounded-full bg-[#e0d5c0]">
               <span
-                className={`block h-1 rounded-full ${fl && fl.netRatio < 0 ? "bg-[#b8533a]/80" : "bg-[#4a6b3f]/80"}`}
+                className={`block h-1 rounded-full ${fl && fl.netRatio < 0 ? "bg-[#4a6b3f]/80" : "bg-[#b8533a]/80"}`}
                 style={{ width: `${ratioBar}%` }}
               />
             </span>

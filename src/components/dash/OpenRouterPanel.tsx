@@ -148,7 +148,7 @@ function Chart({ allDays, days, mode }: { allDays: OrUsageDay[]; days: OrUsageDa
       </div>
       <div className="flex shrink-0 items-baseline gap-3 pb-1 text-[10px]">
         <span className="font-semibold text-[#6b5b3e]">{fmtT(chart.last)}</span>
-        <span className={chart.chg >= 0 ? "text-[#4a6b3f]" : "text-red-400"}>
+        <span className={chart.chg >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}>
           {chart.chg >= 0 ? "↑" : "↓"} {chart.chgPct > 0.01 || chart.chgPct < -0.01 ? `${chart.chgPct > 0 ? "+" : ""}${chart.chgPct.toFixed(1)}%` : "0%"}
         </span>
         <span className="text-[#a8987e]">日均 {fmtT(Math.round(chart.avg))}</span>
