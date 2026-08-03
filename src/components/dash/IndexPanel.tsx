@@ -11,10 +11,10 @@ const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 function IndexRow({ def, q, minute }: { def: IndexDef; q?: HubQuote; minute?: MinuteData }) {
   return (
-    <div className="flex items-center gap-1.5 rounded px-1 py-[1.5px] transition-colors hover:bg-slate-800/40">
-      <span className="w-6 shrink-0 rounded-sm bg-slate-700/50 text-center text-[8px] leading-3 text-slate-400">{def.region}</span>
-      <span className="w-[72px] shrink-0 truncate text-[11px] text-slate-300">{def.label}</span>
-      <span className={`w-[70px] shrink-0 text-right text-[12px] font-bold ${q ? clsChg(q.pct) : "text-slate-600"}`} style={TNUM}>
+    <div className="flex items-center gap-1.5 rounded px-1 py-[1.5px] transition-colors hover:bg-[#ede4d4]">
+      <span className="w-6 shrink-0 rounded-sm bg-[#e0d5c0] text-center text-[8px] leading-3 text-[#8b7a5e]">{def.region}</span>
+      <span className="w-[72px] shrink-0 truncate text-[11px] text-[#6b5b3e]">{def.label}</span>
+      <span className={`w-[70px] shrink-0 text-right text-[12px] font-bold ${q ? clsChg(q.pct) : "text-[#a8987e]"}`} style={TNUM}>
         {q ? fmtPrice(q.price) : "—"}
       </span>
       <span className={`w-[56px] shrink-0 rounded px-0.5 text-right text-[10px] font-semibold ${q ? bgChg(q.pct) : ""}`} style={TNUM}>
@@ -26,7 +26,7 @@ function IndexRow({ def, q, minute }: { def: IndexDef; q?: HubQuote; minute?: Mi
           <Spark points={minute.points} prec={minute.prec} width={120} height={16} fluid session={def.region === "CN" ? "ashare" : "h24"} />
         )}
       </span>
-      <span className="hidden w-[52px] shrink-0 text-right text-[9px] text-slate-500 xl:block" style={TNUM}>
+      <span className="hidden w-[52px] shrink-0 text-right text-[9px] text-[#a8987e] xl:block" style={TNUM}>
         {q?.amount && !def.code.startsWith("us") ? fmtWan(q.amount) : ""}
       </span>
     </div>
@@ -55,12 +55,12 @@ export function IndexPanel({ className = "", ...zoomProps }: { className?: strin
   ];
 
   return (
-    <Panel className={className} {...zoomProps} title="全球关键指数" icon="▦" accent="#38bdf8"
-      right={<span className="text-[10px] text-slate-500">5s</span>}>
+    <Panel className={className} {...zoomProps} title="全球关键指数" icon="▦" accent="#d4943a"
+      right={<span className="text-[10px] text-[#a8987e]">5s</span>}>
       <div className="flex h-full flex-col justify-between overflow-y-auto p-1">
         {groups.map((g) => (
           <div key={g.name}>
-            <div className="px-1 pb-0.5 pt-1 text-[9px] font-medium uppercase tracking-widest text-slate-500">{g.name}</div>
+            <div className="px-1 pb-0.5 pt-1 text-[9px] font-medium uppercase tracking-widest text-[#a8987e]">{g.name}</div>
             {g.defs.map((d) => (
               <IndexRow key={d.code} def={d} q={quotes?.[d.code]} minute={minutes?.[d.code]} />
             ))}

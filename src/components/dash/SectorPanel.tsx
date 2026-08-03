@@ -31,13 +31,13 @@ function BoardRow({ b, maxAbs, active, onClick }: { b: Board; maxAbs: number; ac
       ref={ref}
       onClick={onClick}
       className={`group grid w-full grid-cols-[24px_1fr_76px_96px] items-center gap-2 rounded px-2 py-[5px] text-left transition-colors ${
-        active ? "bg-cyan-500/10 ring-1 ring-cyan-500/40" : "hover:bg-slate-800/40"
+        active ? "bg-[#d4943a]/10 ring-1 ring-[#d4943a]/40" : "hover:bg-[#ede4d4]"
       }`}
     >
-      <span className="text-[10px] text-slate-600">{b.code.slice(-4)}</span>
+      <span className="text-[10px] text-[#a8987e]">{b.code.slice(-4)}</span>
       <span className="min-w-0">
-        <span className="block truncate text-[12px] text-slate-200 group-hover:text-cyan-300">{b.name}</span>
-        <span className="mt-0.5 block h-1 rounded-full bg-slate-800">
+        <span className="block truncate text-[12px] text-[#6b5b3e] group-hover:text-[#d4943a]">{b.name}</span>
+        <span className="mt-0.5 block h-1 rounded-full bg-[#e0d5c0]">
           <span className="block h-1 rounded-full transition-all" style={{ width: `${w}%`, background: hexChg(b.pct) }} />
         </span>
       </span>
@@ -108,19 +108,19 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
       {...zoomProps}
       title="市场板块实时热点"
       icon="▤"
-      accent="#22d3ee"
+      accent="#d4943a"
       right={
         <div className="flex items-center gap-1 text-[11px]">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="搜索板块"
-            className="w-20 rounded border border-slate-700/50 bg-slate-800/40 px-1.5 py-0.5 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-500/50"
+            className="w-20 rounded border border-[#e0d5c0] bg-[#ede4d4] px-1.5 py-0.5 text-[11px] text-[#6b5b3e] outline-none placeholder:text-[#a8987e] focus:border-[#d4943a]/50"
           />
           <button
             onClick={() => setAuto((a) => !a)}
             title={auto ? `轮播中(${ROTATE_MS / 1000}s),点击暂停` : "已暂停,点击恢复轮播"}
-            className={`rounded px-2 py-0.5 ${auto ? "bg-cyan-500/20 text-cyan-300" : "text-slate-400 hover:text-slate-200"}`}
+            className={`rounded px-2 py-0.5 ${auto ? "bg-[#d4943a]/20 text-[#d4943a]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"}`}
           >
             轮播
           </button>
@@ -128,17 +128,17 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
             <button
               key={k}
               onClick={() => { setKind(k); setAuto(true); }}
-              className={`rounded px-2 py-0.5 ${kind === k ? "bg-cyan-500/20 text-cyan-300" : "text-slate-400 hover:text-slate-200"}`}
+              className={`rounded px-2 py-0.5 ${kind === k ? "bg-[#d4943a]/20 text-[#d4943a]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"}`}
             >
               {label}
             </button>
           ))}
-          <span className="mx-1 h-3 w-px bg-slate-700" />
+          <span className="mx-1 h-3 w-px bg-[#e0d5c0]" />
           {([0, 1] as const).map((d) => (
             <button
               key={d}
               onClick={() => setDir(d)}
-              className={`rounded px-2 py-0.5 ${dir === d ? "bg-cyan-500/20 text-cyan-300" : "text-slate-400 hover:text-slate-200"}`}
+              className={`rounded px-2 py-0.5 ${dir === d ? "bg-[#d4943a]/20 text-[#d4943a]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"}`}
             >
               {d === 0 ? "领涨" : "领跌"}
             </button>
@@ -149,7 +149,7 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
       <div className="flex h-full min-h-0">
         {/* 板块列表 */}
         <div className="min-w-0 flex-1 overflow-y-auto p-1.5">
-          <div className="grid grid-cols-[24px_1fr_76px_96px] gap-2 px-2 py-1 text-[10px] text-slate-500">
+          <div className="grid grid-cols-[24px_1fr_76px_96px] gap-2 px-2 py-1 text-[10px] text-[#a8987e]">
             <span>代码</span><span>板块 / 强度{filtered ? ` (${filtered.length})` : ""}</span><span className="text-right">涨跌幅</span><span className="text-right">领涨股</span>
           </div>
           {visibleBoards?.map((b) => (
@@ -157,28 +157,28 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
               onClick={() => pick(b)} />
           ))}
           {filtered && filtered.length > MAX_BOARD_ROWS && (
-            <div className="p-2 text-center text-[10px] text-slate-600">
+            <div className="p-2 text-center text-[10px] text-[#a8987e]">
               仅显示前 {MAX_BOARD_ROWS} / 共 {filtered.length} 个板块, 搜索可定位其余
             </div>
           )}
           {!filtered && (
-            <div className="p-6 text-center text-[11px] text-slate-600">
-              {error ? <span className="text-rose-400/80">数据源连接失败,自动重试中…<br />{error}</span> : "板块数据加载中…"}
+            <div className="p-6 text-center text-[11px] text-[#a8987e]">
+              {error ? <span className="text-[#b8533a]">数据源连接失败,自动重试中…<br />{error}</span> : "板块数据加载中…"}
             </div>
           )}
           {filtered?.length === 0 && (
-            <div className="p-6 text-center text-[11px] text-slate-600">无匹配「{q}」的板块</div>
+            <div className="p-6 text-center text-[11px] text-[#a8987e]">无匹配「{q}」的板块</div>
           )}
         </div>
 
         {/* 成分股侧栏 */}
         {activeBoard && (
-          <div className="w-[min(440px,52%)] shrink-0 overflow-y-auto border-l border-slate-700/40 p-2">
+          <div className="w-[min(440px,52%)] shrink-0 overflow-y-auto border-l border-[#e0d5c0] p-2">
             <div className="mb-2 flex items-baseline justify-between">
-              <span className="text-[12px] font-semibold text-cyan-300">{activeBoard.name}</span>
+              <span className="text-[12px] font-semibold text-[#d4943a]">{activeBoard.name}</span>
               <span className={`text-[12px] font-semibold ${clsChg(activeBoard.pct)}`}>{fmtPct(activeBoard.pct)}</span>
             </div>
-            <div className="mb-2 grid grid-cols-2 gap-1 text-[10px] text-slate-500">
+            <div className="mb-2 grid grid-cols-2 gap-1 text-[10px] text-[#a8987e]">
               <span>5日 <span className={clsChg(activeBoard.pct5)}>{fmtPct(activeBoard.pct5)}</span></span>
               <span>20日 <span className={clsChg(activeBoard.pct20)}>{fmtPct(activeBoard.pct20)}</span></span>
             </div>

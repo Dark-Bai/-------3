@@ -9,10 +9,10 @@ import { isTv } from "@/lib/tv";
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 /** 数据格: 9px 标签 + 11px 数值, flex 垂直居中(高度全行一致) */
-function Stat({ label, value, valueCls = "text-slate-300" }: { label?: string; value: ReactNode; valueCls?: string }) {
+function Stat({ label, value, valueCls = "text-[#6b5b3e]" }: { label?: string; value: ReactNode; valueCls?: string }) {
   return (
     <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap leading-none">
-      {label && <span className="shrink-0 text-[9px] text-slate-600">{label}</span>}
+      {label && <span className="shrink-0 text-[9px] text-[#a8987e]">{label}</span>}
       <span className={`truncate text-[11px] ${valueCls}`} style={TNUM}>
         {value}
       </span>
@@ -111,8 +111,8 @@ export const QuoteRow = memo(function QuoteRow({
   const Tag = onClick ? "button" : "div";
   const skin =
     variant === "card"
-      ? "border border-slate-700/25 bg-slate-800/15 hover:border-cyan-500/40 hover:bg-slate-800/30"
-      : "hover:bg-slate-800/40 hover:shadow-[inset_0_0_0_1px_rgba(34,211,238,0.22)]";
+      ? "border border-[#e0d5c0]/40 bg-[#ede4d4] hover:border-[#d4943a]/40 hover:bg-[#ede4d4]"
+      : "hover:bg-[#ede4d4] hover:shadow-[inset_0_0_0_1px_rgba(212,148,58,0.22)]";
 
   const ratioBar = fl ? Math.min(100, Math.abs(fl.netRatio) * 2) : 0;
 
@@ -123,7 +123,7 @@ export const QuoteRow = memo(function QuoteRow({
       }}
       onClick={onClick}
       className={`group block w-full rounded px-2 py-[4px] text-left transition-colors ${skin} ${
-        active ? "bg-cyan-500/10 ring-1 ring-cyan-500/40" : ""
+        active ? "bg-[#d4943a]/10 ring-1 ring-[#d4943a]/40" : ""
       }`}
     >
       <div
@@ -142,7 +142,7 @@ export const QuoteRow = memo(function QuoteRow({
         {/* 首列: 排名序号, 跨2行 */}
         {rank != null && (
           <div
-            className={`row-span-2 self-center text-[11px] font-bold leading-none ${rank <= 3 ? "text-amber-400" : "text-slate-600"}`}
+            className={`row-span-2 self-center text-[11px] font-bold leading-none ${rank <= 3 ? "text-[#d4943a]" : "text-[#a8987e]"}`}
             style={TNUM}
           >
             {rank}
@@ -150,8 +150,8 @@ export const QuoteRow = memo(function QuoteRow({
         )}
         {/* 左格: 名称+代码, 跨2行 */}
         <div className="row-span-2 flex min-w-0 flex-col justify-center gap-1 leading-none">
-          <span className="truncate text-[12px] text-slate-200">{name}</span>
-          <span className="text-[10px] text-slate-500">{code}</span>
+          <span className="truncate text-[12px] text-[#6b5b3e]">{name}</span>
+          <span className="text-[10px] text-[#a8987e]">{code}</span>
         </div>
 
         {/* 第一行: 分时图(跨2列, 恒占 20px 高度) */}
@@ -169,7 +169,7 @@ export const QuoteRow = memo(function QuoteRow({
                 e.stopPropagation();
                 onRemove();
               }}
-              className="text-[10px] leading-none text-slate-600 opacity-0 transition-opacity hover:text-rose-400 group-hover:opacity-100"
+              className="text-[10px] leading-none text-[#a8987e] opacity-0 transition-opacity hover:text-[#b8533a] group-hover:opacity-100"
               title="移除"
             >
               ×
@@ -182,21 +182,21 @@ export const QuoteRow = memo(function QuoteRow({
           <Stat
             label={compact ? "净" : "主力净额"}
             value={fl ? fmtYuan(fl.netIn) : "—"}
-            valueCls={`font-semibold ${fl ? clsChg(fl.netIn) : "text-slate-600"}`}
+            valueCls={`font-semibold ${fl ? clsChg(fl.netIn) : "text-[#a8987e]"}`}
           />
         ) : (
           <div />
         )}
         {flow ? (
           <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap leading-none">
-            <span className="shrink-0 text-[9px] text-slate-600">{compact ? "占" : "净占比"}</span>
-            <span className="h-1 min-w-0 flex-1 self-center rounded-full bg-slate-800">
+            <span className="shrink-0 text-[9px] text-[#a8987e]">{compact ? "占" : "净占比"}</span>
+            <span className="h-1 min-w-0 flex-1 self-center rounded-full bg-[#e0d5c0]">
               <span
-                className={`block h-1 rounded-full ${fl && fl.netRatio < 0 ? "bg-emerald-400/80" : "bg-rose-400/80"}`}
+                className={`block h-1 rounded-full ${fl && fl.netRatio < 0 ? "bg-[#b8533a]/80" : "bg-[#4a6b3f]/80"}`}
                 style={{ width: `${ratioBar}%` }}
               />
             </span>
-            <span className={`truncate text-[11px] ${fl ? clsChg(fl.netRatio) : "text-slate-600"}`} style={TNUM}>
+            <span className={`truncate text-[11px] ${fl ? clsChg(fl.netRatio) : "text-[#a8987e]"}`} style={TNUM}>
               {fl ? `${fl.netRatio.toFixed(1)}%` : "—"}
             </span>
           </div>
@@ -207,7 +207,7 @@ export const QuoteRow = memo(function QuoteRow({
         <Stat
           label="幅"
           value={pc != null ? fmtPct(pc, variant === "card" ? 1 : 2) : ""}
-          valueCls={`font-semibold ${pc != null ? clsChg(pc) : "text-slate-600"}`}
+          valueCls={`font-semibold ${pc != null ? clsChg(pc) : "text-[#a8987e]"}`}
         />
       </div>
 
@@ -215,13 +215,13 @@ export const QuoteRow = memo(function QuoteRow({
       {(tag || boards) && (
         <div className="mt-0.5 flex h-[13px] min-w-0 items-center gap-1.5 text-[9px] leading-none">
           {tag && (
-            <span className="shrink-0 rounded-sm bg-slate-700/40 px-1 py-px text-[8px] text-slate-400">{tag}</span>
+            <span className="shrink-0 rounded-sm bg-[#e0d5c0] px-1 py-px text-[8px] text-[#8b7a5e]">{tag}</span>
           )}
           {boards && bd && (bd.industry || (bd.concepts?.length ?? 0) > 0) && (
             <span className="truncate">
-              {bd.industry && <span className="text-cyan-500/80">{bd.industry}</span>}
+              {bd.industry && <span className="text-[#d4943a]/80">{bd.industry}</span>}
               {(bd.concepts?.length ?? 0) > 0 && (
-                <span className="text-slate-600">
+                <span className="text-[#a8987e]">
                   {bd.industry ? " · " : ""}
                   {(bd.concepts ?? []).join("/")}
                 </span>

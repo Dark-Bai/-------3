@@ -1,14 +1,14 @@
-/** 格式化与涨跌配色(中国市场: 涨红 / 跌绿) */
+/** 格式化与涨跌配色(复古报刊风格: 涨墨绿 / 跌赭石) */
 
 export const fmtPct = (v: number, digits = 2) => `${v > 0 ? "+" : ""}${v.toFixed(digits)}%`;
 
 export const clsChg = (v: number) =>
-  v > 0 ? "text-rose-400" : v < 0 ? "text-emerald-400" : "text-slate-400";
+  v > 0 ? "text-[#4a6b3f]" : v < 0 ? "text-[#b8533a]" : "text-newspaper-brown-muted";
 
 export const bgChg = (v: number) =>
-  v > 0 ? "bg-rose-500/15 text-rose-300" : v < 0 ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-500/15 text-slate-300";
+  v > 0 ? "bg-[#4a6b3f]/15 text-[#4a6b3f]" : v < 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#c9b99a]/15 text-newspaper-brown-muted";
 
-export const hexChg = (v: number) => (v > 0 ? "#fb7185" : v < 0 ? "#34d399" : "#94a3b8");
+export const hexChg = (v: number) => (v > 0 ? "#4a6b3f" : v < 0 ? "#b8533a" : "#a8987e");
 
 /** 万元 -> 亿/万 */
 export const fmtWan = (wan: number) => {

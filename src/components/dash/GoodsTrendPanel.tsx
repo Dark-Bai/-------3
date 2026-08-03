@@ -50,7 +50,7 @@ export function GoodsTrendPanel({ group, title, accent, className = "", ...zoomP
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`rounded px-1.5 py-0.5 ${range === r ? "bg-cyan-500/20 text-cyan-300" : "text-slate-400 hover:text-slate-200"}`}
+              className={`rounded px-1.5 py-0.5 ${range === r ? "bg-cyan-500/20 text-cyan-300" : "text-[#8b7a5e] hover:text-[#6b5b3e]"}`}
             >
               {r}d
             </button>
@@ -64,7 +64,7 @@ export function GoodsTrendPanel({ group, title, accent, className = "", ...zoomP
           const q = quotes?.[g.sina];
           return <GoodsRow key={g.code} name={g.name} unit={g.unit} price={q?.price} pct={q?.pct} daily={daily} />;
         })}
-        {!dailies && <div className="p-4 text-center text-[10px] text-slate-600">日线数据加载中…</div>}
+        {!dailies && <div className="p-4 text-center text-[10px] text-[#a8987e]">日线数据加载中…</div>}
       </div>
     </Panel>
   );

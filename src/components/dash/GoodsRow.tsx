@@ -22,12 +22,12 @@ export const GoodsRow = memo(function GoodsRow({ name, unit, price, pct, daily }
   // prec 传区间首日收盘价: 趋势线颜色与虚线基准 = 区间涨跌
   const prec = daily.length > 1 ? daily[0].c : 0;
   return (
-    <div className="flex items-center gap-1.5 rounded px-1 py-[3px] transition-colors hover:bg-slate-800/40">
+    <div className="flex items-center gap-1.5 rounded px-1 py-[3px] transition-colors hover:bg-[#ede4d4]">
       <div className="w-[72px] shrink-0 leading-none">
-        <div className="truncate text-[11px] text-slate-300">{name}</div>
-        {unit && <div className="mt-0.5 truncate text-[8px] text-slate-600">{unit}</div>}
+        <div className="truncate text-[11px] text-[#6b5b3e]">{name}</div>
+        {unit && <div className="mt-0.5 truncate text-[8px] text-[#a8987e]">{unit}</div>}
       </div>
-      <span className={`w-[72px] shrink-0 text-right text-[12px] font-semibold ${pct != null ? clsChg(pct) : "text-slate-400"}`} style={TNUM}>
+      <span className={`w-[72px] shrink-0 text-right text-[12px] font-semibold ${pct != null ? clsChg(pct) : "text-[#8b7a5e]"}`} style={TNUM}>
         {p != null ? fmtPrice(p) : "—"}
       </span>
       <span className={`w-[52px] shrink-0 rounded px-0.5 text-right text-[10px] font-semibold ${pct != null ? bgChg(pct) : ""}`} style={TNUM}>

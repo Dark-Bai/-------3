@@ -9,7 +9,7 @@ import { SkeletonRows } from "./SkeletonRows";
 import { TNUM, fmtYi, prefixCode } from "./utils";
 
 type Tab = "profit" | "growth";
-const RANK_COLORS = ["#fbbf24", "#fb7185", "#22d3ee"]; // 前三名 amber/rose/cyan
+const RANK_COLORS = ["#d4943a", "#b8533a", "#d4943a"]; // 前三名 gold/rust/gold
 
 /** 个股盈利榜 TOP20: 净利额 | 增速 双 Tab, 行内相对值底条, 点击载入公司 */
 export function FinStockRankPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
@@ -35,11 +35,11 @@ export function FinStockRankPanel({ className = "", ...zoomProps }: { className?
       {...zoomProps}
       title="个股盈利榜"
       icon="≣"
-      accent="#fb7185"
+      accent="#b8533a"
       right={
         <div className="flex items-center gap-2 text-[10px]">
           <PeriodTabs />
-          <span className="h-3 w-px bg-slate-700" />
+          <span className="h-3 w-px bg-[#e0d5c0]" />
           {(
             [
               { key: "profit", label: "净利额" },
@@ -50,7 +50,7 @@ export function FinStockRankPanel({ className = "", ...zoomProps }: { className?
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`flex h-[22px] items-center border-b-2 px-2 ${
-                tab === t.key ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500 hover:text-slate-300"
+                tab === t.key ? "border-[#d4943a] text-[#d4943a]" : "border-transparent text-[#a8987e] hover:text-[#6b5b3e]"
               }`}
             >
               {t.label}
@@ -64,13 +64,13 @@ export function FinStockRankPanel({ className = "", ...zoomProps }: { className?
           <SkeletonRows rows={14} />
         ) : (
           <div className="flex h-full items-center justify-center text-[11px]">
-            <button className="h-full w-full text-slate-500" onClick={() => setRetry((r) => r + 1)}>
+            <button className="h-full w-full text-[#a8987e]" onClick={() => setRetry((r) => r + 1)}>
               数据获取失败，点击重试{error ? `(${error})` : ""}
             </button>
           </div>
         )
       ) : rows.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-[11px] text-slate-600">当前非财报密集披露期</div>
+        <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">当前非财报密集披露期</div>
       ) : (
         <div className="h-full overflow-y-auto py-0.5">
           {rows.map((s, i) => (
@@ -96,12 +96,12 @@ function RankRow({
   onPick: () => void;
 }) {
   const barV = tab === "profit" ? Math.max(s.netProfit, 0) : Math.max(s.profitYoY, 0);
-  const barColor = tab === "profit" ? "#fb7185" : s.profitYoY >= 0 ? "#fb7185" : "#34d399";
+  const barColor = tab === "profit" ? "#b8533a" : s.profitYoY >= 0 ? "#b8533a" : "#4a6b3f";
   const loss = s.netProfit <= 0;
   return (
     <button
       onClick={onPick}
-      className="relative flex h-[20px] w-full items-center gap-1.5 border-b border-slate-800/60 px-2.5 text-left hover:bg-slate-800/40"
+      className="relative flex h-[20px] w-full items-center gap-1.5 border-b border-[#e0d5c0] px-2.5 text-left hover:bg-[#ede4d4]"
     >
       {/* 行内相对值底条(4% 透明度) */}
       <span
@@ -110,35 +110,35 @@ function RankRow({
       />
       <span
         className="w-[14px] shrink-0 text-[9px]"
-        style={{ color: rank <= 3 ? RANK_COLORS[rank - 1] : "#64748b", fontVariantNumeric: "tabular-nums" }}
+        style={{ color: rank <= 3 ? RANK_COLORS[rank - 1] : "#a8987e", fontVariantNumeric: "tabular-nums" }}
       >
         {rank}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11px] text-slate-200">{s.name}</span>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-[#6b5b3e]">{s.name}</span>
       {tab === "profit" ? (
         <>
-          <span className="w-[56px] shrink-0 text-right text-[12px] font-semibold text-slate-200" style={TNUM}>
+          <span className="w-[56px] shrink-0 text-right text-[12px] font-semibold text-[#6b5b3e]" style={TNUM}>
             {fmtYi(s.netProfit)}
           </span>
-          <span className={`w-[52px] shrink-0 text-right text-[10px] ${s.profitYoY >= 0 ? "text-rose-400" : "text-emerald-400"}`} style={TNUM}>
+          <span className={`w-[52px] shrink-0 text-right text-[10px] ${s.profitYoY >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
             {fmtPct(s.profitYoY, 1)}
           </span>
-          <span className="w-[62px] shrink-0 text-right text-[9px] text-slate-500" style={TNUM}>
+          <span className="w-[62px] shrink-0 text-right text-[9px] text-[#a8987e]" style={TNUM}>
             ROE {s.roe.toFixed(1)}%
           </span>
         </>
       ) : (
         <>
           <span
-            className={`w-[56px] shrink-0 text-right text-[12px] font-semibold ${s.profitYoY >= 0 ? "text-rose-400" : "text-emerald-400"}`}
+            className={`w-[56px] shrink-0 text-right text-[12px] font-semibold ${s.profitYoY >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`}
             style={TNUM}
           >
             {fmtPct(s.profitYoY, 1)}
           </span>
-          <span className="w-[52px] shrink-0 text-right text-[10px] text-slate-400" style={TNUM}>
+          <span className="w-[52px] shrink-0 text-right text-[10px] text-[#8b7a5e]" style={TNUM}>
             {fmtYi(s.netProfit)}
           </span>
-          <span className="w-[62px] shrink-0 text-right text-[9px] text-slate-500" style={TNUM}>
+          <span className="w-[62px] shrink-0 text-right text-[9px] text-[#a8987e]" style={TNUM}>
             {loss ? (s.profitYoY > 0 ? "扭亏" : "亏损") : `ROE ${s.roe.toFixed(1)}%`}
           </span>
         </>

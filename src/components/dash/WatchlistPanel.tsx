@@ -151,8 +151,8 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
       {...zoomProps}
       title="自选股"
       icon="★"
-      accent="#fbbf24"
-      right={<span className="text-[10px] text-slate-500">{codes.length}只 · 5s</span>}
+      accent="#d4943a"
+      right={<span className="text-[10px] text-[#a8987e]">{codes.length}只 · 5s</span>}
     >
       <div className="flex h-full min-h-0 flex-col">
         {/* 添加 */}
@@ -173,8 +173,8 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
                 ? `watchlist-opt-${suggestions[highlightIdx].code}`
                 : undefined
             }
-            className={`min-w-0 flex-1 rounded border bg-slate-800/40 px-1.5 py-0.5 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 ${
-              invalid ? "border-rose-500/60" : "border-slate-700/50 focus:border-amber-500/50"
+            className={`min-w-0 flex-1 rounded border bg-[#ede4d4] px-1.5 py-0.5 text-[11px] text-[#6b5b3e] outline-none placeholder:text-[#a8987e] ${
+              invalid ? "border-rose-500/60" : "border-[#e0d5c0] focus:border-amber-500/50"
             }`}
           />
           <button
@@ -201,12 +201,12 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
                   onMouseDown={(e) => { e.preventDefault(); pickSuggestion(s); }}
                   onMouseEnter={() => setHighlightIdx(i)}
                   className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] transition-colors ${
-                    i === highlightIdx ? "bg-amber-500/20 text-amber-200" : "text-slate-300 hover:bg-slate-700/50"
+                    i === highlightIdx ? "bg-amber-500/20 text-amber-200" : "text-[#6b5b3e] hover:bg-[#e0d5c0]"
                   }`}
                 >
                   <span className="font-medium text-slate-100">{s.name}</span>
-                  <span className="text-slate-500">{s.code}</span>
-                  {s.pinyin && <span className="ml-auto text-slate-600">{s.pinyin}</span>}
+                  <span className="text-[#a8987e]">{s.code}</span>
+                  {s.pinyin && <span className="ml-auto text-[#a8987e]">{s.pinyin}</span>}
                 </button>
               ))}
             </div>
@@ -218,7 +218,7 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
             <WatchRow key={code} code={code} onRemoveCode={removeCode} />
           ))}
           {codes.length === 0 && (
-            <div className="p-4 text-center text-[10px] text-slate-600">列表为空,输入代码/名称/拼音添加自选股</div>
+            <div className="p-4 text-center text-[10px] text-[#a8987e]">列表为空,输入代码/名称/拼音添加自选股</div>
           )}
         </div>
       </div>

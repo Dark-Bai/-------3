@@ -55,11 +55,11 @@ export function BoardFlowPanel({ className = "", ...zoomProps }: { className?: s
       {...zoomProps}
       title="板块资金流向"
       icon="∿"
-      accent="#f43f5e"
+      accent="#d4943a"
       right={
         <div className="flex items-center gap-2">
           {!isTv && (
-            <span className="font-mono text-[10px] text-slate-500" style={{ fontVariantNumeric: "tabular-nums" }}>
+            <span className="font-mono text-[10px] text-[#a8987e]" style={{ fontVariantNumeric: "tabular-nums" }}>
               {countdown}s
             </span>
           )}
@@ -67,7 +67,7 @@ export function BoardFlowPanel({ className = "", ...zoomProps }: { className?: s
             type="button"
             onClick={() => setLabelMode((m) => (m === "end" ? "legend" : "end"))}
             title={labelMode === "end" ? "切换为图例" : "切换为端点标签"}
-            className="rounded px-1.5 py-0.5 text-[10px] text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+            className="rounded px-1.5 py-0.5 text-[10px] text-[#8b7a5e] transition hover:bg-[#ede4d4] hover:text-[#6b5b3e]"
           >
             {labelMode === "end" ? "图例" : "标签"}
           </button>
@@ -81,7 +81,7 @@ export function BoardFlowPanel({ className = "", ...zoomProps }: { className?: s
                 setPlaying((p) => !p);
               }
             }}
-            className="rounded px-1.5 py-0.5 text-[10px] text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+            className="rounded px-1.5 py-0.5 text-[10px] text-[#8b7a5e] transition hover:bg-[#ede4d4] hover:text-[#6b5b3e]"
           >
             {label}
           </button>
@@ -92,8 +92,8 @@ export function BoardFlowPanel({ className = "", ...zoomProps }: { className?: s
         {flows ? (
           <BoardFlowChart flows={flows} progress={progress} labelMode={labelMode} />
         ) : (
-          <div className="flex h-full items-center justify-center text-[11px] text-slate-600">
-            {error ? <span className="text-rose-400/80">板块资金流连接失败,自动重试中…</span> : "板块资金流加载中…"}
+          <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">
+            {error ? <span className="text-[#b8533a]">板块资金流连接失败,自动重试中…</span> : "板块资金流加载中…"}
           </div>
         )}
       </div>

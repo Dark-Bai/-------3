@@ -227,13 +227,13 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
         {...zoomProps}
         title="产业链上下游全景"
         icon="⛓"
-        accent="#34d399"
+        accent="#4a6b3f"
         right={
           <div className="flex items-center gap-1">
             {allChains.map((c) => (
               <div key={c.id} className="group relative">
                 <button onClick={() => setChainId(c.id)}
-                  className={`rounded px-2 py-0.5 text-[11px] transition-colors ${chainId === c.id ? "bg-emerald-500/20 font-semibold text-emerald-300" : "text-slate-400 hover:text-slate-200"}`}>
+                  className={`rounded px-2 py-0.5 text-[11px] transition-colors ${chainId === c.id ? "bg-[#4a6b3f]/20 font-semibold text-[#4a6b3f]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"}`}>
                   <span className="mr-1 opacity-70">{c.icon}</span>{c.name}
                 </button>
                 {/* 自定义链显示删除按钮 */}
@@ -245,10 +245,10 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
               </div>
             ))}
             <button onClick={() => { setParseState({ loading: false, error: "", warnings: [] }); setEditor({ mode: "add", name: "", content: "" }); }}
-              className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/20"
+              className="rounded border border-[#4a6b3f]/30 bg-[#4a6b3f]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#4a6b3f] transition hover:border-[#4a6b3f]/60 hover:bg-[#4a6b3f]/20"
               title="添加自定义产业链">+ 添加</button>
             <button onClick={() => { setParseState({ loading: false, error: "", warnings: [] }); setEditor({ mode: "update", name: chain.name, content: "" }); }}
-              className="rounded border border-cyan-500/25 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 transition hover:border-cyan-400/50 hover:bg-cyan-500/20"
+              className="rounded border border-cyan-500/25 bg-[#d4943a]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#d4943a] transition hover:border-[#d4943a]/50 hover:bg-cyan-500/20"
               title="粘贴问财结论，更新当前产业链股票">更新</button>
           </div>
         }
@@ -261,58 +261,58 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
               return (
                 <div key={seg.name} className="flex min-h-0 flex-col">
                   <div className="mb-1.5 flex items-center gap-1.5">
-                    <span className={`flex h-4.5 w-4.5 items-center justify-center rounded text-[10px] font-bold ${si === 0 ? "bg-sky-500/20 text-sky-300" : si === 1 ? "bg-violet-500/20 text-violet-300" : "bg-amber-500/20 text-amber-300"}`} style={{ height: 18, width: 18 }}>
+                    <span className={`flex h-4.5 w-4.5 items-center justify-center rounded text-[10px] font-bold ${si === 0 ? "bg-[#d4943a]/20 text-[#d4943a]" : si === 1 ? "bg-[#4a6b3f]/20 text-[#4a6b3f]" : "bg-[#d4943a]/20 text-[#d4943a]"}`} style={{ height: 18, width: 18 }}>
                       {["上", "中", "下"][si] || si + 1}
                     </span>
                     <div className="min-w-0">
-                      <span className="text-[11px] font-semibold text-slate-200">{seg.name}</span>
-                      <span className="ml-1.5 hidden text-[9px] text-slate-500 xl:inline">{seg.desc}</span>
-                      {current?.source === "iwencai" && <span className="ml-1 text-[8px] text-emerald-500/60">问财</span>}
+                      <span className="text-[11px] font-semibold text-[#6b5b3e]">{seg.name}</span>
+                      <span className="ml-1.5 hidden text-[9px] text-[#a8987e] xl:inline">{seg.desc}</span>
+                      {current?.source === "iwencai" && <span className="ml-1 text-[8px] text-[#4a6b3f]/60">问财</span>}
                       {chainOverrides[chain.id] && <span className="ml-1 text-[8px] text-cyan-500/60">编辑</span>}
                     </div>
                   </div>
                   <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-                    {!dynMatched && seg.query && refreshTick > 0 && <div className="flex h-9 items-center justify-center rounded border border-slate-700/30 bg-slate-800/15 text-[10px] text-slate-500">问财筛选中...</div>}
+                    {!dynMatched && seg.query && refreshTick > 0 && <div className="flex h-9 items-center justify-center rounded border border-[#e0d5c0] bg-[#ede4d4] text-[10px] text-[#a8987e]">问财筛选中...</div>}
                     {stocks.map((st) => (<StockCell key={st.code} code={st.code} name={st.name} tag={st.tag} />))}
-                    {dynMatched && stocks.length === 0 && <div className="flex h-9 items-center justify-center rounded border border-slate-700/30 bg-slate-800/15 text-[10px] text-slate-500">暂无匹配股票</div>}
+                    {dynMatched && stocks.length === 0 && <div className="flex h-9 items-center justify-center rounded border border-[#e0d5c0] bg-[#ede4d4] text-[10px] text-[#a8987e]">暂无匹配股票</div>}
                   </div>
                 </div>
               );
             })}
             {relatedBoards.length > 0 && (
-              <div className="col-span-3 rounded border border-slate-700/25 bg-slate-800/10 px-2.5 py-1.5">
-                <span className="mr-3 text-[10px] font-semibold text-slate-400">关联板块热度</span>
+              <div className="col-span-3 rounded border border-[#e0d5c0] bg-[#ede4d4] px-2.5 py-1.5">
+                <span className="mr-3 text-[10px] font-semibold text-[#8b7a5e]">关联板块热度</span>
                 <span className="inline-flex flex-wrap gap-x-4 gap-y-0.5">
                   {relatedBoards.map((b) => (
                     <span key={b.code} className="text-[10px]" style={TNUM}>
-                      <span className={`mr-1 rounded-sm px-1 py-px text-[8px] ${b.kind === "industry" ? "bg-cyan-500/15 text-cyan-400" : "bg-violet-500/15 text-violet-400"}`}>{b.kind === "industry" ? "行业" : "概念"}</span>
-                      <span className="text-slate-300">{b.name}</span>
+                      <span className={`mr-1 rounded-sm px-1 py-px text-[8px] ${b.kind === "industry" ? "bg-[#d4943a]/15 text-cyan-400" : "bg-violet-500/15 text-violet-400"}`}>{b.kind === "industry" ? "行业" : "概念"}</span>
+                      <span className="text-[#6b5b3e]">{b.name}</span>
                       <span className={`ml-1 font-semibold ${clsChg(b.pct)}`}>{fmtPct(b.pct)}</span>
-                      <span className="ml-1 text-[9px] text-slate-600">{b.leadName}</span>
+                      <span className="ml-1 text-[9px] text-[#a8987e]">{b.leadName}</span>
                     </span>
                   ))}
                 </span>
               </div>
             )}
           </div>
-          <div className="flex w-[300px] shrink-0 flex-col border-l border-slate-700/40">
-            <div className="border-b border-slate-700/40 p-2">
-              <div className="mb-1 text-[10px] font-semibold text-slate-300">行业关键技术</div>
-              <div className="flex flex-wrap gap-1">{chain.tech.map((t) => (<span key={t} className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-px text-[9px] text-emerald-300">{t}</span>))}</div>
+          <div className="flex w-[300px] shrink-0 flex-col border-l border-[#e0d5c0]">
+            <div className="border-b border-[#e0d5c0] p-2">
+              <div className="mb-1 text-[10px] font-semibold text-[#6b5b3e]">行业关键技术</div>
+              <div className="flex flex-wrap gap-1">{chain.tech.map((t) => (<span key={t} className="rounded border border-[#4a6b3f]/25 bg-[#4a6b3f]/15 px-1.5 py-px text-[9px] text-[#4a6b3f]">{t}</span>))}</div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-              <div className="mb-1 px-0.5 text-[10px] font-semibold text-slate-300">行业热点新闻 <span className="ml-1 text-[9px] font-normal text-slate-500">关键词匹配 · {chainNews.length}条</span></div>
+              <div className="mb-1 px-0.5 text-[10px] font-semibold text-[#6b5b3e]">行业热点新闻 <span className="ml-1 text-[9px] font-normal text-[#a8987e]">关键词匹配 · {chainNews.length}条</span></div>
               <div className="space-y-0.5">
                 {chainNews.map((n) => (
-                  <div key={n.id} className="rounded px-1.5 py-1 hover:bg-slate-800/40">
-                    <div className="text-[9px] text-slate-500" style={TNUM}>{fmtTime(n.time)}</div>
-                    <div className="mt-0.5 text-[10px] leading-[1.5] text-slate-300 line-clamp-2">
-                      {n.title ? <span className="font-semibold text-slate-200">{n.title} </span> : null}{n.content}
+                  <div key={n.id} className="rounded px-1.5 py-1 hover:bg-[#ede4d4]">
+                    <div className="text-[9px] text-[#a8987e]" style={TNUM}>{fmtTime(n.time)}</div>
+                    <div className="mt-0.5 text-[10px] leading-[1.5] text-[#6b5b3e] line-clamp-2">
+                      {n.title ? <span className="font-semibold text-[#6b5b3e]">{n.title} </span> : null}{n.content}
                     </div>
                   </div>
                 ))}
-                {news && chainNews.length === 0 && <div className="p-4 text-center text-[10px] text-slate-600">当前快讯流中暂无该产业链相关新闻</div>}
-                {!news && <div className="p-4 text-center text-[10px] text-slate-600">加载中…</div>}
+                {news && chainNews.length === 0 && <div className="p-4 text-center text-[10px] text-[#a8987e]">当前快讯流中暂无该产业链相关新闻</div>}
+                {!news && <div className="p-4 text-center text-[10px] text-[#a8987e]">加载中…</div>}
               </div>
             </div>
           </div>
@@ -320,41 +320,41 @@ export function ChainPanel({ className = "", ...zoomProps }: { className?: strin
       </Panel>
 
       {editor && (
-        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-          <div className="flex max-h-[86vh] w-[640px] max-w-[96vw] flex-col rounded-md border border-cyan-400/35 bg-[#0a1220] shadow-[0_0_42px_rgba(34,211,238,0.18)]">
-            <div className="flex items-center justify-between border-b border-slate-700/45 px-4 py-3">
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-[#a8987e]/40 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <div className="flex max-h-[86vh] w-[640px] max-w-[96vw] flex-col rounded-md border border-[#d4943a]/35 bg-[#f5f0e6] shadow-[0_0_42px_rgba(212,148,58,0.12)]">
+            <div className="flex items-center justify-between border-b border-[#e0d5c0] px-4 py-3">
               <div>
-                <div className="text-[16px] font-semibold text-slate-100">{editor.mode === "add" ? "添加自定义产业链" : "更新产业链股票库"}</div>
-                <div className="mt-0.5 text-[12px] text-slate-500">粘贴问财结论，或点击「从问财获取」自动查询。</div>
+                <div className="text-[16px] font-semibold text-[#6b5b3e]">{editor.mode === "add" ? "添加自定义产业链" : "更新产业链股票库"}</div>
+                <div className="mt-0.5 text-[12px] text-[#a8987e]">粘贴问财结论，或点击「从问财获取」自动查询。</div>
               </div>
-              <button type="button" onClick={() => setEditor(null)} className="rounded px-2 py-1 text-[14px] text-slate-400 transition hover:bg-slate-800 hover:text-slate-100">关闭</button>
+              <button type="button" onClick={() => setEditor(null)} className="rounded px-2 py-1 text-[14px] text-[#8b7a5e] transition hover:bg-[#ede4d4] hover:text-[#6b5b3e]">关闭</button>
             </div>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               <label className="block">
-                <span className="mb-1 block text-[13px] font-semibold text-slate-300">产业链名称</span>
+                <span className="mb-1 block text-[13px] font-semibold text-[#6b5b3e]">产业链名称</span>
                 <input value={editor.name} onChange={(e) => setEditor((cur) => cur && { ...cur, name: e.target.value })}
                   readOnly={editor.mode === "update"} placeholder="例如：人工智能产业链"
-                  className="h-9 w-full rounded border border-slate-700 bg-slate-950/80 px-3 text-[14px] text-slate-100 outline-none transition focus:border-cyan-400/70 placeholder:text-slate-600" />
+                  className="h-9 w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 text-[14px] text-[#6b5b3e] outline-none transition focus:border-[#d4943a]/70 placeholder:text-[#a8987e]" />
               </label>
               <div className="flex justify-end">
                 <button type="button" onClick={autoFetchChain} disabled={parseState.loading}
-                  className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50">
+                  className="rounded border border-[#4a6b3f]/30 bg-[#4a6b3f]/15 px-3 py-1.5 text-[12px] font-semibold text-[#4a6b3f] transition hover:bg-[#4a6b3f]/20 disabled:opacity-50">
                   {parseState.loading ? "查询中..." : "从问财获取"}
                 </button>
               </div>
               <label className="block">
-                <span className="mb-1 block text-[13px] font-semibold text-slate-300">问财结论内容</span>
+                <span className="mb-1 block text-[13px] font-semibold text-[#6b5b3e]">问财结论内容</span>
                 <textarea value={editor.content} onChange={(e) => setEditor((cur) => cur && { ...cur, content: e.target.value })}
                   placeholder="从问财获取结果会自动填充到这里，也可以手动粘贴&#10;&#10;格式示例：&#10;AI产业链&#10;&#10;上游 · 算力基座：&#10;寒武纪(sh688256)、海光信息(sh688041)、中际旭创(sz300308)&#10;&#10;中游 · 模型平台：&#10;科大讯飞(sz002230)、商汤(hk00020)&#10;&#10;下游 · 应用：&#10;金山办公(sh688111)、万兴科技(sz300624)&#10;&#10;核心逻辑：AI产业链&#10;数据来源：同花顺问财"
-                  className="h-[240px] w-full resize-none rounded border border-slate-700 bg-slate-950/80 px-3 py-2 text-[13px] leading-6 text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-cyan-400/70" />
+                  className="h-[240px] w-full resize-none rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] leading-6 text-[#6b5b3e] outline-none transition placeholder:text-[#a8987e] focus:border-[#d4943a]/70" />
               </label>
-              {parseState.error && <div className="rounded border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-300">{parseState.error}</div>}
-              {parseState.warnings.map((w, i) => <div key={i} className="rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">{w}</div>)}
+              {parseState.error && <div className="rounded border border-[#b8533a]/30 bg-[#b8533a]/15 px-3 py-2 text-[12px] text-[#b8533a]">{parseState.error}</div>}
+              {parseState.warnings.map((w, i) => <div key={i} className="rounded border border-[#d4943a]/30 bg-[#d4943a]/15 px-3 py-2 text-[12px] text-[#d4943a]">{w}</div>)}
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-700/45 px-4 py-3">
-              <button type="button" onClick={() => setEditor(null)} className="rounded border border-slate-700 px-3 py-1.5 text-[13px] text-slate-300 transition hover:bg-slate-800">取消</button>
+            <div className="flex justify-end gap-2 border-t border-[#e0d5c0] px-4 py-3">
+              <button type="button" onClick={() => setEditor(null)} className="rounded border border-[#e0d5c0] px-3 py-1.5 text-[13px] text-[#6b5b3e] transition hover:bg-[#ede4d4]">取消</button>
               <button type="button" onClick={submitEditor} disabled={parseState.loading}
-                className="rounded border border-cyan-400/50 bg-cyan-500/15 px-3 py-1.5 text-[13px] font-semibold text-cyan-200 transition hover:bg-cyan-500/25 disabled:opacity-50">
+                className="rounded border border-[#d4943a]/50 bg-[#d4943a]/15 px-3 py-1.5 text-[13px] font-semibold text-[#d4943a] transition hover:bg-[#d4943a]/25 disabled:opacity-50">
                 {parseState.loading ? "处理中..." : editor.mode === "add" ? "创建并保存" : "整理并保存"}
               </button>
             </div>

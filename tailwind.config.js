@@ -48,6 +48,21 @@ module.exports = {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        /* 复古报刊主题色板 */
+        newspaper: {
+          bg: '#f5f0e6',       /* 米白旧报纸底色 */
+          panel: '#faf6ee',    /* 面板浅米色 */
+          brown: '#6b5b3e',   /* 主体文字浅棕色 */
+          'brown-light': '#8b7a5e',  /* 辅助文字 */
+          'brown-muted': '#a8987e',  /* 弱化文字 */
+          gold: '#d4943a',     /* 橘黄色点缀 */
+          'gold-light': '#e8b86a',  /* 浅橘黄 */
+          green: '#4a6b3f',   /* 墨绿色点缀 */
+          'green-light': '#6b8f5e', /* 浅墨绿 */
+          border: '#e0d5c0',  /* 暖色边框 */
+          'border-light': '#ede4d4', /* 浅边框 */
+          rule: '#c9b99a',    /* 分隔线/栏线 */
+        },
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",
@@ -58,6 +73,12 @@ module.exports = {
       },
       boxShadow: {
         xs: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        'newspaper': '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)',
+        'newspaper-lg': '0 4px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)',
+      },
+      fontFamily: {
+        'newspaper': ['"Noto Serif SC"', '"Source Han Serif SC"', '"STSong"', '"SimSun"', 'serif'],
+        'newspaper-heading': ['"Noto Serif SC"', '"Source Han Serif SC"', '"STSong"', 'serif'],
       },
       keyframes: {
         "accordion-down": {

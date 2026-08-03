@@ -29,8 +29,8 @@ export function SpotPanel({ className = "", ...zoomProps }: { className?: string
       {...zoomProps}
       title="现货价格"
       icon="◆"
-      accent="#f5c542"
-      right={<span className="text-[10px] text-slate-500">生意社{data?.date ? ` · ${data.date}` : ""}</span>}
+      accent="#d4943a"
+      right={<span className="text-[10px] text-[#a8987e]">生意社{data?.date ? ` · ${data.date}` : ""}</span>}
     >
       <div className="flex h-full min-h-0 flex-col divide-y divide-slate-800/60 overflow-y-auto p-1">
         {CHEM_SPOTS.map((def) => {
@@ -43,7 +43,7 @@ export function SpotPanel({ className = "", ...zoomProps }: { className?: string
           const hist = (data.history[r.name] || []).map((h) => ({ t: h.t, c: h.p }));
           return <GoodsRow key={r.name} name={r.name} unit={EXCH_SHORT[r.exchange] || r.exchange} price={r.spot} pct={dailyPct(hist)} daily={hist} />;
         })}
-        {!data && !chems && <div className="p-4 text-center text-[10px] text-slate-600">现货数据加载中…</div>}
+        {!data && !chems && <div className="p-4 text-center text-[10px] text-[#a8987e]">现货数据加载中…</div>}
       </div>
     </Panel>
   );

@@ -54,7 +54,7 @@ function Tape() {
     return list;
   }, [quotes, futures, treasuries]);
 
-  if (items.length === 0) return <div className="h-7 border-b border-slate-700/40 bg-[#0a101c]" />;
+  if (items.length === 0) return <div className="h-7 border-b border-[#e0d5c0] bg-[#f5f0e6]" />;
   return <TickerTape items={items} />;
 }
 
@@ -90,11 +90,11 @@ function Dashboard() {
   const { isFullscreen, toggle } = useFullscreen();
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#070b12] text-slate-200 lg:h-screen lg:overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-[#f5f0e6] text-[#6b5b3e] lg:h-screen lg:overflow-hidden">
       <DashboardHeader
         title="市场研究驾驶舱"
         subtitle="MARKET RESEARCH COCKPIT"
-        accent="cyan"
+        accent="gold"
         tagline="沪深港美 · 大宗 · 美债 · 板块 · 资金流 · 快讯 · 产业链"
         linkTo="/ai"
         linkLabel="AI 观察"

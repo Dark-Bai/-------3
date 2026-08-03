@@ -13,10 +13,10 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "leverage", label: "杠杆与回报" },
 ];
 
-const GRID = "#1e293b";
-const ZERO = "#334155";
-const TICK = "#475569";
-const AXIS = "#64748b";
+const GRID = "#c8b89a";
+const ZERO = "#c8b89a";
+const TICK = "#a8987e";
+const AXIS = "#a8987e";
 
 /** 扩展双侧值域使零轴同帧(柱转负/线穿零同一水平线可读) */
 function alignZero(aMin: number, aMax: number, bMin: number, bMax: number) {
@@ -95,9 +95,9 @@ function TrendChart({ reports, tab }: { reports: FinanceReport[]; tab: Tab }) {
       const Y = (v: number) => T + (1 - (v - min) / (max - min)) * plotH;
       const ticks = [0.2, 0.4, 0.6, 0.8].map((f) => ({ y: T + f * plotH, v: max - f * (max - min) }));
       const series = [
-        { key: "roe" as const, name: "ROE", color: "#22d3ee", dash: undefined as string | undefined },
-        { key: "grossMargin" as const, name: "毛利", color: "#fbbf24", dash: undefined as string | undefined },
-        { key: "netMargin" as const, name: "净利", color: "#fb7185", dash: "3 2" },
+        { key: "roe" as const, name: "ROE", color: "#d4943a", dash: undefined as string | undefined },
+        { key: "grossMargin" as const, name: "毛利", color: "#d4943a", dash: undefined as string | undefined },
+        { key: "netMargin" as const, name: "净利", color: "#b8533a", dash: "3 2" },
       ].map((s) => ({
         ...s,
         pts: rows.map((r, i) => `${cx(i).toFixed(1)},${Y(r[s.key]).toFixed(1)}`).join(" "),
@@ -212,8 +212,8 @@ function TrendChart({ reports, tab }: { reports: FinanceReport[]; tab: Tab }) {
               const revX = chart.cx(i) - revW - 1;
               const npX = chart.cx(i) + 1;
               const bars = [
-                { x: revX, w: revW, v: r.revenue, fill: "#22d3ee", op: 0.85 },
-                { x: npX, w: npW, v: r.netProfit, fill: "#fbbf24", op: 0.9 },
+                { x: revX, w: revW, v: r.revenue, fill: "#d4943a", op: 0.85 },
+                { x: npX, w: npW, v: r.netProfit, fill: "#d4943a", op: 0.9 },
               ];
               return bars.map((b, bi) => {
                 const y = chart.Ym(b.v);
@@ -223,8 +223,8 @@ function TrendChart({ reports, tab }: { reports: FinanceReport[]; tab: Tab }) {
               });
             })}
             {/* 同比折线(右轴): 净利同比 rose 实线 / 营收同比 sky 虚线 */}
-            <polyline points={chart.line("revenueYoY")} fill="none" stroke="#38bdf8" strokeWidth={1.2} strokeDasharray="3 2" strokeLinejoin="round" />
-            <polyline points={chart.line("profitYoY")} fill="none" stroke="#fb7185" strokeWidth={1.4} strokeLinejoin="round" />
+            <polyline points={chart.line("revenueYoY")} fill="none" stroke="#d4943a" strokeWidth={1.2} strokeDasharray="3 2" strokeLinejoin="round" />
+            <polyline points={chart.line("profitYoY")} fill="none" stroke="#b8533a" strokeWidth={1.4} strokeLinejoin="round" />
           </>
         ) : chart.mode === "quality" ? (
           <>
@@ -272,15 +272,15 @@ function TrendChart({ reports, tab }: { reports: FinanceReport[]; tab: Tab }) {
                   width={b.w}
                   height={h}
                   rx={1}
-                  fill="#fbbf24"
+                  fill="#d4943a"
                   opacity={0.55}
                 />
               );
             })}
             {/* ROIC 线: cyan 实线, 左轴% */}
-            <polyline points={chart.roicLine} fill="none" stroke="#22d3ee" strokeWidth={1.4} strokeLinejoin="round" />
+            <polyline points={chart.roicLine} fill="none" stroke="#d4943a" strokeWidth={1.4} strokeLinejoin="round" />
             {/* 每股OCF 线: emerald 虚线, 右轴元 */}
-            <polyline points={chart.ocfLine} fill="none" stroke="#34d399" strokeWidth={1.2} strokeDasharray="3 2" strokeLinejoin="round" />
+            <polyline points={chart.ocfLine} fill="none" stroke="#4a6b3f" strokeWidth={1.2} strokeDasharray="3 2" strokeLinejoin="round" />
             {/* 右端点标签 */}
             {(() => {
               const last = chart.rows[chart.n - 1];
@@ -288,10 +288,10 @@ function TrendChart({ reports, tab }: { reports: FinanceReport[]; tab: Tab }) {
               const ocfY = chart.Yl(last.ocfPerShare);
               return (
                 <>
-                  <text x={W - chart.R + 4} y={roicY + 3} fontSize={8} fill="#22d3ee" style={TNUM}>
+                  <text x={W - chart.R + 4} y={roicY + 3} fontSize={8} fill="#d4943a" style={TNUM}>
                     ROIC {last.roic.toFixed(1)}%
                   </text>
-                  <text x={W - chart.R + 4} y={ocfY + 3} fontSize={8} fill="#34d399" style={TNUM}>
+                  <text x={W - chart.R + 4} y={ocfY + 3} fontSize={8} fill="#4a6b3f" style={TNUM}>
                     OCF {last.ocfPerShare.toFixed(2)}
                   </text>
                 </>
@@ -319,7 +319,7 @@ export function FinTrendPanel({ className = "", ...zoomProps }: { className?: st
       {...zoomProps}
       title="公司趋势"
       icon="◧"
-      accent="#22d3ee"
+      accent="#d4943a"
       right={
         <div className="flex items-center gap-2 text-[10px]">
           {TABS.map((t) => (
@@ -327,7 +327,7 @@ export function FinTrendPanel({ className = "", ...zoomProps }: { className?: st
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`flex h-[22px] items-center border-b-2 px-2 ${
-                tab === t.key ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-500 hover:text-slate-300"
+                tab === t.key ? "border-[#d4943a] text-[#d4943a]" : "border-transparent text-[#a8987e] hover:text-[#6b5b3e]"
               }`}
             >
               {t.label}
@@ -341,10 +341,10 @@ export function FinTrendPanel({ className = "", ...zoomProps }: { className?: st
         <div className="relative h-full p-3">
           <div className="flex h-full items-end gap-2 opacity-40">
             {[40, 55, 38, 62, 48, 70, 58, 76, 66, 82, 74, 90].map((h, i) => (
-              <div key={i} className="flex-1 rounded-sm bg-slate-700/50" style={{ height: `${h}%` }} />
+              <div key={i} className="flex-1 rounded-sm bg-[#e0d5c0]" style={{ height: `${h}%` }} />
             ))}
           </div>
-          <div className="absolute inset-0 flex items-center justify-center text-[11px] text-slate-600">
+          <div className="absolute inset-0 flex items-center justify-center text-[11px] text-[#a8987e]">
             ← 先在左侧选择公司
           </div>
         </div>
@@ -353,13 +353,13 @@ export function FinTrendPanel({ className = "", ...zoomProps }: { className?: st
           <SkeletonRows rows={8} />
         ) : (
           <div className="flex h-full items-center justify-center text-[11px]">
-            <button className="h-full w-full text-slate-500" onClick={() => setRetry((r) => r + 1)}>
+            <button className="h-full w-full text-[#a8987e]" onClick={() => setRetry((r) => r + 1)}>
               数据获取失败，点击重试{error ? `(${error})` : ""}
             </button>
           </div>
         )
       ) : data.reports.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-[11px] text-slate-600">暂无财报数据</div>
+        <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">暂无财报数据</div>
       ) : (
         <TrendChart reports={data.reports} tab={tab} />
       )}

@@ -16,15 +16,15 @@ export function MoneyFlowPanel({ className = "", ...zoomProps }: { className?: s
       {...zoomProps}
       title="主力净流入排行"
       icon="⇄"
-      accent="#fb7185"
+      accent="#d4943a"
       right={
-        <span className="text-[10px] text-slate-500">
+        <span className="text-[10px] text-[#a8987e]">
           TOP15 合计 <span className={clsChg(total)}>{fmtYuan(total)}</span>
         </span>
       }
     >
       <div className="h-full overflow-y-auto p-1.5">
-        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-slate-500">
+        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-[#a8987e]">
           <span>个股 · 主力净额/净占比</span>
           <span>成交额 · 现价</span>
         </div>
@@ -41,8 +41,8 @@ export function MoneyFlowPanel({ className = "", ...zoomProps }: { className?: s
           />
         ))}
         {!data && (
-          <div className="p-6 text-center text-[11px] text-slate-600">
-            {error ? <span className="text-rose-400/80">资金流数据源连接失败,自动重试中…<br />{error}</span> : "资金流数据加载中…"}
+          <div className="p-6 text-center text-[11px] text-[#a8987e]">
+            {error ? <span className="text-[#b8533a]">资金流数据源连接失败,自动重试中…<br />{error}</span> : "资金流数据加载中…"}
           </div>
         )}
       </div>

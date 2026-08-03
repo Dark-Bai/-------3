@@ -97,11 +97,11 @@ export default function GoodsDashboard() {
   const { isFullscreen, toggle } = useFullscreen();
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#070b12] text-slate-200 lg:h-screen lg:overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-[#f5f0e6] text-[#6b5b3e] lg:h-screen lg:overflow-hidden">
       <DashboardHeader
         title="商品价格"
         subtitle="COMMODITY PRICES"
-        accent="cyan"
+        accent="gold"
         tagline="期货主力日线趋势 · 现货报价 · 现期基差"
         linkTo="/"
         linkLabel="市场驾驶舱"

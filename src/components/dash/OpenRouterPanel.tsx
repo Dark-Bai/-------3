@@ -134,7 +134,7 @@ function Chart({ allDays, days, mode }: { allDays: OrUsageDay[]; days: OrUsageDa
     return { W, H, PL, PR, PT, PB, areas, yTicks, xLabels, last, chg, chgPct, dailyRate, avg7, avg, dayCount };
   }, [days, allDays, size, mode]);
 
-  if (!chart) return <div className="flex h-full items-center justify-center text-[11px] text-slate-600">暂无数据</div>;
+  if (!chart) return <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">暂无数据</div>;
 
   return (
     <div ref={boxRef} className="flex h-full min-h-0 w-full flex-col">
@@ -147,17 +147,17 @@ function Chart({ allDays, days, mode }: { allDays: OrUsageDay[]; days: OrUsageDa
         ))}
       </div>
       <div className="flex shrink-0 items-baseline gap-3 pb-1 text-[10px]">
-        <span className="font-semibold text-slate-200">{fmtT(chart.last)}</span>
-        <span className={chart.chg >= 0 ? "text-emerald-400" : "text-red-400"}>
+        <span className="font-semibold text-[#6b5b3e]">{fmtT(chart.last)}</span>
+        <span className={chart.chg >= 0 ? "text-[#4a6b3f]" : "text-red-400"}>
           {chart.chg >= 0 ? "↑" : "↓"} {chart.chgPct > 0.01 || chart.chgPct < -0.01 ? `${chart.chgPct > 0 ? "+" : ""}${chart.chgPct.toFixed(1)}%` : "0%"}
         </span>
-        <span className="text-slate-500">日均 {fmtT(Math.round(chart.avg))}</span>
-        <span className="text-slate-500">日增速 {chart.dailyRate > 0.001 ? `+${chart.dailyRate.toFixed(2)}%` : `${chart.dailyRate.toFixed(2)}%`}</span>
-        <span className="text-slate-500">近7日 {fmtT(Math.round(chart.avg7))}/日</span>
+        <span className="text-[#a8987e]">日均 {fmtT(Math.round(chart.avg))}</span>
+        <span className="text-[#a8987e]">日增速 {chart.dailyRate > 0.001 ? `+${chart.dailyRate.toFixed(2)}%` : `${chart.dailyRate.toFixed(2)}%`}</span>
+        <span className="text-[#a8987e]">近7日 {fmtT(Math.round(chart.avg7))}/日</span>
       </div>
       <svg width={chart.W} height={chart.H - 36} className="block flex-1" style={{ overflow: "visible" }}>
         {chart.yTicks.map((t, i) => (
-          <line key={i} x1={chart.PL} y1={t.y} x2={chart.W - chart.PR} y2={t.y} stroke="#1e293b" strokeWidth={0.5} />
+          <line key={i} x1={chart.PL} y1={t.y} x2={chart.W - chart.PR} y2={t.y} stroke="#e0d5c0" strokeWidth={0.5} />
         ))}
         {chart.areas.map((a) => (
           <path key={a.name} d={a.d} fill={vendorColor(a.name)} />
@@ -191,7 +191,7 @@ export function OpenRouterPanel({ className, panelId, isZoomed, onToggleZoom }: 
     <Panel
       title="公有云大模型 Token 消耗"
       icon="⟁"
-      accent="#a78bfa"
+      accent="#4a6b3f"
       className={className}
       panelId={panelId}
       isZoomed={isZoomed}
@@ -199,18 +199,18 @@ export function OpenRouterPanel({ className, panelId, isZoomed, onToggleZoom }: 
       right={
         <div className="flex gap-1">
           <div className="mr-1 flex gap-0.5 rounded border border-slate-700/60 p-0.5 text-[10px]">
-            <button onClick={() => setMode("vendor")} className={`rounded px-1.5 py-0.5 transition-colors ${mode === "vendor" ? "bg-violet-500/20 text-violet-300" : "text-slate-500 hover:text-slate-300"}`}>厂商</button>
-            <button onClick={() => setMode("country")} className={`rounded px-1.5 py-0.5 transition-colors ${mode === "country" ? "bg-violet-500/20 text-violet-300" : "text-slate-500 hover:text-slate-300"}`}>中美</button>
+            <button onClick={() => setMode("vendor")} className={`rounded px-1.5 py-0.5 transition-colors ${mode === "vendor" ? "bg-[#4a6b3f]/20 text-[#4a6b3f]" : "text-[#a8987e] hover:text-[#6b5b3e]"}`}>厂商</button>
+            <button onClick={() => setMode("country")} className={`rounded px-1.5 py-0.5 transition-colors ${mode === "country" ? "bg-[#4a6b3f]/20 text-[#4a6b3f]" : "text-[#a8987e] hover:text-[#6b5b3e]"}`}>中美</button>
           </div>
           {(["7d", "14d", "30d", "60d", "180d", "1y"] as const).map((r) => (
-            <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${range === r ? "bg-violet-500/20 text-violet-300" : "text-slate-500 hover:text-slate-300"}`}>{r}</button>
+            <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${range === r ? "bg-[#4a6b3f]/20 text-[#4a6b3f]" : "text-[#a8987e] hover:text-[#6b5b3e]"}`}>{r}</button>
           ))}
         </div>
       }
     >
       <div className="flex h-full flex-col p-2 pt-1">
         {loading ? (
-          <div className="flex h-full items-center justify-center text-[11px] text-slate-600">加载中…</div>
+          <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">加载中…</div>
         ) : error ? (
           <div className="flex h-full items-center justify-center text-[11px] text-red-400">数据异常: {error}</div>
         ) : (
@@ -218,7 +218,7 @@ export function OpenRouterPanel({ className, panelId, isZoomed, onToggleZoom }: 
             <Chart allDays={data || []} days={sliced} mode={mode} />
           </div>
         )}
-        <div className="flex items-center justify-between pt-1 text-[9px] text-slate-600">
+        <div className="flex items-center justify-between pt-1 text-[9px] text-[#a8987e]">
           <span>数据: OpenRouter Rankings API</span>
           <span>日更新</span>
         </div>

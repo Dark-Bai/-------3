@@ -4,8 +4,8 @@ import type { BoardFlow } from "@/lib/api";
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 /** 流入红色系 / 流出绿色系(按排名渐变) */
-const REDS = ["#fb7185", "#f43f5e", "#fca5a5", "#fb923c", "#fdba74", "#e11d48", "#fecdd3", "#fda4af", "#fcd34d", "#fbbf24"];
-const GREENS = ["#34d399", "#10b981", "#6ee7b7", "#059669", "#a7f3d0", "#4ade80", "#22c55e", "#86efac", "#16a34a", "#15803d"];
+const REDS = ["#4a6b3f", "#f43f5e", "#fca5a5", "#fb923c", "#fdba74", "#e11d48", "#fecdd3", "#fda4af", "#fcd34d", "#fbbf24"];
+const GREENS = ["#b8533a", "#10b981", "#6ee7b7", "#059669", "#a7f3d0", "#4ade80", "#22c55e", "#86efac", "#16a34a", "#15803d"];
 
 // 午休压缩点上下午刻度相邻, 用两端锚定防重叠; 首尾刻度防出界
 const X_TICKS: [number, string, "start" | "middle" | "end"][] = [
@@ -96,14 +96,14 @@ export function BoardFlowChart({ flows, progress = 1, labelMode = "end" }: { flo
             {/* 网格与零轴 */}
             {chart.ticks.map((t, i) => (
               <g key={i}>
-                <line x1={34} y1={t.y} x2={chart.W - chart.labelW - 6} y2={t.y} stroke="#1e293b" strokeWidth={1} />
-                <text x={4} y={t.y + 3} fontSize={9} fill="#64748b" style={TNUM}>{(t.v / 1e8).toFixed(0)}亿</text>
+                <line x1={34} y1={t.y} x2={chart.W - chart.labelW - 6} y2={t.y} stroke="#e0d5c0" strokeWidth={1} />
+                <text x={4} y={t.y + 3} fontSize={9} fill="#a8987e" style={TNUM}>{(t.v / 1e8).toFixed(0)}亿</text>
               </g>
             ))}
-            <line x1={34} y1={chart.Y(0)} x2={chart.W - chart.labelW - 6} y2={chart.Y(0)} stroke="#334155" strokeWidth={1} />
+            <line x1={34} y1={chart.Y(0)} x2={chart.W - chart.labelW - 6} y2={chart.Y(0)} stroke="#c9b99a" strokeWidth={1} />
             {/* 时间刻度 */}
             {X_TICKS.map(([i, t, anchor]) => (
-              <text key={t} x={chart.X(i)} y={chart.chartH - 8} fontSize={8} fill="#475569" textAnchor={anchor}>{t}</text>
+              <text key={t} x={chart.X(i)} y={chart.chartH - 8} fontSize={8} fill="#a8987e" textAnchor={anchor}>{t}</text>
             ))}
             {/* 板块曲线 */}
             {chart.lines.map((l) => (
@@ -127,7 +127,7 @@ export function BoardFlowChart({ flows, progress = 1, labelMode = "end" }: { flo
                   y1={8}
                   x2={chart.X(chart.idx)}
                   y2={chart.chartH - 18}
-                  stroke="#94a3b8"
+                  stroke="#a8987e"
                   strokeWidth={1}
                   strokeDasharray="3 3"
                 />

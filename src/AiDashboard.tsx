@@ -14,11 +14,11 @@ export default function AiDashboard() {
   const { isFullscreen, toggle } = useFullscreen();
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#070b12] text-slate-200 lg:h-screen lg:overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-[#f5f0e6] text-[#6b5b3e] lg:h-screen lg:overflow-hidden">
       <DashboardHeader
         title="人工智能行业观察"
         subtitle="AI INDUSTRY WATCH"
-        accent="violet"
+        accent="green"
         tagline="AI Token 消耗 · 模型排名 · 厂商份额"
         linkTo="/"
         linkLabel="市场驾驶舱"

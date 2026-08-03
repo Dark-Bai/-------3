@@ -32,7 +32,7 @@ export function DashboardLayout({ rows }: { rows: PanelRowDef[] }) {
   const effLayout = isTv ? defaultLayout : layout;
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-1 p-1">
+    <main className="flex min-h-0 flex-1 flex-col gap-1 p-1" style={{ gap: '3px', padding: '3px' }}>
       {rows.map((row, rowIdx) => (
         <div
           key={rowIdx}

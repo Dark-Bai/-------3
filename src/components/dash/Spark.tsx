@@ -82,7 +82,7 @@ export function Spark({ points, prec, width = 120, height = 36, fluid = false, e
     return { line, area, refY: Y(prec), color };
   }, [points, prec, width, height, session]);
 
-  if (!line) return <div style={{ width: fluid ? "100%" : width, height }} className="flex items-center justify-center text-[10px] text-slate-600">{emptyLabel}</div>;
+  if (!line) return <div style={{ width: fluid ? "100%" : width, height }} className="flex items-center justify-center text-[10px] text-[#a8987e]">{emptyLabel}</div>;
 
   return (
     <svg
@@ -93,7 +93,7 @@ export function Spark({ points, prec, width = 120, height = 36, fluid = false, e
       className={fluid ? "block min-w-0" : "shrink-0"}
     >
       <polygon points={area} fill={color} opacity={0.12} />
-      <line x1={1} y1={refY} x2={width - 1} y2={refY} stroke="#475569" strokeWidth={0.6} strokeDasharray="2,3" />
+      <line x1={1} y1={refY} x2={width - 1} y2={refY} stroke="#c9b99a" strokeWidth={0.6} strokeDasharray="2,3" />
       <polyline points={line} fill="none" stroke={color} strokeWidth={1.2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   );

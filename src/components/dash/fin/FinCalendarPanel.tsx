@@ -78,11 +78,11 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
       {...zoomProps}
       title="财报日历"
       icon="▦"
-      accent="#38bdf8"
+      accent="#d4943a"
       right={
         data && (
-          <span className="text-[10px] text-slate-500" style={TNUM}>
-            今日 <span className="font-semibold text-amber-400">{view.todayCount}</span> 家 · 峰值 {view.peak} 家(
+          <span className="text-[10px] text-[#a8987e]" style={TNUM}>
+            今日 <span className="font-semibold text-[#d4943a]">{view.todayCount}</span> 家 · 峰值 {view.peak} 家(
             {view.peakKey.slice(5).replace("-", "/")})
           </span>
         )
@@ -93,7 +93,7 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
           <SkeletonRows rows={6} />
         ) : (
           <div className="flex h-full items-center justify-center text-[11px]">
-            <button className="h-full w-full text-slate-500" onClick={() => setRetry((r) => r + 1)}>
+            <button className="h-full w-full text-[#a8987e]" onClick={() => setRetry((r) => r + 1)}>
               数据获取失败，点击重试{error ? `(${error})` : ""}
             </button>
           </div>
@@ -116,7 +116,7 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
                         width={bw}
                         height={bh}
                         rx={1.5}
-                        fill={isToday ? "#fbbf24" : "#22d3ee"}
+                        fill={isToday ? "#d4943a" : "#d4943a"}
                         opacity={isToday ? 1 : 0.4}
                       />
                     )}
@@ -125,7 +125,7 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
                         x={x + bw / 2}
                         y={baseY - bh - 2}
                         fontSize={8}
-                        fill={isToday ? "#fbbf24" : "#475569"}
+                        fill={isToday ? "#d4943a" : "#a8987e"}
                         textAnchor="middle"
                         style={TNUM}
                       >
@@ -135,7 +135,7 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
                   </g>
                 );
               })}
-              <line x1={padX} y1={baseY} x2={W - padX} y2={baseY} stroke="#1e293b" strokeWidth={1} />
+              <line x1={padX} y1={baseY} x2={W - padX} y2={baseY} stroke="#c8b89a" strokeWidth={1} />
               {[
                 { i: 0, t: "今天", a: "start" as const },
                 { i: 3, t: "+3", a: "middle" as const },
@@ -147,7 +147,7 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
                   x={a === "start" ? padX : a === "end" ? W - padX : padX + i * slot + slot / 2}
                   y={STRIP_H - 2}
                   fontSize={8}
-                  fill="#475569"
+                  fill="#a8987e"
                   textAnchor={a}
                 >
                   {t}
@@ -156,23 +156,23 @@ export function FinCalendarPanel({ className = "", ...zoomProps }: { className?:
             </svg>
           </div>
           {/* 双列流式披露清单: 名称 11px / 期 9px / 重磅 ★ amber */}
-          <div className="shrink-0 border-t border-slate-800/60 px-2 pt-1 text-[9px] text-amber-400">
+          <div className="shrink-0 border-t border-[#e0d5c0] px-2 pt-1 text-[9px] text-[#d4943a]">
             {view.listDate === view.todayKey ? "今晚披露" : `${view.listDate.slice(5).replace("-", "/")} 披露`}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto py-0.5">
             {view.list.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-[11px] text-slate-600">未来 14 天暂无披露安排</div>
+              <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">未来 14 天暂无披露安排</div>
             ) : (
               <div className="grid grid-cols-2">
                 {view.list.map((it) => (
                   <button
                     key={`${it.date}-${it.code}`}
                     onClick={() => select(prefixCode(it.code), it.name)}
-                    className="flex h-[18px] min-w-0 items-center gap-1.5 border-b border-slate-800/60 px-2 text-left hover:bg-slate-800/40"
+                    className="flex h-[18px] min-w-0 items-center gap-1.5 border-b border-[#e0d5c0] px-2 text-left hover:bg-[#ede4d4]"
                   >
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-slate-200">{it.name}</span>
-                    <span className="shrink-0 text-[9px] text-slate-500">{quarterLabel(it.period)}</span>
-                    {view.heavy.has(it.code) && <span className="shrink-0 text-[9px] text-amber-400">★</span>}
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-[#6b5b3e]">{it.name}</span>
+                    <span className="shrink-0 text-[9px] text-[#a8987e]">{quarterLabel(it.period)}</span>
+                    {view.heavy.has(it.code) && <span className="shrink-0 text-[9px] text-[#d4943a]">★</span>}
                   </button>
                 ))}
               </div>

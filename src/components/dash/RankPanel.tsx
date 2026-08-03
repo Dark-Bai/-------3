@@ -41,7 +41,7 @@ export function RankPanel({ className = "", ...zoomProps }: { className?: string
       }
     >
       <div className="h-full overflow-y-auto p-1.5">
-        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-slate-500">
+        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-[#a8987e]">
           <span># 名称</span>
           <span>主力资金 · 成交额 · 现价</span>
         </div>
@@ -59,8 +59,8 @@ export function RankPanel({ className = "", ...zoomProps }: { className?: string
           />
         ))}
         {!data && (
-          <div className="p-6 text-center text-[11px] text-slate-600">
-            {error ? <span className="text-rose-400/80">榜单源连接失败,自动重试中…<br />{error}</span> : "榜单加载中…"}
+          <div className="p-6 text-center text-[11px] text-[#a8987e]">
+            {error ? <span className="text-[#b8533a]">榜单源连接失败,自动重试中…<br />{error}</span> : "榜单加载中…"}
           </div>
         )}
       </div>

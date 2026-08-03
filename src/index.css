@@ -33,36 +33,6 @@
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
-
-  .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 5.9% 10%;
-    --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 240 5.9% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
-  }
 }
 
 @layer base {
@@ -74,19 +44,23 @@
   }
 }
 
-/* ===== 驾驶舱全局样式 ===== */
+/* ===== 复古报刊全局样式 ===== */
 html,
 body {
-  background: #070b12;
-  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* 米白旧报纸底色 + 纸张纹理 SVG 叠加 */
+  background-color: #f5f0e6;
+  background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", Roboto, "Noto Serif SC", "STSong", serif, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  color: #6b5b3e;
 }
 
 /* 跑马灯 */
 .ticker-wrap .ticker-track {
   animation: ticker-scroll 60s linear infinite;
-  /* 独立合成层: 不提升时弱GPU每帧主线程重绘整宽图层, 表现为一卡一卡 */
   will-change: transform;
 }
 .ticker-wrap:hover .ticker-track {
@@ -101,7 +75,7 @@ body {
   }
 }
 
-/* 细滚动条 */
+/* 细滚动条 - 报纸风格暖色 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -110,15 +84,15 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #c9b99a;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #b8a88a;
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1e293b transparent;
+  scrollbar-color: #c9b99a transparent;
 }
 
 /* 数字等宽 */
@@ -135,10 +109,75 @@ body {
   overflow: hidden;
 }
 
+/* ===== 复古报刊装饰元素 ===== */
+
+/* 胶带装饰 */
+.newspaper-tape {
+  position: relative;
+}
+.newspaper-tape::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-1deg);
+  width: 60%;
+  height: 12px;
+  background: rgba(212, 148, 58, 0.18);
+  border-radius: 1px;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+/* 复古邮票边框 */
+.newspaper-stamp {
+  border: 2px solid #c9b99a;
+  border-radius: 2px;
+  position: relative;
+}
+.newspaper-stamp::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  right: -3px;
+  bottom: -3px;
+  border: 1px dashed #d4943a;
+  border-radius: 4px;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* 报纸栏线 */
+.newspaper-column-rule {
+  border-left: 1px solid #e0d5c0;
+  position: relative;
+}
+.newspaper-column-rule::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(to bottom, transparent 0%, #c9b99a 5%, #c9b99a 95%, transparent 100%);
+}
+
+/* 报纸标题装饰下划线 */
+.newspaper-headline-rule {
+  position: relative;
+}
+.newspaper-headline-rule::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(to right, #d4943a, transparent 80%);
+}
+
 /* ===== PWA Window Controls Overlay ===== */
-/* 安装为桌面应用后浏览器标题栏隐藏, Header 兼任可拖拽标题栏;
-   按平台窗口按钮区(macOS 红绿灯在左 / Windows 最小化按钮在右)自动留白;
-   普通浏览器中 env() 回退, 布局保持 px-3 不变。 */
 header.titlebar {
   -webkit-app-region: drag;
   app-region: drag;
@@ -153,15 +192,12 @@ header.titlebar button {
 }
 
 /* ===== TV 模式(安卓电视壳 App, ?tv=1 启用) ===== */
-/* 过扫描安全边距: #root 限高并隐藏溢出, 不影响桌面端一屏布局 */
 .tv #root {
   padding: 6px;
   height: 100vh;
   box-sizing: border-box;
   overflow: hidden;
 }
-
-/* 遥控器焦点环: 青色描边 + 发光, 覆盖 Tailwind 的 outline-none 等 */
 .tv [data-tv-focusable]:focus,
 .tv [data-tv-scroll]:focus {
   outline: 2px solid #22d3ee;
@@ -170,13 +206,10 @@ header.titlebar button {
   position: relative;
   z-index: 10;
 }
-/* 放大的面板是全屏浮层(fixed), 焦点态的 relative 会覆盖 fixed 导致浮层失效 */
 .tv [data-tv-zoomed]:focus {
   position: fixed;
   z-index: 60;
 }
-
-/* 遥控器无 hover/指针, 禁用文本选择与触摸高亮 */
 .tv * {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -185,8 +218,6 @@ header.titlebar button {
 .tv textarea {
   user-select: text;
 }
-
-/* 弱 GPU 优化: 去掉毛玻璃与大面积阴影(电视芯片 4K 下每帧重绘开销大, 是卡顿主因) */
 .tv .backdrop-blur {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -194,16 +225,12 @@ header.titlebar button {
 .tv [class*="shadow"] {
   box-shadow: none !important;
 }
-/* 动画是持续性每帧开销: ping/过渡等在弱GPU上把FPS压到个位数, TV 默认禁用;
-   跑马灯是核心信息展示, 单独恢复(transform 合成动画, 成本相对可控) */
 .tv *,
 .tv *::before,
 .tv *::after {
   animation: none !important;
   transition: none !important;
 }
-/* TV 翻牌跑马灯: 槽位换内容时的翻转(区域小, 弱GPU无压力);
-   用2D scaleY模拟翻牌 — 3D rotateX/perspective 在老电视GPU上走软件渲染, 掉帧严重 */
 @keyframes flap-in {
   0% {
     transform: scaleY(0);
@@ -223,21 +250,17 @@ header.titlebar button {
 .tv .flap-item {
   animation: flap-in 0.5s ease-out !important;
 }
-/* Chrome 83 不支持 flex gap(TV内核83), 卡片间距与内部间距用相邻兄弟 margin 实现 */
 .tv .flap-item + .flap-item {
   margin-left: 12px;
 }
 .tv .flap-item > span + span {
   margin-left: 16px;
 }
-/* 焦点环发光是遥控器导航的关键视觉反馈, 恢复(单元素开销可忽略) */
 .tv [data-tv-focusable]:focus {
   box-shadow: 0 0 20px rgba(34, 211, 238, 0.4) !important;
 }
 
 /* ===== 旧 WebView 兼容(Android TV < Chromium 88) ===== */
-/* Tailwind preflight 的选择器列表里带 :where(), 旧内核会把整条规则丢弃,
-   导致按钮露出 UA 默认白底; 这里用传统选择器补同样的声明(与现代浏览器行为一致) */
 button,
 [type="button"],
 [type="reset"],
@@ -254,7 +277,6 @@ abbr[title] {
   -webkit-text-decoration: underline dotted;
   text-decoration: underline dotted;
 }
-/* inset 属性需 Chromium 87+, 旧内核用四向定位等价表达 */
 .inset-0 {
   top: 0;
   right: 0;

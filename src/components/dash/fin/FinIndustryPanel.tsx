@@ -136,25 +136,25 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
       {...zoomProps}
       title="行业盈利榜"
       icon="▤"
-      accent="#34d399"
+      accent="#4a6b3f"
       right={
         !empty && (
           <div className="flex items-center gap-2 text-[10px]">
             <PeriodTabs />
-            <span className="h-3 w-px bg-slate-700" />
+            <span className="h-3 w-px bg-[#e0d5c0]" />
             {(["bar", "tree"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
                 className={`flex h-[22px] items-center rounded px-2 ${
-                  mode === m ? "bg-cyan-500/20 text-cyan-300" : "text-slate-400 hover:text-slate-200"
+                  mode === m ? "bg-[#d4943a]/20 text-[#d4943a]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"
                 }`}
               >
                 {m === "bar" ? "条形" : "树状"}
               </button>
             ))}
             {data?.disclosed != null && (
-              <span className="text-[9px] text-slate-500" style={TNUM}>
+              <span className="text-[9px] text-[#a8987e]" style={TNUM}>
                 已披露{data.disclosed}家
               </span>
             )}
@@ -167,20 +167,20 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
           <SkeletonRows rows={12} />
         ) : (
           <div className="flex h-full items-center justify-center text-[11px]">
-            <button className="h-full w-full text-slate-500" onClick={() => setRetry((r) => r + 1)}>
+            <button className="h-full w-full text-[#a8987e]" onClick={() => setRetry((r) => r + 1)}>
               数据获取失败，点击重试{error ? `(${error})` : ""}
             </button>
           </div>
         )
       ) : empty ? (
-        <div className="flex h-full items-center justify-center text-[11px] text-slate-600">当前非财报密集披露期</div>
+        <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">当前非财报密集披露期</div>
       ) : (
         <div ref={boxRef} className="h-full min-h-0">
           {tree && (
             <svg width={tree.W} height={tree.H} className="block">
               {tree.rects.map((r, i) => {
                 // 线框化: 色块 fill 12% + 1px 同色 40% 描边, 消除实色平涂
-                const color = r.yoy >= 0 ? "#fb7185" : "#34d399";
+                const color = r.yoy >= 0 ? "#b8533a" : "#4a6b3f";
                 const showName = r.w > 56 && r.h > 24;
                 const showVal = r.w > 56 && r.h > 40;
                 return (
@@ -201,12 +201,12 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
                       <rect x={r.x} y={r.y} width={Math.max(r.w - 1, 0)} height={Math.max(r.h - 1, 0)} rx={2} fill="#ffffff" opacity={0.08} />
                     )}
                     {showName && (
-                      <text x={r.x + 4} y={r.y + 12} fontSize={9.5} fill="#e2e8f0" fontWeight={600}>
+                      <text x={r.x + 4} y={r.y + 12} fontSize={9.5} fill="#6b5b3e" fontWeight={600}>
                         {r.name.length > 7 ? r.name.slice(0, 7) : r.name}
                       </text>
                     )}
                     {showVal && (
-                      <text x={r.x + 4} y={r.y + 23} fontSize={8.5} fill="#94a3b8" style={TNUM}>
+                      <text x={r.x + 4} y={r.y + 23} fontSize={8.5} fill="#8b7a5e" style={TNUM}>
                         {fmtYi(r.v)}
                         <tspan fill={color} dx={3}>
                           {r.yoy > 0 ? "+" : ""}
@@ -224,8 +224,8 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
               {/* 底部金额刻度 + 网格线 */}
               {chart.ticks.map((v) => (
                 <g key={v}>
-                  <line x1={chart.X(v)} y1={4} x2={chart.X(v)} y2={chart.H - AXIS_H} stroke="#1e293b" strokeWidth={1} />
-                  <text x={chart.X(v)} y={chart.H - 5} fontSize={8} fill="#475569" textAnchor="middle" style={TNUM}>
+                  <line x1={chart.X(v)} y1={4} x2={chart.X(v)} y2={chart.H - AXIS_H} stroke="#c8b89a" strokeWidth={1} />
+                  <text x={chart.X(v)} y={chart.H - 5} fontSize={8} fill="#a8987e" textAnchor="middle" style={TNUM}>
                     {(v / 1e8).toLocaleString("zh-CN", { maximumFractionDigits: 0 })}亿
                   </text>
                 </g>
@@ -233,13 +233,13 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
               {chart.list.map((d, i) => {
                 const y = i * chart.rowH;
                 const up = d.yoy >= 0;
-                const color = up ? "#fb7185" : "#34d399";
+                const color = up ? "#b8533a" : "#4a6b3f";
                 const bw = Math.max(chart.X(d.netProfit) - NAME_W, 2);
                 const bh = Math.min(9, chart.rowH - 5);
                 return (
                   <g key={d.name} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(-1)}>
-                    {hover === i && <rect x={0} y={y} width={chart.W} height={chart.rowH} fill="#1e293b" opacity={0.5} />}
-                    <text x={4} y={y + chart.rowH / 2 + 3} fontSize={9} fill="#94a3b8">
+                    {hover === i && <rect x={0} y={y} width={chart.W} height={chart.rowH} fill="#c8b89a" opacity={0.5} />}
+                    <text x={4} y={y + chart.rowH / 2 + 3} fontSize={9} fill="#8b7a5e">
                       {d.name.length > 6 ? d.name.slice(0, 6) : d.name}
                     </text>
                     {/* 条: fill 25% + 1px 同色 60% 描边; 负同比行 40% 透明 + 虚线描边 */}
@@ -258,7 +258,7 @@ export function FinIndustryPanel({ className = "", ...zoomProps }: { className?:
                       opacity={up ? 1 : 0.4}
                     />
                     <text x={NAME_W + bw + 4} y={y + chart.rowH / 2 + 3} fontSize={8.5} style={TNUM}>
-                      <tspan fill="#cbd5e1">{fmtYi(d.netProfit)} </tspan>
+                      <tspan fill="#6b5b3e">{fmtYi(d.netProfit)} </tspan>
                       <tspan fill={color}>
                         {d.yoy > 0 ? "+" : ""}
                         {d.yoy.toFixed(1)}%

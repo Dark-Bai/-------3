@@ -46,34 +46,34 @@ export function BasisPanel({ className = "", ...zoomProps }: { className?: strin
       {...zoomProps}
       title="现期对照 · 基差"
       icon="▥"
-      accent="#38bdf8"
-      right={<span className="text-[10px] text-slate-500">{data ? `${data.rows.length} 品种` : ""}</span>}
+      accent="#4a6b3f"
+      right={<span className="text-[10px] text-[#a8987e]">{data ? `${data.rows.length} 品种` : ""}</span>}
     >
       <div className="h-full min-h-0 overflow-y-auto p-1">
-        <div className="grid grid-cols-[1fr_76px_76px_64px_64px] gap-1 px-2 py-1 text-[10px] text-slate-500">
+        <div className="grid grid-cols-[1fr_76px_76px_64px_64px] gap-1 px-2 py-1 text-[10px] text-[#a8987e]">
           {COLS.map((c) => (
             <button
               key={c.key}
               onClick={() => clickSort(c.key)}
-              className={`text-left ${c.align === "right" ? "text-right" : ""} hover:text-slate-300 ${sortKey === c.key ? "text-cyan-300" : ""}`}
+              className={`text-left ${c.align === "right" ? "text-right" : ""} hover:text-[#6b5b3e] ${sortKey === c.key ? "text-cyan-300" : ""}`}
             >
               {c.label}{sortKey === c.key ? (sortDir === 1 ? " ↑" : " ↓") : ""}
             </button>
           ))}
         </div>
         {rows.map((r: SpotRow) => (
-          <div key={r.name} className="grid grid-cols-[1fr_76px_76px_64px_64px] items-center gap-1 rounded px-2 py-[3px] text-[11px] hover:bg-slate-800/40">
-            <span className="min-w-0 truncate text-slate-300">
+          <div key={r.name} className="grid grid-cols-[1fr_76px_76px_64px_64px] items-center gap-1 rounded px-2 py-[3px] text-[11px] hover:bg-[#ede4d4]">
+            <span className="min-w-0 truncate text-[#6b5b3e]">
               {r.name}
-              <span className="ml-1 text-[9px] text-slate-600">{EXCH_SHORT[r.exchange] || r.exchange} {r.contract}</span>
+              <span className="ml-1 text-[9px] text-[#a8987e]">{EXCH_SHORT[r.exchange] || r.exchange} {r.contract}</span>
             </span>
-            <span className="text-right text-slate-200" style={TNUM}>{fmtPrice(r.spot)}</span>
-            <span className="text-right text-slate-400" style={TNUM}>{fmtPrice(r.futures)}</span>
+            <span className="text-right text-[#6b5b3e]" style={TNUM}>{fmtPrice(r.spot)}</span>
+            <span className="text-right text-[#8b7a5e]" style={TNUM}>{fmtPrice(r.futures)}</span>
             <span className={`text-right font-semibold ${clsChg(r.basis)}`} style={TNUM}>{r.basis > 0 ? "+" : ""}{fmtPrice(r.basis)}</span>
             <span className={`text-right font-semibold ${clsChg(r.basisPct)}`} style={TNUM}>{fmtPct(r.basisPct)}</span>
           </div>
         ))}
-        {!data && <div className="p-4 text-center text-[10px] text-slate-600">现期数据加载中…</div>}
+        {!data && <div className="p-4 text-center text-[10px] text-[#a8987e]">现期数据加载中…</div>}
       </div>
     </Panel>
   );

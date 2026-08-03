@@ -13,18 +13,18 @@ function CmpBar({ val, avg }: { val: number; avg: number }) {
   const max = Math.max(val, avg, 1);
   const vw = Math.max((val / max) * 100, 2);
   const aw = Math.max((avg / max) * 100, 2);
-  const vCls = val >= avg ? "bg-rose-400/70" : "bg-emerald-400/70";
+  const vCls = val >= avg ? "bg-[#b8533a]/70" : "bg-[#4a6b3f]/70";
   return (
     <div className="flex h-[3px] w-full gap-[1px]">
       <div className={vCls} style={{ width: `${vw}%`, transition: "width 0.3s" }} />
-      <div className="h-full flex-1 rounded-r bg-slate-600/40" style={{ width: `${aw}%` }}>
-        <div className="h-full w-full rounded-r bg-amber-400/20" />
+      <div className="h-full flex-1 rounded-r bg-[#a8987e]/40" style={{ width: `${aw}%` }}>
+        <div className="h-full w-full rounded-r bg-[#d4943a]/20" />
       </div>
     </div>
   );
 }
 
-const pctCls = (v: number) => (v > 0 ? "text-rose-400" : v < 0 ? "text-emerald-400" : "text-slate-400");
+const pctCls = (v: number) => (v > 0 ? "text-[#b8533a]" : v < 0 ? "text-[#4a6b3f]" : "text-[#8b7a5e]");
 
 /** 同行对比: 表格(公司指标 vs 行业均值/排名) + 雷达图 */
 export function FinPeerPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
@@ -145,7 +145,7 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
       {...zoomProps}
       title="同业对比"
       icon="≋"
-      accent="#a78bfa"
+      accent="#d4943a"
       right={
         <div className="flex items-center gap-2 text-[10px]">
           {(["table", "radar"] as Mode[]).map((m) => (
@@ -153,7 +153,7 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
               key={m}
               onClick={() => setMode(m)}
               className={`flex h-[22px] items-center rounded px-2 ${
-                mode === m ? "bg-violet-500/20 text-violet-300" : "text-slate-400 hover:text-slate-200"
+                mode === m ? "bg-[#d4943a]/20 text-[#d4943a]" : "text-[#8b7a5e] hover:text-[#6b5b3e]"
               }`}
             >
               {m === "table" ? "表格" : "雷达"}
@@ -163,7 +163,7 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
       }
     >
       {!company.code ? (
-        <div className="flex h-full items-center justify-center text-[11px] text-slate-600">
+        <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">
           ← 从榜单选入公司
         </div>
       ) : !board || !finData ? (
@@ -171,27 +171,27 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
           <SkeletonRows rows={8} />
         ) : (
           <div className="flex h-full items-center justify-center text-[11px]">
-            <button className="h-full w-full text-slate-500" onClick={() => setRetry((r) => r + 1)}>
+            <button className="h-full w-full text-[#a8987e]" onClick={() => setRetry((r) => r + 1)}>
               数据获取失败，点击重试{error ? `(${error})` : ""}
             </button>
           </div>
         )
       ) : !hasPeer ? (
-        <div className="flex h-full flex-col items-center justify-center gap-1 text-[11px] text-slate-600">
+        <div className="flex h-full flex-col items-center justify-center gap-1 text-[11px] text-[#a8987e]">
           <span>该公司未出现在当期行业榜单中</span>
-          <span className="text-[9px] text-slate-700">可能在统计样本外或代码不一致</span>
+          <span className="text-[9px] text-[#c8b89a]">可能在统计样本外或代码不一致</span>
         </div>
       ) : mode === "table" ? (
         <div className="flex h-full min-h-0 flex-col">
           {/* 行业头部 */}
-          <div className="flex shrink-0 items-center gap-2 border-b border-slate-800/60 px-2 py-1">
-            <span className="text-[11px] font-semibold text-violet-300">{peerData.industry}</span>
-            <span className="text-[9px] text-slate-500">
+          <div className="flex shrink-0 items-center gap-2 border-b border-[#e0d5c0] px-2 py-1">
+            <span className="text-[11px] font-semibold text-[#d4943a]">{peerData.industry}</span>
+            <span className="text-[9px] text-[#a8987e]">
               共 {peerData.count} 家 · 排名第
             </span>
           </div>
           {/* 表头 */}
-          <div className="flex shrink-0 items-center gap-2 border-b border-slate-800/40 px-2 py-0.5 text-[8.5px] text-slate-500">
+          <div className="flex shrink-0 items-center gap-2 border-b border-[#e0d5c0] px-2 py-0.5 text-[8.5px] text-[#a8987e]">
             <span className="w-[48px] shrink-0">指标</span>
             <span className="min-w-0 flex-1 text-right">{finData.name.length > 6 ? finData.name.slice(0, 6) : finData.name}</span>
             <span className="w-[52px] shrink-0 text-right">行业均值</span>
@@ -200,16 +200,16 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
           {/* 行 */}
           <div className="min-h-0 flex-1 overflow-y-auto py-0.5">
             {peerData.comparisons!.map((c, i) => (
-              <div key={c.label} className="flex flex-col border-b border-slate-800/30 px-2 py-1 hover:bg-slate-800/20">
+              <div key={c.label} className="flex flex-col border-b border-[#e0d5c0] px-2 py-1 hover:bg-[#ede4d4]">
                 <div className="flex items-center gap-2">
-                  <span className="w-[48px] shrink-0 text-[10px] text-slate-400">{c.label}</span>
-                  <span className={`min-w-0 flex-1 text-right text-[11px] font-semibold ${c.colorCls ?? "text-slate-200"}`} style={TNUM}>
+                  <span className="w-[48px] shrink-0 text-[10px] text-[#8b7a5e]">{c.label}</span>
+                  <span className={`min-w-0 flex-1 text-right text-[11px] font-semibold ${c.colorCls ?? "text-[#6b5b3e]"}`} style={TNUM}>
                     {c.companyVal}
                   </span>
-                  <span className="w-[52px] shrink-0 text-right text-[10px] text-slate-500" style={TNUM}>
+                  <span className="w-[52px] shrink-0 text-right text-[10px] text-[#a8987e]" style={TNUM}>
                     {c.peerVal}
                   </span>
-                  <span className="w-[36px] shrink-0 text-right text-[9px] text-slate-400" style={TNUM}>
+                  <span className="w-[36px] shrink-0 text-right text-[9px] text-[#8b7a5e]" style={TNUM}>
                     {c.rank}
                   </span>
                 </div>
@@ -233,7 +233,7 @@ export function FinPeerPanel({ className = "", ...zoomProps }: { className?: str
 /** 简易雷达图: SVG 多边形 + 轴标签 */
 function RadarChart({ axes, companyName }: { axes: { label: string; company: number; peer: number }[]; companyName: string }) {
   const n = axes.length;
-  if (n < 3) return <div className="flex h-full items-center justify-center text-[11px] text-slate-600">需要至少 3 项指标</div>;
+  if (n < 3) return <div className="flex h-full items-center justify-center text-[11px] text-[#a8987e]">需要至少 3 项指标</div>;
 
   const CX = 150;
   const CY = 120;
@@ -265,30 +265,30 @@ function RadarChart({ axes, companyName }: { axes: { label: string; company: num
             key={li}
             points={ring.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}
             fill="none"
-            stroke="#1e293b"
+            stroke="#c8b89a"
             strokeWidth={1}
           />
         ))}
         {/* 轴 */}
         {axes.map((_, i) => {
           const outer = pt(i, R);
-          return <line key={i} x1={CX} y1={CY} x2={outer.x} y2={outer.y} stroke="#1e293b" strokeWidth={1} />;
+          return <line key={i} x1={CX} y1={CY} x2={outer.x} y2={outer.y} stroke="#c8b89a" strokeWidth={1} />;
         })}
         {/* 行业均值 */}
         <polygon
           points={peerPts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}
-          fill="#fbbf24"
+          fill="#d4943a"
           fillOpacity={0.08}
-          stroke="#fbbf24"
+          stroke="#d4943a"
           strokeWidth={1}
           strokeDasharray="3 2"
         />
         {/* 公司值 */}
         <polygon
           points={companyPts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}
-          fill="#a78bfa"
+          fill="#d4943a"
           fillOpacity={0.15}
-          stroke="#a78bfa"
+          stroke="#d4943a"
           strokeWidth={1.5}
         />
         {/* 轴标签 */}
@@ -300,7 +300,7 @@ function RadarChart({ axes, companyName }: { axes: { label: string; company: num
               x={outer.x}
               y={outer.y + 3}
               fontSize={9}
-              fill="#94a3b8"
+              fill="#8b7a5e"
               textAnchor="middle"
               style={TNUM}
             >
@@ -312,14 +312,14 @@ function RadarChart({ axes, companyName }: { axes: { label: string; company: num
       {/* 图例 */}
       <div className="flex items-center gap-4 text-[9px]">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-3 rounded-sm bg-violet-400/40" />
-          <span className="text-slate-400">
+          <span className="inline-block h-2 w-3 rounded-sm bg-[#d4943a]/40" />
+          <span className="text-[#8b7a5e]">
             {companyName.length > 6 ? companyName.slice(0, 6) : companyName}
           </span>
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-3 rounded-sm border border-amber-400/50 bg-amber-400/10" />
-          <span className="text-slate-500">行业均值</span>
+          <span className="inline-block h-2 w-3 rounded-sm border border-[#d4943a]/50 bg-[#d4943a]/10" />
+          <span className="text-[#a8987e]">行业均值</span>
         </span>
       </div>
     </div>
