@@ -472,6 +472,7 @@ export const api = {
     get<RankStock[]>(`/api/rank?sort=${sort}&asc=${asc}&n=${n}`),
   moneyflow: (n = 15) => get<FlowStock[]>(`/api/moneyflow?n=${n}`),
   stockBoards: (code: string) => get<StockBoards>(`/api/stock-boards?code=${encodeURIComponent(code)}`),
+  stockProfile: (code: string) => get<{ code: string; mainBusiness: string }>(`/api/stock-profile?code=${encodeURIComponent(code)}`),
   stockFlow: (code: string) => flowLoader(code),
   futureMinute: (code: string) => get<MinuteData>(`/api/future-minute?code=${encodeURIComponent(code)}`),
   futureDaily: (code: string) => get<FutureDaily>(`/api/future-daily?code=${encodeURIComponent(code)}`),

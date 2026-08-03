@@ -754,6 +754,17 @@ async function handleStockBoards(code) {
   });
 }
 
+/** 个股主营业务（东财F10，24h 缓存） */
+async function handleStockProfile(code) {
+  const secu = secuCode(code);
+  if (!secu) throw new Error(`bad code: ${code}`);
+  const url =
+    `https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_ORG_BASICINFO` +
+    `&columns=MAIN_BUSINESS&filter=${encodeURIComponent(`(SECUCODE="${secu}")`)}&source=HSF10&client=PC`;
+  const rows = await emDataGet(url);
+  return { code, mainBusiness: rows[0]?.MAIN_BUSINESS || "" };
+}
+
 /* ---------------- 东财个股资金流(按股查询) + 主力净流入排名 ---------------- */
 const emMarketOf = (m) => (m === "sh" ? 1 : 0);
 const EM_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
@@ -1658,6 +1669,8 @@ const routes = {
   "/api/board-flow": async (q) => cached(`bf:${q.get("n")}`, 120000, () => handleBoardFlow(q.get("n") || "20")),
   "/api/stock-boards": async (q) =>
     cached(`sb:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockBoards(q.get("code") || "")),
+  "/api/stock-profile": async (q) =>
+    cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")),
   "/api/news": async (q) =>
     cached(`news:${q.get("page")}:${q.get("size")}`, 8000, () =>
       handleNews(q.get("page") || "1", q.get("size") || "40")

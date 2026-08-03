@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FloatingWindow } from "./FloatingWindow";
 import { api, type Quote, type StockBoards } from "@/lib/api";
 import { useQuote } from "@/lib/market";
@@ -63,6 +63,39 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     5 * 60 * 1000,
     [code],
   );
+
+  // 主营业务（用于概念权重排序）
+  const { data: profile } = usePolling(
+    () => api.stockProfile(code),
+    5 * 60 * 1000,
+    [code],
+  );
+
+  // 根据主营业务关键词对概念进行排序
+  const sortedConcepts = useMemo(() => {
+    if (!boards?.concepts || boards.concepts.length === 0) return boards?.concepts || [];
+    const mainBiz = profile?.mainBusiness || "";
+    if (!mainBiz) return boards.concepts; // 无主营业务数据，保持原顺序
+
+    // 提取主营业务关键词（按常见分隔符拆分）
+    const keywords = mainBiz
+      .split(/[、，,；;。. 　]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2);
+
+    // 计算每个概念与主营业务的匹配度
+    const scored = boards.concepts.map((concept) => {
+      let score = 0;
+      for (const kw of keywords) {
+        if (concept.includes(kw)) score += 10; // 概念包含关键词 → 高权重
+        if (kw.includes(concept)) score += 5;  // 关键词包含概念 → 中权重
+      }
+      return { concept, score };
+    });
+
+    // 按分数降序排序，同分保持原顺序
+    return scored.sort((a, b) => b.score - a.score).map((s) => s.concept);
+  }, [boards?.concepts, profile?.mainBusiness]);
 
   return (
     <FloatingWindow
@@ -136,11 +169,11 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
                 )}
               </div>
             )}
-            {boards.concepts && boards.concepts.length > 0 && (
+            {sortedConcepts.length > 0 && (
               <div className="flex items-start gap-2">
                 <span className="mt-0.5 shrink-0 text-[10px] text-[#a8987e]">概念</span>
                 <div className="flex flex-wrap gap-1">
-                  {boards.concepts.map((c) => (
+                  {sortedConcepts.map((c) => (
                     <span
                       key={c}
                       className="rounded-sm border border-[#4a6b3f]/20 bg-[#4a6b3f]/10 px-1.5 py-0.5 text-[10px] text-[#4a6b3f]"
