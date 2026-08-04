@@ -4,14 +4,11 @@ import { useSharedPolling } from "@/hooks/useSharedPolling";
 import { api, type NewsItem } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import { isTv } from "@/lib/tv";
-import { MACRO_KEYWORDS, CHAINS } from "@/config/dashboard";
+import { MACRO_KEYWORDS } from "@/config/dashboard";
 
 /** 快讯关键词打标 */
 function tagOf(item: NewsItem): { label: string; color: string } | null {
   const text = `${item.title}${item.content}`;
-  for (const c of CHAINS) {
-    if (c.keywords.some((k) => text.includes(k))) return { label: c.name, color: "#d4943a" };
-  }
   if (MACRO_KEYWORDS.some((k) => text.includes(k))) return { label: "宏观", color: "#d4943a" };
   if (/央行|降准|降息|MLF|LPR/.test(text)) return { label: "政策", color: "#d4943a" };
   return null;

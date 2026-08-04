@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { Panel, type PanelZoomProps } from "./Panel";
 import { usePolling } from "@/hooks/usePolling";
 import { api, type PluginMarketSentimentData } from "@/lib/api";
 
@@ -133,16 +134,17 @@ function BullBearCard({ bullish, bearish, net, total, samples }: {
   bullish: number; bearish: number; net: number; total: number;
   samples?: { code: string; name: string; price: number; change: string }[];
 }) {
-  const hasApiData = bullish > 0 || bearish > 0;
+  const hasApiData = bullish + bearish + total > 0;
   const hasSamples = samples && samples.length > 0;
   const totalRatio = hasApiData && total > 0 ? (bullish / total * 100) : 50;
+  const safeNet = Number.isFinite(net) ? net : bullish - bearish;
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-[#8b7a5e]">多空情绪</span>
         {hasApiData && (
-          <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${net >= 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]"}`}>
-            {net >= 0 ? "偏多" : "偏空"} {net >= 0 ? "+" : ""}{net}
+          <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${safeNet >= 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]"}`}>
+            {safeNet >= 0 ? "偏多" : "偏空"} {safeNet >= 0 ? "+" : ""}{safeNet}
           </span>
         )}
         {hasSamples && !hasApiData && (
@@ -361,8 +363,8 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* ========== 主面板 ========== */
-export function ChainPluginPanel({ className = "" }: { className?: string }) {
+/* ========== 主面板: 市场情绪 (独立) ========== */
+export function MarketSentimentPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
   const { data: sentData, loading } = usePolling(
     () => api.pluginMarketSentiment(),
     15000,
@@ -373,46 +375,60 @@ export function ChainPluginPanel({ className = "" }: { className?: string }) {
     return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }, [sentData]);
 
-  if (loading) return <Loading />;
-  if (!sentData?.dataSuccess) return <Failed msg="市场情绪数据暂不可用" />;
-
-  const { mood, sentiment: si, riseFall } = sentData;
-
   return (
-    <div className={`flex h-full min-h-0 flex-col p-2.5 ${className}`}>
-      {/* 顶部状态栏 */}
-      <div className="mb-2 shrink-0 rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-        <div className="flex items-center gap-2 text-[12px] text-[#8b7a5e]">
-          <span className="font-semibold text-[#6b5b3e]">市场情绪</span>
-          <span className="text-[#d4c5a8]">|</span>
-          <span>数据源: 开盘啦</span>
-          <span className="text-[#d4c5a8]">|</span>
-          <span>更新: {updateTime}</span>
-          <span className="text-[#d4c5a8]">|</span>
-          <span className="text-[11px]">情绪评分 <span className={`font-medium ${clsChg(si.sentimentScore - 50)}`} style={TNUM}>{si.sentimentScore}</span> ({si.sentimentLevel})</span>
+    <Panel
+      className={className}
+      {...zoomProps}
+      title="市场情绪"
+      icon="◉"
+      accent="#d4943a"
+    >
+      <div className="flex h-full min-h-0 flex-col p-2.5">
+        {/* 顶部状态栏 */}
+        <div className="mb-2 shrink-0 rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
+          <div className="flex items-center gap-2 text-[12px] text-[#8b7a5e]">
+            <span className="font-semibold text-[#6b5b3e]">市场情绪</span>
+            <span className="text-[#d4c5a8]">|</span>
+            <span>数据源: 开盘啦</span>
+            <span className="text-[#d4c5a8]">|</span>
+            <span>更新: {updateTime}</span>
+          </div>
         </div>
+
+        {loading ? (
+          <Loading />
+        ) : !sentData?.dataSuccess ? (
+          <Failed msg="市场情绪数据暂不可用" />
+        ) : (
+          <ScrollSentinel>
+            {(() => {
+              const { mood, sentiment: si, riseFall } = sentData;
+              return (
+                <>
+                  {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
+                  <div className="flex shrink-0 gap-2">
+                    <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
+                    <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
+                    <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
+                  </div>
+
+                  {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
+                  <div className="flex shrink-0 gap-2">
+                    <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
+                    <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
+                    <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
+                  </div>
+
+                  {/* 第三行: 历史趋势图 (跨列) */}
+                  <div className="flex shrink-0 gap-2">
+                    {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
+                  </div>
+                </>
+              );
+            })()}
+          </ScrollSentinel>
+        )}
       </div>
-
-      <ScrollSentinel>
-        {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
-        <div className="flex shrink-0 gap-2">
-          <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
-          <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
-          <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
-        </div>
-
-        {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
-        <div className="flex shrink-0 gap-2">
-          <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
-          <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
-          <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
-        </div>
-
-        {/* 第三行: 历史趋势图 (跨列) */}
-        <div className="flex shrink-0 gap-2">
-          {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
-        </div>
-      </ScrollSentinel>
-    </div>
+    </Panel>
   );
 }

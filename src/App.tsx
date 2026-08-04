@@ -10,7 +10,7 @@ import { MoneyFlowPanel } from "@/components/dash/MoneyFlowPanel";
 import { RankPanel } from "@/components/dash/RankPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
-import { ChainPanel } from "@/components/dash/ChainPanel";
+import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
 import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
 import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
@@ -81,7 +81,7 @@ const PANEL_ROWS: PanelRowDef[] = [
     defaultH: 0.36,
     panels: [
       { id: "watchlist", component: WatchlistPanel, defaultW: 0.2222, mobileH: "h-[400px]" },
-      { id: "chain", component: ChainPanel, defaultW: 0.7778, mobileH: "h-[560px]" },
+      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 0.7778, mobileH: "h-[560px]" },
     ],
   },
 ];
@@ -95,7 +95,7 @@ function Dashboard() {
         title="市场研究驾驶舱"
         subtitle="MARKET RESEARCH COCKPIT"
         accent="gold"
-        tagline="沪深港美 · 大宗 · 美债 · 板块 · 资金流 · 快讯 · 产业链"
+        tagline="沪深港美 · 大宗 · 美债 · 板块 · 资金流 · 快讯 · 市场情绪"
         linkTo="/ai"
         linkLabel="AI 观察"
         links={[{ to: "/goods", label: "商品价格" }, { to: "/ai", label: "AI 观察" }, { to: "/fin", label: "财报窗口" }]}

@@ -150,26 +150,6 @@ export interface OrUsageDay {
   countries: OrUsagePoint[];
 }
 
-/** iWenCai 搜索结果(问财选股) */
-export interface MysteryStock {
-  code: string;
-  name: string;
-  price?: number;
-  pct?: number;
-  ratio?: number;
-  avgAmount3?: number;
-  avgAmount20?: number;
-  rangePct5?: number;
-  raw?: Record<string, unknown>;
-}
-
-export interface MysteryResult {
-  query: string;
-  total: number;
-  rows: MysteryStock[];
-  chunksInfo?: Record<string, unknown>;
-}
-
 export interface MinuteData {
   code: string;
   prec: number;
@@ -314,19 +294,6 @@ function timeoutSignal(ms: number): AbortSignal {
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { signal: timeoutSignal(10000) });
-  const j = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-  if (!j?.ok) throw new Error(j?.error || "api error");
-  return j.data as T;
-}
-
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: timeoutSignal(10000),
-  });
   const j = await r.json().catch(() => null);
   if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
   if (!j?.ok) throw new Error(j?.error || "api error");
@@ -483,10 +450,6 @@ export const api = {
   treasuries: () => get<Treasury[]>(`/api/treasuries`),
   treasuryHistory: () => get<TreasuryCurvePoint[]>(`/api/treasury-history`),
   openRouterUsage: () => get<OrUsageDay[]>(`/api/openrouter-usage`),
-  mysterySelect: (query: string, limit = 30, refresh = false) =>
-    get<MysteryResult>(`/api/mystery-select?query=${encodeURIComponent(query)}&limit=${limit}${refresh ? "&refresh=1" : ""}`),
-  parseChain: (name: string, content: string) =>
-    post<{ name: string; source: string; segments: { name: string; desc: string; stocks: { code: string; name: string }[] }[]; warnings?: string[] }>(`/api/chain-parse`, { name, content }),
   stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`),
   spotTable: () => get<SpotTable>(`/api/spot-table`),
   chemSpot: (id: string, name: string) =>
