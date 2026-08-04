@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
+const { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -184,9 +184,26 @@ async function handleQuotes(codes) {
     if (hit && hit.data !== undefined && now - hit.ts < QUOTE_CACHE_TTL) out[c] = hit.data;
     else missing.push(c);
   }
-  // ★ 优先从开盘啦 KPL 获取 A股核心指数(上证/深证/创业板/科创50)
+  // ★ 腾讯为最高优先级: 先取腾讯(覆盖全部代码, 含 A股核心指数)
+  if (missing.length) {
+    // 按 60 个/块分块并发(报价中心全集可达数百, 单 URL 过长会被上游拒绝)
+    const chunks = [];
+    for (let i = 0; i < missing.length; i += 60) chunks.push(missing.slice(i, i + 60));
+    const texts = await Promise.all(chunks.map((c) => fetchText(`https://qt.gtimg.cn/q=${encodeURIComponent(c.join(","))}`, { gbk: true })));
+    const ts = Date.now();
+    for (const text of texts) {
+      for (const line of text.split(";")) {
+        const q = parseTencentLine(line.trim());
+        if (q) {
+          out[q.symbol] = q;
+          if (q.symbol !== "usVIX") cacheSet(`q:${q.symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL }); // usVIX 由新浪覆盖值接管
+        }
+      }
+    }
+  }
+  // 腾讯缺失的 A股核心指数(上证/深证/创业板/科创50): 回退开盘啦 KPL 兜底
   const KPL_INDEX_MAP = { sh000001: "SH000001", sz399001: "SZ399001", sz399006: "SZ399006", sh000688: "SH000688" };
-  const kplIndexCodes = missing.filter(c => KPL_INDEX_MAP[c]);
+  const kplIndexCodes = missing.filter((c) => KPL_INDEX_MAP[c] && !out[c]);
   if (kplIndexCodes.length) {
     try {
       const kplData = await kplFetch("/api/advanced/zs-real", { date: todayStr() });
@@ -196,7 +213,7 @@ async function handleQuotes(codes) {
         for (const item of list) {
           const sid = String(item.stock_id || "").toLowerCase();
           const symbol = kplIndexCodes.find(c => c === sid);
-          if (!symbol) continue;
+          if (!symbol || out[symbol]) continue;
           const price = parseFloat(item.last_px);
           const change = parseFloat(item.increase_amount) || 0;
           const pctStr = String(item.increase_rate || "0%").replace("%", "");
@@ -224,29 +241,6 @@ async function handleQuotes(codes) {
       }
     } catch (e) {
       console.error("[kpl-index] zs-real fetch error:", e?.message || e);
-    }
-    // 移除已由 KPL 成功获取的代码，避免重复请求腾讯
-    for (const c of kplIndexCodes) {
-      if (out[c]) {
-        const idx = missing.indexOf(c);
-        if (idx !== -1) missing.splice(idx, 1);
-      }
-    }
-  }
-  if (missing.length) {
-    // 按 60 个/块分块并发(报价中心全集可达数百, 单 URL 过长会被上游拒绝)
-    const chunks = [];
-    for (let i = 0; i < missing.length; i += 60) chunks.push(missing.slice(i, i + 60));
-    const texts = await Promise.all(chunks.map((c) => fetchText(`https://qt.gtimg.cn/q=${encodeURIComponent(c.join(","))}`, { gbk: true })));
-    const ts = Date.now();
-    for (const text of texts) {
-      for (const line of text.split(";")) {
-        const q = parseTencentLine(line.trim());
-        if (q) {
-          out[q.symbol] = q;
-          if (q.symbol !== "usVIX") cacheSet(`q:${q.symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL }); // usVIX 由新浪覆盖值接管
-        }
-      }
     }
   }
   // usVIX 腾讯数据已停更，从新浪期货获取实时值覆盖(仅缓存过期时重取)
@@ -423,6 +417,17 @@ async function handleBoardStocks(code, dir, n) {
 /* ---------------- 通用工具(供指数/榜单等共用) ---------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 给 Promise 加超时: 超时后拒绝并携带错误信息(不取消底层任务, 仅用于响应侧限时) */
+function withTimeout(promise, ms, label = "timeout") {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} (${ms}ms)`)), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+
 function parseJsonp(text) {
   // 尝试 callback({...}) 格式
   const a = text.indexOf("(");
@@ -551,6 +556,8 @@ async function handleStockProfile(code) {
 /* ---------------- 个股详情聚合接口(本地数据库 + 按需抓取 + 失败回退) ---------------- */
 // 分字段 TTL: 实时行情10s / 分时60s / 主力净额30s / 行业概念与主营业务 24h(但永久保留, 不删除)
 const SD_TTL = { quote: 10_000, minute: 60_000, main_forces: 30_000, boards: 24 * 3600 * 1000, profile: 24 * 3600 * 1000 };
+// 冷启动(库中无行业/概念)时: 阻塞响应等待抓取, 保证首次打开 1s 内显示行业/概念; 超时则返回空, 由前端快速补拉
+const BOARDS_COLD_TIMEOUT = 900;
 // 仅在"无数据 或 已过期"时才抓取(按需), 失败则保留库中旧值(回退)
 const stale = (v, ts, ttl) => v === null || v === undefined || (Date.now() - (ts || 0)) > ttl;
 // 失败冷却: 字段抓取失败后 30s 内不再重试, 避免反复打故障上游(优化调用性价比)
@@ -580,16 +587,20 @@ async function handleStockDetail(code) {
   });
   await Promise.all(jobs.map((j) => j().catch(() => {})));
 
-  // 慢字段(行业/概念/主营业务): 长期数据, 后台刷新不阻塞小窗响应, 避免分时/报价被拖慢
+  // 慢字段(行业/概念/主营业务): 行业/概念为"基础静态数据", 每日批量刷新一次, 此处仅首次打开(从未入库)时补种一次,
+  // 之后一律读库, 不做实时外呼; 主营业务维持 24h 后台刷新。
   const bg = [];
   const boardsEmpty = !row.industry && !row.area && (!row.concepts || row.concepts.length === 0);
-  if ((!row.boards_ts || now - row.boards_ts > SD_TTL.boards || boardsEmpty) && !inCooldown(code, "boards")) bg.push(async () => {
-    const b = await handleStockBoards(code);
-    if (b && (b.industry || b.area || b.concepts.length > 0)) {
-      row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = now; clearBackoff(code, "boards");
-    } else failBackoff(code, "boards");
-    upsertStock(row); // 落库供下次读取
-  });
+  if (boardsEmpty && !inCooldown(code, "boards")) {
+    // 冷启动补种: 阻塞等待抓取(带超时), 让首次打开即有数据; 超时则放弃本次, 返回空由前端快速补拉
+    const fetchBoards = async () => {
+      const b = await handleStockBoards(code);
+      if (b && (b.industry || b.area || b.concepts.length > 0)) {
+        row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = now; clearBackoff(code, "boards");
+      } else failBackoff(code, "boards");
+    };
+    await withTimeout(fetchBoards(), BOARDS_COLD_TIMEOUT, "boards cold").catch(() => {});
+  }
   if ((!row.profile_ts || now - row.profile_ts > SD_TTL.profile || !row.main_business) && !inCooldown(code, "profile")) bg.push(async () => {
     const p = await handleStockProfile(code);
     if (p && p.mainBusiness) { row.main_business = p.mainBusiness; row.profile_ts = now; clearBackoff(code, "profile"); } else failBackoff(code, "profile");
@@ -612,6 +623,54 @@ async function handleStockDetail(code) {
     profile: { mainBusiness: row.main_business || "" },
     updated: now,
   };
+}
+
+/* ---------------- 每日行业/概念批量刷新(基础静态数据) ---------------- */
+// 行业/概念为"每日更新一次"的基础静态数据: 批量刷新库内全部个股(即历史加载过的全集),
+// 落库后读路径一律从库直出, 不再实时外呼。并发受控, 避免打爆上游 KPL。
+const DAILY_BOARDS_CONCURRENCY = 6;
+
+async function runDailyBoardsRefresh() {
+  const codes = allStockCodes();
+  if (!codes.length) return { ok: 0, fail: 0 };
+  let ok = 0, fail = 0, i = 0;
+  const worker = async () => {
+    while (i < codes.length) {
+      const code = codes[i++];
+      try {
+        const b = await handleStockBoards(code);
+        if (b && (b.industry || b.area || b.concepts.length > 0)) {
+          const row = getStock(code) || { code };
+          row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = Date.now();
+          upsertStock(row);
+          ok++;
+        } else fail++;
+      } catch { fail++; }
+    }
+  };
+  await Promise.all(Array.from({ length: DAILY_BOARDS_CONCURRENCY }, worker));
+  return { ok, fail };
+}
+
+// 每日调度: 启动后立即检查一次, 之后每小时检查。通过 meta 表持久化"今日已刷新"标记,
+// 保证每天仅执行一次, 且服务重启不会当天重复执行。
+function scheduleDailyBoardsRefresh() {
+  const tryRun = async () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      if (getMeta("daily_boards_last_date") === today) return; // 今天已刷新过
+      const total = allStockCodes().length;
+      console.log(`[daily-boards] start refresh ${total} stocks...`);
+      const res = await runDailyBoardsRefresh();
+      setMeta("daily_boards_last_date", today);
+      console.log(`[daily-boards] done ok=${res.ok} fail=${res.fail}`);
+    } catch (e) {
+      console.error("[daily-boards] error:", e.message);
+    }
+  };
+  tryRun();
+  const timer = setInterval(tryRun, 60 * 60 * 1000);
+  timer.unref();
 }
 
 /* ---------------- 个股实时行情(KPL 盘口 pankou, 5s 缓存) ---------------- */
@@ -1927,8 +1986,26 @@ const routes = {
   "/api/stock-main-forces": async (q) =>
     cached(`smf:${q.get("code")}`, 30000, () => handleStockMainForces(q.get("code") || "")), // 主力净额, 30s 缓存(减少上游慢请求)
   "/api/board-flow": async (q) => cached(`bf:${q.get("n")}`, 120000, () => handleBoardFlow(q.get("n") || "20")),
-  "/api/stock-boards": async (q) =>
-    cached(`sb:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockBoards(q.get("code") || "")), // 行业/概念, 24h 缓存
+  "/api/stock-boards": async (q) => {
+    // 行业/概念为每日更新的基础静态数据: 一律从库读取, 首次(未入库)补种一次, 不做实时外呼
+    const code = q.get("code") || "";
+    let row = getStock(code);
+    if (!row || (!row.industry && !row.area && (!row.concepts || row.concepts.length === 0))) {
+      if (!inCooldown(code, "boards")) {
+        try {
+          const b = await handleStockBoards(code);
+          if (b && (b.industry || b.area || b.concepts.length > 0)) {
+            row = row || { code };
+            row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = Date.now();
+            upsertStock(row);
+            clearBackoff(code, "boards");
+          } else failBackoff(code, "boards");
+        } catch { failBackoff(code, "boards"); }
+      }
+      row = getStock(code);
+    }
+    return { code, industry: row?.industry || "", area: row?.area || "", concepts: row?.concepts || [] };
+  },
   "/api/stock-profile": async (q) =>
     cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")), // 主营/公司名, 24h 缓存
   "/api/stock-quote": async (q) =>
@@ -2290,4 +2367,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`[market-cockpit] listening on :${PORT}`));
+server.listen(PORT, () => {
+  console.log(`[market-cockpit] listening on :${PORT}`);
+  scheduleDailyBoardsRefresh(); // 每日行业/概念批量刷新(启动后立即检查一次, 之后每小时)
+});

@@ -97,8 +97,14 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     return () => { cancelled = true; };
   }, [code]);
 
-  // 个股详情聚合(本地数据库: 按需抓取 + 失败回退 + 行业概念永久保留), 10s 轮询
-  const { data: detail } = usePolling(() => api.stockDetail(code), 10000, [code]);
+  // 个股详情聚合(本地数据库: 按需抓取 + 失败回退 + 行业概念永久保留)轮询。
+  // 行业/概念未加载时快速轮询(2s), 保证首次打开时尽快显示; 加载后松弛为 10s。
+  const [boardsFast, setBoardsFast] = useState(true);
+  const { data: detail } = usePolling(() => api.stockDetail(code), boardsFast ? 2000 : 10000, [code, boardsFast]);
+  useEffect(() => {
+    const loaded = !!detail?.boards && (detail.boards.industry || detail.boards.concepts.length > 0);
+    if (loaded) setBoardsFast(false);
+  }, [detail]);
 
   const kq = detail?.quote ?? null;
   const minute = detail?.minute ?? null;
@@ -208,6 +214,14 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
         </div>
 
         {/* 所属行业/概念 */}
+        {!boards && (
+          <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6] p-2.5">
+            <div className="flex items-center gap-2 text-[10px] text-[#a8987e]">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#d4943a]/30 border-t-[#d4943a]" />
+              行业/概念加载中...
+            </div>
+          </div>
+        )}
         {boards && (
           <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6] p-2.5">
             {boards.industry && (

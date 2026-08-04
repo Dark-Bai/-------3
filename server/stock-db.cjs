@@ -49,6 +49,12 @@ db.exec(`
     blown_rate  REAL,               -- 炸板率(%)
     updated_at  INTEGER
   );
+
+  -- 键值元数据(如每日批量刷新标记, 持久化避免重启重复执行)
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+  );
 `);
 
 const j = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
@@ -121,6 +127,22 @@ function stockCount() {
   return r ? r.c : 0;
 }
 
+/** 全部个股代码(供每日批量刷新行业/概念使用, 即"历史加载过的个股"全集) */
+function allStockCodes() {
+  return db.prepare(`SELECT code FROM stocks`).all().map((r) => r.code);
+}
+
+/** 读取持久化键值元数据(如每日刷新标记) */
+function getMeta(key) {
+  const r = db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key);
+  return r ? r.value : null;
+}
+
+/** 写入持久化键值元数据 */
+function setMeta(key, value) {
+  db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+}
+
 /* ---------------- 涨跌停趋势(market_trend) ---------------- */
 
 /** 批量 UPSERT 趋势记录(按日期, 已存在则更新, 历史不变行开销极小) */
@@ -162,4 +184,4 @@ function trendCount() {
   return r ? r.c : 0;
 }
 
-module.exports = { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount, DB_PATH };
+module.exports = { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, upsertTrends, getTrends, trendCount, DB_PATH };
