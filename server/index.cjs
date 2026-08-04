@@ -68,6 +68,31 @@ async function fetchTextAny(url, { referer, gbk = false, timeout = 8000 } = {}) 
   }
 }
 
+/* ---------------- 开盘啦 API 客户端 (kpl.liuhepc.cn) ---------------- */
+const KPL_BASE = "https://kpl.liuhepc.cn";
+const KPL_API_KEY = process.env.KPL_API_KEY || "kpl-4ed522163bf8dad3aeb1d9613791661eb62ed88ed6e82067";
+
+async function kplFetch(path, params = {}) {
+  const url = new URL(path, KPL_BASE);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const resp = await fetch(url.toString(), {
+    headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
+    signal: AbortSignal.timeout(8000),
+  });
+  const json = await resp.json();
+  return json;
+}
+
+function todayStr() {
+  const d = new Date();
+  const day = d.getDay();
+  if (day === 0) d.setDate(d.getDate() - 2);
+  else if (day === 6) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function send(res, code, obj, extra = {}) {
   const body = typeof obj === "string" ? obj : JSON.stringify(obj);
   const headers = {
@@ -141,6 +166,55 @@ async function handleQuotes(codes) {
     const hit = cache.get(`q:${c}`);
     if (hit && hit.data !== undefined && now - hit.ts < QUOTE_CACHE_TTL) out[c] = hit.data;
     else missing.push(c);
+  }
+  // ★ 优先从开盘啦 KPL 获取 A股核心指数(上证/深证/创业板/科创50)
+  const KPL_INDEX_MAP = { sh000001: "SH000001", sz399001: "SZ399001", sz399006: "SZ399006", sh000688: "SH000688" };
+  const kplIndexCodes = missing.filter(c => KPL_INDEX_MAP[c]);
+  if (kplIndexCodes.length) {
+    try {
+      const kplData = await kplFetch("/api/advanced/zs-real", { date: todayStr() });
+      const list = kplData?.data || [];
+      if (list.length) {
+        const ts = Date.now();
+        for (const item of list) {
+          const sid = String(item.stock_id || "").toLowerCase();
+          const symbol = kplIndexCodes.find(c => c === sid);
+          if (!symbol) continue;
+          const price = parseFloat(item.last_px);
+          const change = parseFloat(item.increase_amount) || 0;
+          const pctStr = String(item.increase_rate || "0%").replace("%", "");
+          const pct = parseFloat(pctStr) || 0;
+          const prev = price - change;
+          if (!isNaN(price) && !isNaN(prev)) {
+            const q = {
+              symbol,
+              name: String(item.name || ""),
+              price,
+              prev,
+              change: +change.toFixed(2),
+              pct: +pct.toFixed(2),
+              open: prev,
+              high: price,
+              low: price,
+              amount: Math.round(parseFloat(item.turnover) / 10000) || 0,
+              turnover: 0,
+              time: kplData.date || "",
+            };
+            out[symbol] = q;
+            cacheSet(`q:${symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[kpl-index] zs-real fetch error:", e?.message || e);
+    }
+    // 移除已由 KPL 成功获取的代码，避免重复请求腾讯
+    for (const c of kplIndexCodes) {
+      if (out[c]) {
+        const idx = missing.indexOf(c);
+        if (idx !== -1) missing.splice(idx, 1);
+      }
+    }
   }
   if (missing.length) {
     // 按 60 个/块分块并发(报价中心全集可达数百, 单 URL 过长会被上游拒绝)
@@ -275,6 +349,22 @@ async function handleMinute(code) {
       console.error(`[sina-minute] ${code} error:`, e?.message || e);
       return { code, prec: 0, points: [] };
     }
+  }
+  // A股个股优先从开盘啦 KPL 获取分时数据
+  if (/^s[hz]\d{6}$/.test(code) && !code.startsWith("sh000") && !code.startsWith("sz399")) {
+    try {
+      const stockCode = code.replace(/^s[hz]/, "");
+      const kplData = await kplFetch("/api/v2/stock/intraday", { code: stockCode });
+      const trend = kplData?.trend;
+      if (trend && Array.isArray(trend) && trend.length) {
+        const prec = parseFloat(kplData.preclose_px) || 0;
+        const pts = trend.filter(p => String(p[0]).includes(":")).map(p => ({ t: p[0], p: parseFloat(p[1]) }));
+        return { code, prec, points: pts };
+      }
+    } catch (e) {
+      console.error(`[kpl-minute] ${code} error:`, e?.message || e);
+    }
+    // KPL 失败/空数据，回退到腾讯
   }
   const url = code.startsWith("us")
     ? `https://web.ifzq.gtimg.cn/appstock/app/usMinute/query?code=${encodeURIComponent(code)}`
