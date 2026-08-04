@@ -266,8 +266,8 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
   const cutoff = new Date(latestDate);
   cutoff.setMonth(cutoff.getMonth() - 6);
   const maxDays = allReversed.filter(d => new Date(d.date) >= cutoff).length;
-  const [viewDays, setViewDays] = useState<number>(Math.min(maxDays, allReversed.length));
-  const [daysInput, setDaysInput] = useState<string>(String(Math.min(maxDays, allReversed.length)));
+  const [viewDays, setViewDays] = useState<number>(Math.min(7, maxDays, allReversed.length));
+  const [daysInput, setDaysInput] = useState<string>(String(Math.min(7, maxDays, allReversed.length)));
   const reversed = viewDays < allReversed.length ? allReversed.slice(0, viewDays) : allReversed;
   const maxVal = Math.max(...reversed.map(d => Math.max(d.limitUp, d.limitDown, d.blownUp)), 10);
   const minNonZero = Math.min(...reversed.map(d => [d.limitUp, d.limitDown, d.blownUp].filter(v => v > 0)), maxVal);

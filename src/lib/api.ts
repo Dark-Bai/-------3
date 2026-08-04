@@ -161,6 +161,20 @@ export interface StockMainForces {
   mainForce: string; // "主动买入"/"主动卖出"/...
 }
 
+/** 个股详情聚合(本地数据库 + 按需抓取 + 失败回退) */
+export interface StockDetail {
+  code: string;
+  dataSuccess: boolean;
+  fromCache: boolean;
+  name?: string | null;
+  quote?: StockQuote | null;
+  minute?: MinuteData | null;
+  mainForces?: StockMainForces | null;
+  boards?: StockBoards | null;
+  profile?: { mainBusiness: string } | null;
+  updated: number;
+}
+
 /** 板块资金流向曲线(分钟级累计主力净流入) */
 export interface BoardFlow {
   code: string;
@@ -498,6 +512,8 @@ export const api = {
   /** 个股主力净额(KPL main-forces): 主力净额/主动买卖/成交(主动口径) */
   stockMainForces: (code: string) => get<StockMainForces>(`/api/stock-main-forces?code=${encodeURIComponent(code)}`),
   stockQuote: (code: string) => get<StockQuote>(`/api/stock-quote?code=${encodeURIComponent(code)}`),
+  /** 个股详情聚合(本地数据库): 一次请求返回 行情/分时/主力/行业概念/主营 */
+  stockDetail: (code: string) => get<StockDetail>(`/api/stock-detail?code=${encodeURIComponent(code)}`),
   stockFinance: (code: string) => get<StockFinance>(`/api/stock-finance?code=${encodeURIComponent(code)}`),
   futureMinute: (code: string) => get<MinuteData>(`/api/future-minute?code=${encodeURIComponent(code)}`),
   futureDaily: (code: string) => get<FutureDaily>(`/api/future-daily?code=${encodeURIComponent(code)}`),

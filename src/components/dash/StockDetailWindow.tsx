@@ -87,7 +87,7 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
   // 统一报价中心: 实时价格/涨跌幅（5s 轮询）
   const hub = useQuote(code);
 
-  // 完整报价详情（含开盘/最高/最低/昨收/成交量/振幅等）
+  // 完整报价详情(报价中心, 快速, 一次性) — 提供 OHLC/涨跌 快速兜底
   const [fullQuote, setFullQuote] = useState<Quote | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -97,51 +97,25 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     return () => { cancelled = true; };
   }, [code]);
 
-  // 分时走势（60s 轮询）
-  const { data: minute } = usePolling(
-    () => api.minute(code),
-    60000,
-    [code],
-  );
+  // 个股详情聚合(本地数据库: 按需抓取 + 失败回退 + 行业概念永久保留), 10s 轮询
+  const { data: detail } = usePolling(() => api.stockDetail(code), 10000, [code]);
 
-  // 主力净额(KPL main-forces, 30s 轮询; 上游慢, 30s 服务器缓存, 降频以减上游压力)
-  const { data: mainForces } = usePolling(
-    () => api.stockMainForces(code),
-    30000,
-    [code],
-  );
+  const kq = detail?.quote ?? null;
+  const minute = detail?.minute ?? null;
+  const mainForces = detail?.mainForces ?? null;
+  const boards = detail?.boards ?? null;
+  const profile = detail?.profile ?? null;
 
-  // 实时行情(KPL pankou, 10s 轮询, 优先; 价格由报价中心5s实时覆盖, 失败回退统一报价中心)
-  const { data: kq } = usePolling(
-    () => api.stockQuote(code),
-    10000,
-    [code],
-  );
-
-  const p = kq?.price ?? hub?.price ?? fullQuote?.price;
-  const pc = kq?.pct ?? hub?.pct ?? fullQuote?.pct;
+  const p = hub?.price ?? kq?.price ?? fullQuote?.price;
+  const pc = hub?.pct ?? kq?.pct ?? fullQuote?.pct;
   const change = kq?.change ?? fullQuote?.change;
   const open = kq?.open ?? fullQuote?.open;
   const high = kq?.high ?? fullQuote?.high;
   const low = kq?.low ?? fullQuote?.low;
   const prev = kq?.prev ?? fullQuote?.prev;
-  const amount = kq?.amount ?? hub?.amount ?? fullQuote?.amount;
-  const turnover = kq?.turnover ?? hub?.turnover ?? fullQuote?.turnover;
+  const amount = hub?.amount ?? kq?.amount ?? fullQuote?.amount;
+  const turnover = hub?.turnover ?? kq?.turnover ?? fullQuote?.turnover;
   const marketValue = kq?.marketValue;
-
-  // 所属行业/概念（服务端 24h 缓存，前端 5min 重试）
-  const { data: boards } = usePolling(
-    () => api.stockBoards(code),
-    5 * 60 * 1000,
-    [code],
-  );
-
-  // 主营业务（用于概念权重排序）
-  const { data: profile } = usePolling(
-    () => api.stockProfile(code),
-    5 * 60 * 1000,
-    [code],
-  );
 
   // 根据主营业务关键词对概念进行排序
   const sortedConcepts = useMemo(() => {

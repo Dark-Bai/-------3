@@ -9,6 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
+const { getStock, upsertStock, stockCount } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -777,6 +778,68 @@ async function handleStockProfile(code) {
     code: String(code || ""),
     mainBusiness: info?.MainSale || "",
     name: data?.data?.Name || info?.CName || "",
+  };
+}
+
+/* ---------------- 个股详情聚合接口(本地数据库 + 按需抓取 + 失败回退) ---------------- */
+// 分字段 TTL: 实时行情10s / 分时60s / 主力净额30s / 行业概念与主营业务 24h(但永久保留, 不删除)
+const SD_TTL = { quote: 10_000, minute: 60_000, main_forces: 30_000, boards: 24 * 3600 * 1000, profile: 24 * 3600 * 1000 };
+// 仅在"无数据 或 已过期"时才抓取(按需), 失败则保留库中旧值(回退)
+const stale = (v, ts, ttl) => v === null || v === undefined || (Date.now() - (ts || 0)) > ttl;
+// 失败冷却: 字段抓取失败后 30s 内不再重试, 避免反复打故障上游(优化调用性价比)
+const sdBackoff = new Map();
+const inCooldown = (code, field) => (sdBackoff.get(code + ":" + field) || 0) > Date.now();
+const failBackoff = (code, field, cd = 30000) => sdBackoff.set(code + ":" + field, Date.now() + cd);
+const clearBackoff = (code, field) => sdBackoff.delete(code + ":" + field);
+
+async function handleStockDetail(code) {
+  const now = Date.now();
+  let row = getStock(code);
+  if (!row) row = { code, created_at: now };
+
+  // 并行抓取所有"过期/缺失 且 不在冷却中"的字段(按需), 失败时保留库中旧值(回退)
+  const jobs = [];
+  if (stale(row.quote, row.quote_ts, SD_TTL.quote) && !inCooldown(code, "quote")) jobs.push(async () => {
+    const q = await handleStockQuote(code);
+    if (q) { row.quote = q; row.quote_ts = now; clearBackoff(code, "quote"); } else failBackoff(code, "quote");
+  });
+  if (stale(row.minute, row.minute_ts, SD_TTL.minute) && !inCooldown(code, "minute")) jobs.push(async () => {
+    const m = await handleMinute(code);
+    if (m && m.points && m.points.length) { row.minute = m; row.minute_ts = now; clearBackoff(code, "minute"); } else failBackoff(code, "minute");
+  });
+  if (stale(row.main_forces, row.main_forces_ts, SD_TTL.main_forces) && !inCooldown(code, "main_forces")) jobs.push(async () => {
+    const mf = await handleStockMainForces(code);
+    if (mf) { row.main_forces = mf; row.main_forces_ts = now; clearBackoff(code, "main_forces"); } else failBackoff(code, "main_forces");
+  });
+  // 行业/地域/概念: 长期数据, 永久保留; 仅首次、超24h、或库中为空(无效)时才刷新; 空结果视为失败(不覆盖旧值, 稍后重试)
+  const boardsEmpty = !row.industry && !row.area && (!row.concepts || row.concepts.length === 0);
+  if ((!row.boards_ts || now - row.boards_ts > SD_TTL.boards || boardsEmpty) && !inCooldown(code, "boards")) jobs.push(async () => {
+    const b = await handleStockBoards(code);
+    if (b && (b.industry || b.area || b.concepts.length > 0)) {
+      row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = now; clearBackoff(code, "boards");
+    } else failBackoff(code, "boards");
+  });
+  // 主营业务: 长期数据, 永久保留; 仅首次、超24h、或库中为空时才刷新; 空结果视为失败
+  if ((!row.profile_ts || now - row.profile_ts > SD_TTL.profile || !row.main_business) && !inCooldown(code, "profile")) jobs.push(async () => {
+    const p = await handleStockProfile(code);
+    if (p && p.mainBusiness) { row.main_business = p.mainBusiness; row.profile_ts = now; clearBackoff(code, "profile"); } else failBackoff(code, "profile");
+  });
+  await Promise.all(jobs.map((j) => j().catch(() => {})));
+
+  if (!row.name) row.name = row.quote?.name || null;
+
+  upsertStock(row);
+  return {
+    code,
+    dataSuccess: true,
+    fromCache: true, // 本次响应始终来自本地库(可能含刚抓取的新值)
+    name: row.name || null,
+    quote: row.quote || null,
+    minute: row.minute || null,
+    mainForces: row.main_forces || null,
+    boards: { industry: row.industry || "", area: row.area || "", concepts: row.concepts || [] },
+    profile: { mainBusiness: row.main_business || "" },
+    updated: now,
   };
 }
 
@@ -2239,6 +2302,7 @@ const routes = {
     cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")), // 主营/公司名, 24h 缓存
   "/api/stock-quote": async (q) =>
     cached(`sq:${q.get("code")}`, 10000, () => handleStockQuote(q.get("code") || "")), // 实时行情, 10s 缓存(价格由报价中心5s覆盖, 此处减少上游慢请求)
+  "/api/stock-detail": async (q) => handleStockDetail(q.get("code") || ""), // 个股详情聚合(本地数据库: 按需抓取+失败回退+行业概念永久保留)
   "/api/stock-finance": async (q) =>
     cached(`sfn:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockFinance(q.get("code") || "")), // 财务指标, 24h 缓存
   "/api/news": async (q) =>
