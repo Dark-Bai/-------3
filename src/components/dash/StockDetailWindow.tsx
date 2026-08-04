@@ -15,9 +15,9 @@ interface StockDetailWindowProps {
 }
 
 /** 统计数据项: 标签 + 值 */
-function StatRow({ label, value, valueCls = "text-[#6b5b3e]" }: { label: string; value: string; valueCls?: string }) {
+function StatRow({ label, value, valueCls = "text-[#6b5b3e]", className = "" }: { label: string; value: string; valueCls?: string; className?: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-[#e0d5c0]/30 py-1.5 last:border-0">
+    <div className={`flex items-center justify-between border-b border-[#e0d5c0]/30 py-1.5 last:border-0 ${className}`}>
       <span className="text-[11px] text-[#a8987e]">{label}</span>
       <span className={`text-[14px] font-semibold ${valueCls}`} style={TNUM}>{value}</span>
     </div>
@@ -45,17 +45,30 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     [code],
   );
 
-  const p = hub?.price ?? fullQuote?.price;
-  const pc = hub?.pct ?? fullQuote?.pct;
-  const change = fullQuote?.change;
-  const open = fullQuote?.open;
-  const high = fullQuote?.high;
-  const low = fullQuote?.low;
-  const prev = fullQuote?.prev;
-  const amount = hub?.amount ?? fullQuote?.amount;
-  const turnover = hub?.turnover ?? fullQuote?.turnover;
-  const vol = fullQuote?.vol;
-  const amplitude = fullQuote?.amplitude;
+  // 主力净额(KPL main-forces, 15s 轮询)
+  const { data: mainForces } = usePolling(
+    () => api.stockMainForces(code),
+    15000,
+    [code],
+  );
+
+  // 实时行情(KPL pankou, 5s 轮询, 优先; 失败回退统一报价中心)
+  const { data: kq } = usePolling(
+    () => api.stockQuote(code),
+    5000,
+    [code],
+  );
+
+  const p = kq?.price ?? hub?.price ?? fullQuote?.price;
+  const pc = kq?.pct ?? hub?.pct ?? fullQuote?.pct;
+  const change = kq?.change ?? fullQuote?.change;
+  const open = kq?.open ?? fullQuote?.open;
+  const high = kq?.high ?? fullQuote?.high;
+  const low = kq?.low ?? fullQuote?.low;
+  const prev = kq?.prev ?? fullQuote?.prev;
+  const amount = kq?.amount ?? hub?.amount ?? fullQuote?.amount;
+  const turnover = kq?.turnover ?? hub?.turnover ?? fullQuote?.turnover;
+  const marketValue = kq?.marketValue;
 
   // 所属行业/概念（服务端 24h 缓存，前端 5min 重试）
   const { data: boards } = usePolling(
@@ -105,7 +118,7 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
       accent="#d4943a"
       onClose={onClose}
       defaultWidth={460}
-      defaultHeight={560}
+      defaultHeight={430}
     >
       <div className="flex h-full flex-col gap-3 p-4">
         {/* 顶部: 代码 + 价格 + 涨跌幅 */}
@@ -147,10 +160,22 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
           <StatRow label="开盘" value={open != null ? fmtPrice(open) : "—"} />
           <StatRow label="最高" value={high != null ? fmtPrice(high) : "—"} />
           <StatRow label="最低" value={low != null ? fmtPrice(low) : "—"} />
-          <StatRow label="成交量" value={vol != null ? `${vol.toLocaleString("zh-CN")}手` : "—"} />
           <StatRow label="成交额" value={amount != null && amount > 0 ? fmtYuan(amount * 10000) : "—"} />
           <StatRow label="换手率" value={turnover != null ? `${turnover.toFixed(2)}%` : "—"} />
-          <StatRow label="振幅" value={amplitude != null ? `${amplitude.toFixed(2)}%` : "—"} />
+          <StatRow
+            label="主力净额"
+            value={mainForces ? fmtYuan(mainForces.netAmount) : "—"}
+            valueCls={mainForces ? clsChg(mainForces.netAmount) : "text-[#6b5b3e]"}
+          />
+          <StatRow
+            label="主动买/卖"
+            value={mainForces ? `${fmtYuan(mainForces.buyAmount)} / ${fmtYuan(mainForces.sellAmount)}` : "—"}
+          />
+          <StatRow
+            label="总市值"
+            className="col-span-2"
+            value={marketValue != null && marketValue > 0 ? fmtYuan(marketValue) : "—"}
+          />
         </div>
 
         {/* 所属行业/概念 */}
@@ -189,7 +214,7 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
 
         {/* 底部时间戳 */}
         <div className="mt-auto flex items-center justify-between border-t border-[#e0d5c0] pt-2 text-[9px] text-[#a8987e]">
-          <span>数据来源: 腾讯行情 · 实时</span>
+          <span>数据来源: 开盘啦 KPL · 实时</span>
           <span>更新: {hub?.updated ? new Date(hub.updated).toLocaleTimeString("zh-CN") : "—"}</span>
         </div>
       </div>

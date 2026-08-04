@@ -753,49 +753,94 @@ function emEnqueue(fn) {
   return p;
 }
 
+/* ---------------- 个股所属板块/概念(F10概念, KPL) ---------------- */
+// 从 kpl-api-docs 的 /api/v2/f10-concept 聚合: 行业/地域/概念(替代原东财 f58/f127/f128/f129)
 async function handleStockBoards(code) {
-  const m = String(code || "").toLowerCase().match(/^(sh|sz|bj)(\d{6})$/);
-  if (!m) throw new Error("bad code");
-  const market = m[1] === "sh" ? 1 : 0;
-  return emEnqueue(async () => {
-    let lastErr = new Error("empty stock-boards");
-    for (const host of ["push2delay.eastmoney.com", "push2.eastmoney.com"]) {
-      const url = `https://${host}/api/qt/stock/get?secid=${market}.${m[2]}&fields=f57,f58,f127,f128,f129`;
-      for (const via of ["fetch", "curl"]) {
-        try {
-          const text =
-            via === "fetch"
-              ? await fetchText(url, { referer: "https://quote.eastmoney.com/" })
-              : await curlText(url, { referer: "https://quote.eastmoney.com/", encoding: "utf-8" });
-          const d = JSON.parse(text)?.data;
-          if (d) {
-            await sleep(60); // 队列节流
-            return {
-              code: `${m[1]}${m[2]}`,
-              industry: d.f127 || "",
-              area: d.f128 || "",
-              concepts: String(d.f129 || "").split(",").filter(Boolean),
-            };
-          }
-        } catch (e) {
-          lastErr = e;
-        }
-        await sleep(400);
-      }
-    }
-    throw lastErr;
-  });
+  const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(stockCode)) return { code: String(code || ""), industry: "", area: "", concepts: [] };
+  const data = await kplFetch("/api/v2/f10-concept", { code: stockCode });
+  const list = data?.List || [];
+  const names = list.map((x) => String(x.CName || "").trim()).filter(Boolean);
+  const area = names.find((n) => /(省|市|自治区|特别行政区)$/.test(n)) || "";
+  const industry = names[0] || "";
+  const concepts = names.filter((n) => n !== area && n !== industry);
+  return { code: String(code || ""), industry, area, concepts };
 }
 
-/** 个股主营业务（东财F10，24h 缓存） */
+/** 个股主营业务/公司信息(KPL company-info, 24h 缓存) */
 async function handleStockProfile(code) {
-  const secu = secuCode(code);
-  if (!secu) throw new Error(`bad code: ${code}`);
-  const url =
-    `https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_ORG_BASICINFO` +
-    `&columns=MAIN_BUSINESS&filter=${encodeURIComponent(`(SECUCODE="${secu}")`)}&source=HSF10&client=PC`;
-  const rows = await emDataGet(url);
-  return { code, mainBusiness: rows[0]?.MAIN_BUSINESS || "" };
+  const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(stockCode)) return { code: String(code || ""), mainBusiness: "" };
+  const data = await kplFetch("/api/stock/company-info", { code: stockCode });
+  const info = data?.data?.List?.XXList?.[0];
+  return {
+    code: String(code || ""),
+    mainBusiness: info?.MainSale || "",
+    name: data?.data?.Name || info?.CName || "",
+  };
+}
+
+/* ---------------- 个股实时行情(KPL 盘口 pankou, 5s 缓存) ---------------- */
+// 从 kpl-api-docs 的 /api/v2/stock/pankou 聚合: 最新价/涨跌/换手/振幅/量比/PE/PB/市值/成交额
+async function handleStockQuote(code) {
+  const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(stockCode)) return null;
+  const data = await kplFetch("/api/v2/stock/pankou", { code: stockCode });
+  const r = data?.real;
+  if (!r) return null;
+  return {
+    code: String(code || ""),
+    name: data.name || "",
+    price: num(r.last_px),
+    prev: num(data.preclose_px),
+    change: num(r.px_change),
+    pct: num(r.px_change_rate),
+    open: num(r.open_px),
+    high: num(r.high_px),
+    low: num(r.low_px),
+    amount: Math.round(num(r.total_turnover) / 10000), // 成交额(万元) = total_turnover(元)/10000
+    vol: num(r.total_amount), // 成交量(手) = total_amount(手)
+    turnover: num(r.turnover_ratio), // 换手率(%)
+    amplitude: num(r.amplitude), // 振幅(%)
+    volRatio: num(r.vol_ratio), // 量比
+    pe: num(r.pe_rate), // 市盈率
+    pb: num(r.dyn_pb_rate), // 市净率
+    marketValue: num(r.market_value), // 总市值(元)
+    time: String(data.day || ""),
+  };
+}
+
+/* ---------------- 个股财务指标(KPL F10财务摘要, 24h 缓存) ---------------- */
+// 从 kpl-api-docs 的 /api/v2/f10-finance-info 聚合: 营收/净利/ROE/毛利率/负债率等
+async function handleStockFinance(code) {
+  const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(stockCode)) return null;
+  const data = await kplFetch("/api/v2/f10-finance-info", { code: stockCode });
+  const key = data?.key || [];
+  const rows = (data?.List || []).filter((r) => Array.isArray(r) && r.length >= key.length);
+  if (!rows.length) return null;
+  const latest = rows[0]; // 最新一期(接口按日期降序)
+  const idx = (name) => key.indexOf(name);
+  const get = (name) => {
+    const i = idx(name);
+    return i >= 0 ? String(latest[i] || "").replace(/[元%]/g, "") : "";
+  };
+  return {
+    code: String(code || ""),
+    date: get("ShowDate") || get("Date") || "",
+    revenue: get("GJZB_YYSR"),
+    netProfit: get("GJZB_JLR"),
+    dedProfit: get("GJZB_KFJLR"),
+    eps: get("MGZB_MGSY"),
+    bvps: get("MGZB_MGJZC"),
+    roe: get("YLNL_JZCSYL"),
+    roeYoY: get("YLNL_JZCSYLTB"),
+    grossMargin: get("YLNL_XSMLL"),
+    inventoryTurnover: get("YLNL_CHZZL"),
+    debtRatio: get("ZBJG_ZCFZL"),
+    profitYoY: get("CZNL_JLRTBZZL"),
+    revenueYoY: get("CZNL_YYSRTBZZL"),
+  };
 }
 
 /* ---------------- 东财个股资金流(按股查询) + 主力净流入排名 ---------------- */
@@ -861,6 +906,28 @@ async function handleStockFlows(codesParam) {
     });
   }
   return list.map((c) => out[c]).filter(Boolean);
+}
+
+/* ---------------- 个股主力净额(KPL 主力资金 main-forces) ---------------- */
+// 从 kpl-api-docs 的 /api/stock/main-forces 聚合: 主力净额/主动买卖/成交(主动口径)
+async function handleStockMainForces(code) {
+  const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(stockCode)) return Promise.reject(new Error("invalid stock code"));
+  const data = await kplFetch("/api/stock/main-forces", { code: stockCode });
+  if (!data || !data.summary) return null;
+  const buy = data.buy || {};
+  const sell = data.sell || {};
+  return {
+    code,
+    day: data.day || "",
+    netAmount: num(data.summary.net_amount) * 10000, // 主力净额(元) = 万元×10000
+    totalAmount: num(data.summary.total_amount) * 10000, // 主动买卖成交额(元) = 万元×10000
+    buyAmount: num(buy.amount) * 10000,
+    sellAmount: num(sell.amount) * 10000,
+    buyRatio: num(buy.ratio),
+    sellRatio: num(sell.ratio),
+    mainForce: String(data.summary.main_force || ""),
+  };
 }
 
 /** 板块实时资金流向图: 流入/流出各取前N/2, 拉取分钟级累计主力净流入 */
@@ -1723,6 +1790,345 @@ async function handleStockSearch(query) {
   }
   return results.slice(0, 10);
 }
+
+/* ---------------- 风口聚合: 基于 kpl.liuhepc.cn 多接口 dims 聚合 ---------------- */
+// 风口关键词归一化: 同义词 -> 规范风口名
+const FENK_SYNONYMS = {
+  算力: ["算力", "算力租赁", "算力概念", "算力网", "算力网络", "算力服务", "算力调度"],
+  芯片: ["芯片", "芯片概念", "半导体", "半导体概念", "存储芯片", "磷化铟", "半导体设备"],
+  医药: ["医药", "医药生物", "医药概念", "创新药", "创新药概念", "CRO", "CDMO", "减肥药", "GLP-1", "生物医药", "生物医药概念", "病毒防治", "中药", "中药概念"],
+  机器人: ["机器人", "机器人概念", "人形机器人", "机器人产业链", "机器人减速器", "减速器"],
+  通信: ["通信", "通信概念", "光模块", "光模块概念", "光通信", "光器件", "5G", "CPO", "共封装光学"],
+  人工智能: ["人工智能", "人工智能概念", "AI", "AI概念", "AI应用", "AI医疗", "AI安全", "端侧AI", "AI算力"],
+  核电: ["核电", "核电概念", "核能", "核工业", "铀"],
+  脑机接口: ["脑机接口", "脑机"],
+  游戏: ["游戏", "游戏概念", "网游"],
+  有色金属: ["有色金属", "有色金属概念", "金属钨", "金属锗", "小金属", "小金属概念", "稀土永磁", "稀土", "铜", "铜缆", "覆盖铜"],
+  光伏: ["光伏", "光伏概念", "太阳能", "光伏储能"],
+  新能源汽车: ["新能源汽车", "新能源车", "汽车电子", "汽车零部件", "汽车整车", "整车", "车载芯片", "汽车芯片"],
+  军工: ["军工", "军工概念", "国防军工", "军工电子", "军工信息化"],
+  量子科技: ["量子科技", "量子通信", "量子计算", "量子信息"],
+  云计算: ["云计算", "云计算概念", "数据中心", "数据中心概念", "液冷", "液冷服务器", "数据中心液冷"],
+  存储: ["存储", "存储概念", "存储芯片", "HBM"],
+  电力: ["电力", "电力概念", "特高压", "电网设备", "智能电网", "电网", "电网改革", "绿色电力", "绿电"],
+  MLCC: ["MLCC", "MLCC概念", "被动元件", "电容"],
+  光刻机: ["光刻机", "光刻机概念", "光刻胶", "光刻胶概念"],
+  纺织: ["纺织", "服装家纺", "纺织制造", "纺织服装", "服装", "家纺"],
+  虚拟现实: ["虚拟现实", "VR", "AR", "元宇宙", "虚拟人"],
+  数字经济: ["数字经济", "数字科技", "数字中国"],
+  卫星导航: ["卫星导航", "卫星互联网", "商业航天", "卫星", "航空航天", "大飞机"],
+  低空经济: ["低空经济", "飞行汽车", "eVTOL"],
+  数据要素: ["数据要素", "数据确权", "数据资产", "数据", "大数据", "大数据概念"],
+  氢能源: ["氢能源", "氢能", "氢能概念", "氢燃料电池", "电解槽", "燃料电池", "燃料电池概念"],
+  固态电池: ["固态电池", "固态电池概念"],
+  充电桩: ["充电桩", "充电桩概念", "换电", "充电", "充电设施"],
+  储能: ["储能", "储能概念"],
+  风电: ["风电", "风电概念", "海上风电", "风力发电"],
+  软件: ["软件", "软件概念", "国产软件", "信创", "信创概念", "操作系统"],
+  金融科技: ["金融科技", "互联网金融", "证券", "券商", "证券概念", "银行", "银行概念", "保险", "保险概念"],
+  区块链: ["区块链", "区块链概念", "数字货币", "数字货币概念", "Web3"],
+  在线教育: ["在线教育", "教育科技"],
+  农业: ["农业", "种业", "乡村振兴", "农业信息化", "数字农业"],
+  石油: ["石油", "石油概念", "油气", "油气开采"],
+  天然气: ["天然气", "天然气概念", "LNG"],
+  煤炭: ["煤炭", "煤炭概念", "煤化工"],
+  化工: ["化工", "化工概念", "氟化工", "磷化工"],
+  体育产业: ["体育产业", "体育", "体育概念"],
+  医美: ["医美", "医美概念"],
+  贵金属: ["贵金属", "黄金", "白银"],
+  跨境电商: ["跨境电商", "跨境支付"],
+  高送转: ["高送转", "送转预期"],
+  次新股: ["次新股", "次新"],
+  股权转让: ["股权转让", "股权变更"],
+  重组: ["并购重组", "重大资产重组", "股权重组", "并购", "重组"],
+  文化传媒: ["文化传媒", "影视", "出版", "传媒", "传媒概念"],
+  旅游: ["旅游", "景区", "酒店餐饮"],
+  海南: ["海南", "海南自贸港"],
+  深圳: ["深圳", "深圳国资"],
+  医疗器械: ["医疗器械", "医疗器械概念", "医疗设备"],
+  医疗服务: ["医疗服务", "民营医院"],
+  生物疫苗: ["生物疫苗", "疫苗"],
+  锂电池: ["锂电池", "锂电池概念", "锂电", "锂矿"],
+  新能源: ["新能源", "新能源概念"],
+  智能驾驶: ["智能驾驶", "智能驾驶概念", "自动驾驶", "无人驾驶", "汽车智能化", "智能座舱"],
+  伺服: ["伺服", "伺服电机"],
+  传感器: ["传感器", "MEMS"],
+  网络安全: ["网络安全", "网络安全概念", "信息安全"],
+  半导体材料: ["半导体材料", "半导体材料概念", "电子特气", "电子特气概念"],
+  电子化学品: ["电子化学品", "光刻胶概念"],
+  面板: ["面板", "面板概念", "OLED", "LCD"],
+  消费电子: ["消费电子", "消费电子概念", "智能穿戴", "智能穿戴概念", "AR眼镜"],
+  华为: ["华为", "华为概念", "华为产业链", "华为海思"],
+  苹果: ["苹果", "苹果概念", "苹果产业链"],
+  特斯拉: ["特斯拉", "特斯拉概念"],
+  英伟达: ["英伟达", "英伟达概念"],
+  印刷电路板: ["印刷电路板", "PCB", "覆铜板", "覆铜板概念"],
+  智能穿戴: ["智能穿戴", "可穿戴"],
+  封装: ["封装", "封装概念", "芯片封测", "封测概念"],
+  晶圆: ["晶圆", "晶圆概念"],
+  集成电路: ["集成电路", "集成电路概念", "芯片设计", "芯片设计概念"],
+  第三代半导体: ["第三代半导体", "第三代半导体概念", "功率半导体"],
+  钢铁: ["钢铁", "钢铁概念"],
+  基建: ["基建", "基建概念", "基础建设"],
+  房地产: ["房地产", "地产", "房地产概念"],
+  白酒: ["白酒", "白酒概念"],
+  食品饮料: ["食品饮料", "食品饮料概念"],
+  零售: ["零售", "零售概念"],
+  家电: ["家电", "家电概念"],
+  科技: ["科技", "科技概念"],
+  计算机: ["计算机", "计算机概念"],
+  电子: ["电子", "电子概念", "电子化学品"],
+  汽车: ["汽车", "汽车概念"],
+  物联网: ["物联网", "物联网概念"],
+};
+
+// 归一化风口关键词: 命中同义词表返回规范名, 否则原样兜底
+function canonFeng(key) {
+  const k = String(key || "").trim();
+  if (!k) return "";
+  for (const [canon, syns] of Object.entries(FENK_SYNONYMS)) {
+    if (syns.includes(k)) return canon;
+  }
+  return k;
+}
+
+// 维度权重顺序(与前端 useFengWeights 一致)与默认值
+const FENG_DIM_ORDER = ["limitUp", "ladder", "capital", "theme", "news"];
+const FENG_DEFAULT_WEIGHTS = { limitUp: 30, ladder: 20, capital: 20, theme: 15, news: 15 };
+
+// 解析前端传入权重 "30,20,20,15,15", 非法/缺省回退默认
+function parseFengWeights(raw) {
+  const out = { ...FENG_DEFAULT_WEIGHTS };
+  if (!raw) return out;
+  const parts = String(raw).split(",").map((x) => Number(x.trim()));
+  if (parts.length !== 5) return out;
+  for (let i = 0; i < 5; i++) {
+    const v = parts[i];
+    if (Number.isFinite(v)) out[FENG_DIM_ORDER[i]] = Math.max(0, Math.min(100, v));
+  }
+  return out;
+}
+
+// 用归一化权重合成最终评分(权重归一化后求和, 近似加权平均)
+function fengWeightedScore(dims, w) {
+  const sum = w.limitUp + w.ladder + w.capital + w.theme + w.news;
+  if (sum <= 0) return 0;
+  const s =
+    (dims.limitUp || 0) * w.limitUp +
+    (dims.ladder || 0) * w.ladder +
+    (dims.capital || 0) * w.capital +
+    (dims.theme || 0) * w.theme +
+    (dims.news || 0) * w.news;
+  return Math.round(s / sum);
+}
+
+// 聚合各 kpl 接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
+async function handleFengFrontBase(date) {
+  const results = await Promise.allSettled([
+    kplFetch("/api/ladder/realtime-boards"),
+    kplFetch("/api/ladder/sector", date ? { date } : {}),
+    kplFetch("/api/fengk/yd-plate", date ? { date } : {}),
+    kplFetch("/api/theme/hot"),
+    kplFetch("/api/news/theme"),
+    kplFetch("/api/advanced/fengk-best"),
+  ]);
+
+  const [boardsRes, ladderSecRes, ydRes, themeRes, newsRes, fengBestRes] = results;
+
+  // 涨停个股: 优先 realtime-boards, 为空用 fengk-best 兜底
+  let boardList = [];
+  if (boardsRes.status === "fulfilled") {
+    const b = boardsRes.value || [];
+    boardList = Array.isArray(b) ? b : b?.data || [];
+  }
+  if (!boardList.length && fengBestRes.status === "fulfilled") {
+    const fb = fengBestRes.value || [];
+    const raw = Array.isArray(fb) ? fb : fb?.data || [];
+    boardList = raw.map((it) => ({
+      stock_code: it.stock_code || it.code,
+      stock_name: it.stock_name || it.name,
+      limit_up_reason: it.limit_up_reason || it.reason || it.name || "",
+      concepts: it.concepts || it.concept || "",
+      consecutive_days: it.consecutive_days || it.days || 0,
+      seal_amount: it.seal_amount || it.seal || 0,
+      limit_up_price: it.limit_up_price || it.price || 0,
+      change_pct: it.change_pct || it.pct || 0,
+    }));
+  }
+
+  // 板块资金 [["芯片",858.32], ...]
+  let ydList = [];
+  if (ydRes.status === "fulfilled") {
+    const yd = ydRes.value || {};
+    const list = Array.isArray(yd) ? yd : yd.list;
+    if (Array.isArray(list)) ydList = list;
+  }
+
+  // 热门题材(位置越靠前越热)
+  let themeList = [];
+  if (themeRes.status === "fulfilled") {
+    const th = themeRes.value || {};
+    const themes = Array.isArray(th) ? th : th.themes;
+    if (Array.isArray(themes)) themeList = themes;
+  }
+
+  // 题材新闻
+  let newsList = [];
+  if (newsRes.status === "fulfilled") {
+    const ns = newsRes.value || {};
+    const list = Array.isArray(ns) ? ns : ns.List;
+    if (Array.isArray(list)) newsList = list;
+  }
+
+  const windMap = new Map();
+  const getWind = (name) => {
+    if (!windMap.has(name)) {
+      windMap.set(name, {
+        name,
+        limitUpCount: 0,
+        maxConsecutive: 0,
+        capital: 0,
+        themeHeat: 0,
+        newsCount: 0,
+        news: [],
+        leaders: [],
+        ladders: {},
+        _maxSeal: 0,
+      });
+    }
+    return windMap.get(name);
+  };
+
+  // 涨停板: 涨停家数 / 龙头(封单); 连板高度与梯队由 ladder/sector 提供
+  // (realtime-boards 的 consecutive_days 恒为 1, 不能用于连板统计)
+  for (const s of boardList) {
+    const name = canonFeng(s.limit_up_reason);
+    if (!name) continue;
+    const w = getWind(name);
+    w.limitUpCount++;
+    const seal = s.seal_amount || 0;
+    if (seal > w._maxSeal) {
+      w._maxSeal = seal;
+      w.leaders.unshift({
+        code: s.stock_code,
+        name: s.stock_name,
+        price: s.limit_up_price,
+        pct: s.change_pct,
+        seal,
+      });
+      if (w.leaders.length > 3) w.leaders.length = 3;
+    }
+  }
+
+  // 板块连板: 实时连板梯队(权威连板来源, 含真实 consecutive_days ≥ 2)
+  let ladderSectors = [];
+  if (ladderSecRes.status === "fulfilled") {
+    const ls = ladderSecRes.value || {};
+    const sectors = Array.isArray(ls) ? ls : ls.sectors;
+    if (Array.isArray(sectors)) ladderSectors = sectors;
+  }
+  for (const sec of ladderSectors) {
+    const name = canonFeng(sec.sector_name);
+    if (!name) continue;
+    const w = getWind(name);
+    const merge = (st) => {
+      const days = st?.consecutive_days || 0;
+      if (days > 0) {
+        w.maxConsecutive = Math.max(w.maxConsecutive, days);
+        w.ladders[days] = (w.ladders[days] || 0) + 1;
+      }
+    };
+    (sec.stocks || []).forEach(merge);
+    (sec.broken_stocks || []).forEach(merge);
+  }
+
+  // 板块资金排名
+  for (const row of ydList) {
+    const [plateName, val] = Array.isArray(row) ? row : [];
+    const name = canonFeng(plateName);
+    if (!name) continue;
+    const w = getWind(name);
+    w.capital = Math.max(w.capital, num(val));
+  }
+
+  // 热门题材热度(位置加权)
+  themeList.forEach((t, idx) => {
+    const rawName = typeof t === "string" ? t : t?.name || t?.title || t?.theme || "";
+    const name = canonFeng(rawName);
+    if (!name) return;
+    const w = getWind(name);
+    w.themeHeat = Math.max(w.themeHeat, themeList.length - idx);
+  });
+
+  // 题材新闻: 按板块名/关键词命中, 收集驱动新闻
+  for (const n of newsList) {
+    const title = n?.Title || n?.title || "";
+    if (!title) continue;
+    const zs = canonFeng(n?.ZSName || n?.zsName || "");
+    const kword = canonFeng(n?.Kword || n?.kword || "");
+    const name = zs || kword;
+    if (!name) continue;
+    const w = getWind(name);
+    w.newsCount++;
+    w.news.push({
+      title,
+      time: n?.TimeStamp || n?.timestamp || 0,
+      stocks: (n?.Stocks || n?.stocks || []).map((s) => ({
+        code: s.Code || s.code,
+        name: s.Name || s.name,
+        rate: s.Rate ?? s.rate,
+      })),
+    });
+    if (w.news.length > 5) w.news.length = 5;
+  }
+
+  // 兜底: 有涨停但 ladder/sector 未覆盖的风口, 视为首板(连板高度=1)
+  for (const w of windMap.values()) {
+    if (w.limitUpCount > 0 && w.maxConsecutive === 0) {
+      w.maxConsecutive = 1;
+      w.ladders[1] = w.limitUpCount;
+    }
+  }
+
+  // 各维度最大原始值(用于归一化到 0-100)
+  const windList = [...windMap.values()];
+  const maxLimitUp = Math.max(1, ...windList.map((w) => w.limitUpCount));
+  const maxConsecutive = Math.max(1, ...windList.map((w) => w.maxConsecutive));
+  const maxCapital = Math.max(1, ...windList.map((w) => w.capital));
+  const maxTheme = Math.max(1, ...windList.map((w) => w.themeHeat));
+  const maxNews = Math.max(1, ...windList.map((w) => w.newsCount));
+
+  const enriched = windList.map((w) => ({
+    name: w.name,
+    dims: {
+      limitUp: Math.round((w.limitUpCount / maxLimitUp) * 100),
+      ladder: Math.round((w.maxConsecutive / maxConsecutive) * 100),
+      capital: Math.round((w.capital / maxCapital) * 100),
+      theme: Math.round((w.themeHeat / maxTheme) * 100),
+      news: Math.round((w.newsCount / maxNews) * 100),
+    },
+    limitUpCount: w.limitUpCount,
+    maxConsecutive: w.maxConsecutive,
+    capital: w.capital,
+    leaders: w.leaders,
+    ladders: Object.entries(w.ladders)
+      .sort((a, b) => Number(b[0]) - Number(a[0]))
+      .map(([days, count]) => ({ days: Number(days), count })),
+    news: w.news,
+  }));
+
+  return {
+    date: date || (ydRes.status === "fulfilled" ? ydRes.value?.plate || "" : ""),
+    source: {
+      boards: boardsRes.status === "fulfilled" && boardList.length > 0,
+      ydPlate: ydRes.status === "fulfilled",
+      theme: themeRes.status === "fulfilled",
+      news: newsRes.status === "fulfilled",
+      fengBest: fengBestRes.status === "fulfilled",
+    },
+    windList: enriched.slice(0, 30),
+  };
+}
 /* ------------------------------------------------------------- */
 
 /* ---------------- 主机路由表 ---------------- */
@@ -1765,11 +2171,17 @@ const routes = {
   "/api/stock-flow": async (q) =>
     handleStockFlows(q.get("code") || "").then((rows) => rows[0] || Promise.reject(new Error("empty stock-flow"))),
   "/api/stock-flows": async (q) => handleStockFlows(q.get("codes") || ""),
+  "/api/stock-main-forces": async (q) =>
+    cached(`smf:${q.get("code")}`, 15000, () => handleStockMainForces(q.get("code") || "")), // 主力净额, 15s 缓存
   "/api/board-flow": async (q) => cached(`bf:${q.get("n")}`, 120000, () => handleBoardFlow(q.get("n") || "20")),
   "/api/stock-boards": async (q) =>
-    cached(`sb:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockBoards(q.get("code") || "")),
+    cached(`sb:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockBoards(q.get("code") || "")), // 行业/概念, 24h 缓存
   "/api/stock-profile": async (q) =>
-    cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")),
+    cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")), // 主营/公司名, 24h 缓存
+  "/api/stock-quote": async (q) =>
+    cached(`sq:${q.get("code")}`, 5000, () => handleStockQuote(q.get("code") || "")), // 实时行情, 5s 缓存
+  "/api/stock-finance": async (q) =>
+    cached(`sfn:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockFinance(q.get("code") || "")), // 财务指标, 24h 缓存
   "/api/news": async (q) =>
     cached(`news:${q.get("page")}:${q.get("size")}`, 8000, () =>
       handleNews(q.get("page") || "1", q.get("size") || "40")
@@ -1792,6 +2204,15 @@ const routes = {
     cached(`ssearch:${q.get("q")}`, 5000, () => handleStockSearch(q.get("q") || "")), // 前端击键触发, 短缓存防新浪WAF
   "/api/plugin-news-analyst": async () => cached("plugin-news-analyst", 30000, () => handleNewsAnalystKPL()),
   "/api/plugin-market-sentiment": async () => cached("plugin-market-sentiment", 15000, () => handleMarketSentimentV2()),
+  // 风口聚合: dims 聚合 15s 缓存(仅按 date 缓存, 权重不参与缓存 key, 每次请求独立计分)
+  "/api/fengk-front": async (q) => {
+    const date = q.get("date") || "";
+    const weights = parseFengWeights(q.get("weights") || "");
+    const base = await cached(`fengk-front:${date}`, 15000, () => handleFengFrontBase(date));
+    const windList = (base.windList || []).map((w) => ({ ...w, score: fengWeightedScore(w.dims, weights) }));
+    windList.sort((a, b) => b.score - a.score);
+    return { ...base, weights, windList };
+  },
 };
 
 const MIME = {

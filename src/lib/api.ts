@@ -4,6 +4,7 @@
  */
 
 import { usePolling } from "@/hooks/usePolling";
+import { FENG_DIM_ORDER, type FengDimKey } from "@/hooks/useFengWeights";
 
 export interface Quote {
   symbol: string;
@@ -105,6 +106,59 @@ export interface StockFlow {
   date?: string;
   close?: number;
   pct?: number;
+}
+
+/** 个股实时行情(KPL /api/v2/stock/pankou, 盘口) */
+export interface StockQuote {
+  code: string;
+  name: string;
+  price: number;
+  prev: number;
+  change: number;
+  pct: number;
+  open: number;
+  high: number;
+  low: number;
+  amount: number; // 成交额(万元)
+  vol: number; // 成交量(股)
+  turnover: number; // 换手率(%)
+  amplitude: number; // 振幅(%)
+  volRatio: number; // 量比
+  pe: number; // 市盈率
+  pb: number; // 市净率
+  marketValue: number; // 总市值(元)
+  time: string;
+}
+
+/** 个股财务指标(KPL /api/v2/f10-finance-info, 最新一期) */
+export interface StockFinance {
+  code: string;
+  date: string;
+  revenue: string; // 营业收入
+  netProfit: string; // 净利润
+  dedProfit: string; // 扣非净利润
+  eps: string; // 每股收益
+  bvps: string; // 每股净资产
+  roe: string; // 净资产收益率(%)
+  roeYoY: string; // ROE同比
+  grossMargin: string; // 销售毛利率(%)
+  inventoryTurnover: string; // 存货周转率
+  debtRatio: string; // 资产负债率(%)
+  profitYoY: string; // 净利润同比(%)
+  revenueYoY: string; // 营收同比(%)
+}
+
+/** 个股主力净额(KPL /api/stock/main-forces, 主动买卖口径) */
+export interface StockMainForces {
+  code: string;
+  day: string;
+  netAmount: number; // 主力净额(元)
+  totalAmount: number; // 主动买卖成交额(元)
+  buyAmount: number; // 主动买入额(元)
+  sellAmount: number; // 主动卖出额(元)
+  buyRatio: number; // 主动买入占比(%)
+  sellRatio: number; // 主动卖出占比(%)
+  mainForce: string; // "主动买入"/"主动卖出"/...
 }
 
 /** 板块资金流向曲线(分钟级累计主力净流入) */
@@ -441,6 +495,10 @@ export const api = {
   stockBoards: (code: string) => get<StockBoards>(`/api/stock-boards?code=${encodeURIComponent(code)}`),
   stockProfile: (code: string) => get<{ code: string; mainBusiness: string }>(`/api/stock-profile?code=${encodeURIComponent(code)}`),
   stockFlow: (code: string) => flowLoader(code),
+  /** 个股主力净额(KPL main-forces): 主力净额/主动买卖/成交(主动口径) */
+  stockMainForces: (code: string) => get<StockMainForces>(`/api/stock-main-forces?code=${encodeURIComponent(code)}`),
+  stockQuote: (code: string) => get<StockQuote>(`/api/stock-quote?code=${encodeURIComponent(code)}`),
+  stockFinance: (code: string) => get<StockFinance>(`/api/stock-finance?code=${encodeURIComponent(code)}`),
   futureMinute: (code: string) => get<MinuteData>(`/api/future-minute?code=${encodeURIComponent(code)}`),
   futureDaily: (code: string) => get<FutureDaily>(`/api/future-daily?code=${encodeURIComponent(code)}`),
   futuresBatch: (codes: string[]) =>
@@ -459,6 +517,9 @@ export const api = {
   financeForecast: (period = "") => get<FinanceForecast>(`/api/finance-forecast${period ? `?period=${encodeURIComponent(period)}` : ""}`),
   pluginNewsAnalyst: () => get<PluginNewsAnalystData>(`/api/plugin-news-analyst`),
   pluginMarketSentiment: () => get<PluginMarketSentimentData>(`/api/plugin-market-sentiment`),
+  /** 风口聚合: 后端按 date 聚合 dims, 用传入权重计算最终评分 */
+  fengkFront: (date = "", weights?: Record<FengDimKey, number>) =>
+    get<FengFrontData>(`/api/fengk-front${date ? `?date=${date}` : ""}${weights ? `${date ? "&" : "?"}weights=${FENG_DIM_ORDER.map((k) => weights[k]).join(",")}` : ""}`),
 };
 
 /** 新闻分析师插件数据结构 */
@@ -568,4 +629,48 @@ export interface PluginMarketSentimentData {
 }
 export function useOpenRouterUsage() {
   return usePolling(() => api.openRouterUsage(), 3600000);
+}
+
+/* ---------------- 风口聚合数据结构 ---------------- */
+export interface FengWindDims {
+  limitUp: number;
+  ladder: number;
+  capital: number;
+  theme: number;
+  news: number;
+}
+export interface FengWindLeader {
+  code: string;
+  name: string;
+  price: number;
+  pct: number;
+  seal: number;
+}
+export interface FengWindNews {
+  title: string;
+  time: number;
+  stocks: { code: string; name: string; rate: number }[];
+}
+export interface FengWind {
+  name: string;
+  dims: FengWindDims;
+  /** 后端按请求权重算出的最终评分(0-100) */
+  score: number;
+  limitUpCount: number;
+  maxConsecutive: number;
+  capital: number;
+  leaders: FengWindLeader[];
+  ladders: { days: number; count: number }[];
+  news: FengWindNews[];
+}
+export interface FengFrontData {
+  date: string;
+  weights: Record<FengDimKey, number>;
+  source: Record<string, boolean>;
+  windList: FengWind[];
+}
+
+/** 风口面板轮询: 15s 刷新, 携带当前权重去后端计算最终评分 */
+export function useFengFront(date = "", weights: Record<FengDimKey, number>) {
+  return usePolling(() => api.fengkFront(date, weights), 15000, [date, weights]);
 }

@@ -1,7 +1,15 @@
 import { Panel, type PanelZoomProps } from "./Panel";
+import { FengWeights } from "./FengWeights";
+import { FengWindList } from "./FengWindList";
+import { useFengWeights } from "@/hooks/useFengWeights";
+import { useFengFront } from "@/lib/api";
 
-/** 市场板块实时热点 — 预留空面板，数据内容已清空 */
+/** 市场板块实时热点 — 风口榜: 卡片渲染 + 点击展开龙头/梯队/新闻 */
 export function SectorPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
+  const fengWeights = useFengWeights();
+  // 携带当前权重到后端计算最终评分, 15s 轮询
+  const { data, loading, error } = useFengFront("", fengWeights.weights);
+
   return (
     <Panel
       className={className}
@@ -9,11 +17,10 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
       title="市场板块实时热点"
       icon="▤"
       accent="#d4943a"
+      right={<FengWeights {...fengWeights} />}
     >
-      <div className="flex h-full min-h-0 flex-col items-center justify-center">
-        <div className="text-center text-[11px] text-[#a8987e]">
-          预留位置<br />待替换新功能
-        </div>
+      <div className="h-full min-h-0 p-1.5">
+        <FengWindList data={data} loading={loading} error={error} />
       </div>
     </Panel>
   );
