@@ -104,17 +104,17 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     [code],
   );
 
-  // 主力净额(KPL main-forces, 15s 轮询)
+  // 主力净额(KPL main-forces, 30s 轮询; 上游慢, 30s 服务器缓存, 降频以减上游压力)
   const { data: mainForces } = usePolling(
     () => api.stockMainForces(code),
-    15000,
+    30000,
     [code],
   );
 
-  // 实时行情(KPL pankou, 5s 轮询, 优先; 失败回退统一报价中心)
+  // 实时行情(KPL pankou, 10s 轮询, 优先; 价格由报价中心5s实时覆盖, 失败回退统一报价中心)
   const { data: kq } = usePolling(
     () => api.stockQuote(code),
-    5000,
+    10000,
     [code],
   );
 

@@ -45,7 +45,7 @@ function SentimentScoreCard({ score, level, desc }: { score: number; level: stri
   const r = 28, cx = 36, cy = 36, circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - score / 100);
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">市场情绪评分</div>
       <div className="flex items-center gap-3">
         {/* SVG 圆形仪表 */}
@@ -72,7 +72,7 @@ function SentimentScoreCard({ score, level, desc }: { score: number; level: stri
 /* ========== 卡片2: 涨跌统计 ========== */
 function UpDownCard({ upCount, downCount, upRatio, downRatio, total }: { upCount: number; downCount: number; upRatio: number; downRatio: number; total: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨跌统计</div>
       <div className="flex items-center justify-around py-1">
         <div className="text-center">
@@ -102,7 +102,7 @@ function UpDownCard({ upCount, downCount, upRatio, downRatio, total }: { upCount
 /* ========== 卡片3: 涨停跌停对比 ========== */
 function LimitUpDownCard({ limitUp, limitDown, blownUp, blownRate }: { limitUp: number; limitDown: number; blownUp: number; blownRate: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停跌停</div>
       <div className="flex items-center justify-around py-1">
         <div className="text-center">
@@ -139,7 +139,7 @@ function BullBearCard({ bullish, bearish, net, total, samples }: {
   const totalRatio = hasApiData && total > 0 ? (bullish / total * 100) : 50;
   const safeNet = Number.isFinite(net) ? net : bullish - bearish;
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-[#8b7a5e]">多空情绪</span>
         {hasApiData && (
@@ -196,7 +196,7 @@ function VolumeCard({ turnover, prevTurnover, ratio, change, level }: { turnover
   const intensity = Math.min(Math.abs(change) / 40, 1); // 0~1
   const lampOpacity = 0.20 + intensity * 0.65; // 透明度 0.20~0.85
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-[#8b7a5e]">量能分析</span>
         <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${tagCls}`}>{level}</span>
@@ -223,7 +223,7 @@ function VolumeCard({ turnover, prevTurnover, ratio, change, level }: { turnover
 /* ========== 卡片6: 涨停表现 ========== */
 function LimitPerfCard({ yestPerf, yestBroken, brokenUp }: { yestPerf: number; yestBroken: number; brokenUp: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停表现</div>
       <div className="flex items-center justify-around py-1">
         <div className="text-center">
@@ -246,15 +246,60 @@ function LimitPerfCard({ yestPerf, yestBroken, brokenUp }: { yestPerf: number; y
 }
 
 /* ========== 卡片7: 历史趋势迷你图 (SVG) ========== */
+/* 智能纵坐标刻度: 生成"nice numbers"(1/2/5 × 10^n), 保证间隔均匀易读 */
+function niceNum(range: number, round: boolean): number {
+  const exp = Math.floor(Math.log10(Math.max(range, 1e-9)));
+  const frac = range / Math.pow(10, exp);
+  let nf: number;
+  if (round) {
+    if (frac < 1.5) nf = 1; else if (frac < 3) nf = 2; else if (frac < 7) nf = 5; else nf = 10;
+  } else {
+    if (frac <= 1) nf = 1; else if (frac <= 2) nf = 2; else if (frac <= 5) nf = 5; else nf = 10;
+  }
+  return nf * Math.pow(10, exp);
+}
 function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["trendData"] }) {
   if (!data || data.length < 2) return null;
-  const reversed = [...data].reverse();
+  const allReversed = [...data].reverse();
+  // 最多查看半年内的交易日(以最新日期往前推6个月为截止线)
+  const latestDate = new Date(allReversed[0].date);
+  const cutoff = new Date(latestDate);
+  cutoff.setMonth(cutoff.getMonth() - 6);
+  const maxDays = allReversed.filter(d => new Date(d.date) >= cutoff).length;
+  const [viewDays, setViewDays] = useState<number>(Math.min(maxDays, allReversed.length));
+  const [daysInput, setDaysInput] = useState<string>(String(Math.min(maxDays, allReversed.length)));
+  const reversed = viewDays < allReversed.length ? allReversed.slice(0, viewDays) : allReversed;
   const maxVal = Math.max(...reversed.map(d => Math.max(d.limitUp, d.limitDown, d.blownUp)), 10);
+  const minNonZero = Math.min(...reversed.map(d => [d.limitUp, d.limitDown, d.blownUp].filter(v => v > 0)), maxVal);
   const w = 600, h = 120, pad = { top: 10, bottom: 18, left: 28, right: 8 };
   const chartW = w - pad.left - pad.right;
   const chartH = h - pad.top - pad.bottom;
   const stepX = chartW / (reversed.length - 1);
-  const scaleY = (v: number) => pad.top + chartH - (v / maxVal * chartH);
+  /* ---- 智能纵坐标刻度(随展示天数与数据范围自适应) ---- */
+  // 对数刻度: 仅当所有值>0 且跨度>=100倍时启用(0值会导致 log(0) 无意义, 故需全部>0)
+  const useLog = minNonZero > 0 && maxVal / minNonZero >= 100;
+  // 目标刻度数: 展示天数越多刻度略少, 避免y轴标签过于密集
+  const targetTicks = reversed.length <= 10 ? 6 : reversed.length <= 30 ? 5 : 4;
+  let ticks: number[]; let maxTick: number; let scaleY: (v: number) => number;
+  if (useLog) {
+    const lo = Math.floor(Math.log10(minNonZero));
+    const hi = Math.ceil(Math.log10(maxVal));
+    const tSet = new Set<number>();
+    for (let e = lo; e <= hi; e++) { const b = Math.pow(10, e); [1, 2, 5].forEach(m => tSet.add(m * b)); }
+    ticks = [...tSet].filter(t => t >= minNonZero * 0.9 && t <= maxVal * 1.1).sort((a, b) => a - b);
+    maxTick = ticks[ticks.length - 1];
+    const logRange = Math.log10(maxTick) - Math.log10(minNonZero);
+    scaleY = (v) => pad.top + chartH - (Math.log10(Math.max(v, 1)) - Math.log10(minNonZero)) / logRange * chartH;
+  } else {
+    const step = niceNum(maxVal / Math.max(1, targetTicks - 1), true);
+    maxTick = Math.ceil(maxVal / step) * step;
+    ticks = [];
+    for (let v = 0; v <= maxTick + step * 1e-6; v += step) ticks.push(Math.round(v));
+    scaleY = (v) => pad.top + chartH - (v / maxTick * chartH);
+  }
+  // SVG 坐标 → 容器百分比(用于 HTML 覆盖层定位, 使文字保持正常比例)
+  const px = (x: number) => `${(x / w) * 100}%`;
+  const py = (y: number) => `${(y / h) * 100}%`;
 
   const upPath = reversed.map((d, i) => `${i === 0 ? "M" : "L"}${pad.left + i * stepX},${scaleY(d.limitUp)}`).join(" ");
   const downPath = reversed.map((d, i) => `${i === 0 ? "M" : "L"}${pad.left + i * stepX},${scaleY(d.limitDown)}`).join(" ");
@@ -289,33 +334,67 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
           <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#d4943a]" />炸板</span>
         </div>
       </div>
-      <svg ref={svgRef} viewBox={`0 0 ${w} ${h}`} className="h-[120px] w-full" preserveAspectRatio="xMidYMid meet"
-        onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} style={{ cursor: hoverIdx !== null ? "crosshair" : "default" }}>
-        {/* 网格线 + Y轴标签 */}
-        {[0, 0.25, 0.5, 0.75, 1].map(p => (
-          <g key={p}>
-            <line x1={pad.left} y1={pad.top + chartH * (1 - p)} x2={pad.left + chartW} y2={pad.top + chartH * (1 - p)} stroke="#e0d5c0" strokeWidth={0.5} strokeDasharray="3,3" />
-            <text x={pad.left - 4} y={pad.top + chartH * (1 - p) + 3} textAnchor="end" fontSize={8} fill="#a8987e">{Math.round(maxVal * p)}</text>
-          </g>
+      {/* 查看天数控制 */}
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] text-[#8b7a5e]">
+        <span>查看</span>
+        {[7, 15, 30].filter(n => n < maxDays).map(n => (
+          <button key={n} onClick={() => { setViewDays(n); setDaysInput(String(n)); }}
+            className={`rounded px-1.5 py-0.5 transition-colors ${viewDays === n ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
+            {n}天
+          </button>
         ))}
-        {/* 面积填充 */}
-        <path d={areaUp} fill="#b8533a" opacity={0.08} />
-        <path d={areaDown} fill="#4a6b3f" opacity={0.08} />
-        {/* 折线 */}
-        <path d={upPath} fill="none" stroke="#b8533a" strokeWidth={1.5} strokeLinejoin="round" />
-        <path d={downPath} fill="none" stroke="#4a6b3f" strokeWidth={1.5} strokeLinejoin="round" />
-        <path d={blownPath} fill="none" stroke="#d4943a" strokeWidth={1.5} strokeLinejoin="round" strokeDasharray="4,2" />
-        {/* 日期标签 */}
+        <button onClick={() => { setViewDays(maxDays); setDaysInput(String(maxDays)); }}
+          className={`rounded px-1.5 py-0.5 transition-colors ${viewDays === maxDays ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
+          全部
+        </button>
+        <input type="number" min={2} max={maxDays} value={daysInput}
+          onChange={e => {
+            const v = e.target.value;
+            setDaysInput(v);
+            if (v === "") return; // 允许空值, 便于输入
+            const n = Number(v);
+            if (!isNaN(n) && n >= 2) setViewDays(Math.min(maxDays, n));
+          }}
+          onBlur={() => { if (daysInput === "") setDaysInput(String(viewDays)); }} // 失焦时若为空则回填当前值
+          className="w-12 rounded border border-[#d4c5a8] bg-[#f5f0e6] px-1 py-0.5 text-center text-[10px] text-[#6b5b3e] outline-none focus:border-[#a8987e]" />
+        <span>天</span>
+      </div>
+      <div className="relative min-h-0 w-full flex-1">
+        <svg ref={svgRef} viewBox={`0 0 ${w} ${h}`} className="h-full w-full" preserveAspectRatio="none"
+          onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} style={{ cursor: hoverIdx !== null ? "crosshair" : "default" }}>
+          {/* 网格线(几何, 拉伸) */}
+          {ticks.map(t => (
+            <line key={t} x1={pad.left} y1={scaleY(t)} x2={pad.left + chartW} y2={scaleY(t)} stroke="#e0d5c0" strokeWidth={0.5} strokeDasharray="3,3" />
+          ))}
+          {/* 面积填充 + 折线(几何, 拉伸) */}
+          <path d={areaUp} fill="#b8533a" opacity={0.08} />
+          <path d={areaDown} fill="#4a6b3f" opacity={0.08} />
+          <path d={upPath} fill="none" stroke="#b8533a" strokeWidth={1.5} strokeLinejoin="round" />
+          <path d={downPath} fill="none" stroke="#4a6b3f" strokeWidth={1.5} strokeLinejoin="round" />
+          <path d={blownPath} fill="none" stroke="#d4943a" strokeWidth={1.5} strokeLinejoin="round" strokeDasharray="4,2" />
+        </svg>
+
+        {/* Y轴标签 (HTML, 正常比例) */}
+        {ticks.map(t => (
+          <span key={t} className="absolute text-[8px] leading-none text-[#a8987e]" style={{ left: px(pad.left - 4), top: py(scaleY(t) + 3), transform: "translate(-100%, -50%)" }}>
+            {t}
+          </span>
+        ))}
+        {/* Y轴单位 (HTML, 正常比例) */}
+        <span className="absolute text-[8px] leading-none text-[#a8987e]" style={{ left: px(pad.left - 4), top: py(pad.top - 2), transform: "translate(-100%, -100%)" }}>家</span>
+
+        {/* 日期标签 (HTML, 正常比例) */}
         {reversed.map((d, i) => {
           if (i % Math.max(1, Math.floor(reversed.length / 5)) !== 0 && i !== reversed.length - 1) return null;
           const dateStr = d.date?.slice(5) || "";
           return (
-            <text key={i} x={pad.left + i * stepX} y={h - 3} textAnchor="middle" fontSize={8} fill="#a8987e">
+            <span key={i} className="absolute whitespace-nowrap text-[8px] leading-none text-[#a8987e]" style={{ left: px(pad.left + i * stepX), top: py(h - 3), transform: "translate(-50%, 0%)" }}>
               {dateStr}
-            </text>
+            </span>
           );
         })}
-        {/* 十字交叉线 + 数据提示框 */}
+
+        {/* 悬停十字线 + 提示框 (HTML, 正常比例) */}
         {hoverIdx !== null && (() => {
           const d = reversed[hoverIdx];
           const cx = pad.left + hoverIdx * stepX;
@@ -324,21 +403,22 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
           if (boxX + tipW > w - pad.right) boxX = cx - tipW - 8;
           const boxY = pad.top + 2;
           return (
-            <g>
-              <line x1={cx} y1={pad.top} x2={cx} y2={pad.top + chartH} stroke="#8b7a5e" strokeWidth={1} strokeDasharray="2,3" />
-              <circle cx={cx} cy={scaleY(d.limitUp)} r={3} fill="#b8533a" />
-              <circle cx={cx} cy={scaleY(d.limitDown)} r={3} fill="#4a6b3f" />
-              <circle cx={cx} cy={scaleY(d.blownUp)} r={3} fill="#d4943a" />
-              <rect x={boxX} y={boxY} width={tipW} height={tipH} rx={3} fill="#f5f0e6" stroke="#d4c5a8" strokeWidth={0.8} opacity={0.95} />
-              <text x={boxX + tipW / 2} y={boxY + 12} textAnchor="middle" fontSize={9} fontWeight="bold" fill="#6b5b3e">{d.date?.slice(5) || d.date}</text>
-              <text x={boxX + 6} y={boxY + 24} fontSize={8} fill="#b8533a">↑ {d.limitUp}</text>
-              <text x={boxX + tipW / 2} y={boxY + 24} textAnchor="middle" fontSize={8} fill="#4a6b3f">↓ {d.limitDown}</text>
-              <text x={boxX + tipW - 6} y={boxY + 24} textAnchor="end" fontSize={8} fill="#d4943a">⚡ {d.blownUp}</text>
-              <text x={boxX + 6} y={boxY + 37} fontSize={8} fill="#8b7a5e">炸板率 {d.blownRate != null ? d.blownRate.toFixed(1) + "%" : "-"}</text>
-            </g>
+            <>
+              <div className="absolute bg-[#8b7a5e]" style={{ left: px(cx), top: py(pad.top), width: 1, height: `${((pad.top + chartH) - pad.top) / h * 100}%`, opacity: 0.6 }} />
+              <span className="absolute h-1.5 w-1.5 rounded-full bg-[#b8533a]" style={{ left: px(cx), top: py(scaleY(d.limitUp)), transform: "translate(-50%,-50%)" }} />
+              <span className="absolute h-1.5 w-1.5 rounded-full bg-[#4a6b3f]" style={{ left: px(cx), top: py(scaleY(d.limitDown)), transform: "translate(-50%,-50%)" }} />
+              <span className="absolute h-1.5 w-1.5 rounded-full bg-[#d4943a]" style={{ left: px(cx), top: py(scaleY(d.blownUp)), transform: "translate(-50%,-50%)" }} />
+              <div className="absolute" style={{ left: px(boxX), top: py(boxY), width: tipW, height: tipH }}>
+                <div className="flex h-full flex-col justify-center rounded border border-[#d4c5a8] bg-[#f5f0e6] px-1.5 text-[8px] leading-tight opacity-95">
+                  <div className="text-[9px] font-bold text-[#6b5b3e]">{d.date?.slice(5) || d.date}</div>
+                  <div className="flex justify-between text-[#b8533a]"><span>↑ {d.limitUp}</span><span>↓ {d.limitDown}</span><span>⚡ {d.blownUp}</span></div>
+                  <div className="text-[#8b7a5e]">炸板率 {d.blownRate != null ? d.blownRate.toFixed(1) + "%" : "-"}</div>
+                </div>
+              </div>
+            </>
           );
         })()}
-      </svg>
+      </div>
     </div>
   );
 }
@@ -405,23 +485,28 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
               const { mood, sentiment: si, riseFall } = sentData;
               return (
                 <>
-                  {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
-                  <div className="flex shrink-0 gap-2">
-                    <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
-                    <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
-                    <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
-                  </div>
+                  <div className="flex gap-2">
+                    {/* 左列: 6个小卡片 (固定49%宽, 为折线图让出更多宽度) */}
+                    <div className="flex w-[49%] shrink-0 flex-col gap-2">
+                      {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
+                      <div className="flex shrink-0 gap-2">
+                        <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
+                        <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
+                        <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
+                      </div>
 
-                  {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
-                  <div className="flex shrink-0 gap-2">
-                    <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
-                    <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
-                    <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
-                  </div>
+                      {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
+                      <div className="flex shrink-0 gap-2">
+                        <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
+                        <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
+                        <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
+                      </div>
+                    </div>
 
-                  {/* 第三行: 历史趋势图 (跨列) */}
-                  <div className="flex shrink-0 gap-2">
-                    {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
+                    {/* 右列: 折线图占满右侧, 竖跨两行高度 */}
+                    <div className="flex min-w-0 flex-1">
+                      {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
+                    </div>
                   </div>
                 </>
               );

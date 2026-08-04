@@ -81,7 +81,7 @@ async function kplFetch(path, params = {}) {
   try {
     const resp = await fetch(url.toString(), {
       headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000),
     });
     const json = await resp.json();
     return json;
@@ -90,7 +90,7 @@ async function kplFetch(path, params = {}) {
     try {
       const text = await curlText(url.toString(), {
         referer: "https://kpl.liuhepc.cn/",
-        timeout: 15000,
+        timeout: 8000,
         encoding: "utf-8",
       });
       return JSON.parse(text);
@@ -1569,6 +1569,58 @@ setInterval(collectSpotDaily, 4 * 3600 * 1000).unref();
 // 启动 1 分钟后先补一轮(部署当日即有数据)
 setTimeout(collectSpotDaily, 60 * 1000).unref();
 
+/* ---------------- 市场情绪折线数据本地存储与容错 ---------------- */
+// 本地持久化目录: server/data/market-sentiment/
+//   trend.json  : 合并后的全量涨跌趋势(按日期去重/更新, 超上限丢弃最旧)
+//   snapshot.json: 最近一次成功刷新的完整面板快照(供实时失败时回退)
+const MS_DATA_DIR = path.join(__dirname, "data", "market-sentiment");
+const MS_TREND_FILE = path.join(MS_DATA_DIR, "trend.json");
+const MS_SNAPSHOT_FILE = path.join(MS_DATA_DIR, "snapshot.json");
+const MS_TREND_MAX = 250; // 上游 raw_data 最多约250个交易日, 上限即一份完整年度记录
+
+function loadMsTrend() {
+  try { return JSON.parse(fs.readFileSync(MS_TREND_FILE, "utf-8") || "[]"); } catch { return []; }
+}
+function loadMsSnapshot() {
+  try { return JSON.parse(fs.readFileSync(MS_SNAPSHOT_FILE, "utf-8") || "null"); } catch { return null; }
+}
+// 将上游 raw_data 合并进本地存储: 按日期覆盖更新, 新增保留, 超出上限丢弃最旧记录
+function mergeMsTrend(rawData) {
+  if (!Array.isArray(rawData) || !rawData.length) return loadMsTrend();
+  const byDate = new Map();
+  for (const r of rawData) {
+    const date = r && r[6];
+    if (!date) continue;
+    byDate.set(date, { date, limitUp: r[0], limitDown: r[1], brokenUp: r[2], blownUp: r[3], blownRate: r[4] });
+  }
+  for (const rec of loadMsTrend()) if (rec && rec.date) byDate.set(rec.date, rec);
+  let list = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  if (list.length > MS_TREND_MAX) list = list.slice(list.length - MS_TREND_MAX); // 丢弃最旧
+  try { fs.mkdirSync(MS_DATA_DIR, { recursive: true }); fs.writeFileSync(MS_TREND_FILE, JSON.stringify(list), "utf-8"); }
+  catch (e) { console.error("[ms-trend] write error:", e?.message || e); }
+  return list;
+}
+// 保存最近一次成功刷新快照(实时持久化)
+function saveMsSnapshot(payload) {
+  try { fs.mkdirSync(MS_DATA_DIR, { recursive: true }); fs.writeFileSync(MS_SNAPSHOT_FILE, JSON.stringify({ savedAt: Date.now(), payload }), "utf-8"); }
+  catch (e) { console.error("[ms-snapshot] write error:", e?.message || e); }
+}
+// 从本地存储构建趋势数据: 取最近半年(130个交易日), 最新日期在前(与前端 reversed 预期一致)
+function msTrendFromStore() {
+  const asc = [...loadMsTrend()].sort((a, b) => a.date.localeCompare(b.date));
+  return asc.slice(-130).reverse();
+}
+// 市场情绪数据完全不可用时的兜底结构, 保证前端整体不受影响
+function msFallbackPayload() {
+  return {
+    dataSuccess: false, fromCache: true,
+    error: "市场情绪数据不可用(实时获取失败且无本地快照), 返回空结构以免影响页面",
+    mood: { upCount: 0, downCount: 0, limitUp: 0, limitDown: 0, turnover: 0, prevTurnover: 0, ratio: 1, marketColor: 0, totalCount: 0, upRatio: 0, downRatio: 0, turnoverChange: 0, volLevel: "" },
+    sentiment: { plateId: "", bullishCount: 0, bearishCount: 0, totalStockCount: 0, netBullish: 0, sentimentScore: 0, sentimentLevel: "", sentimentDesc: "", stockSamples: [] },
+    riseFall: { limitUpCount: 0, limitDownCount: 0, blownLimitUpCount: 0, brokenLimitUpCount: 0, blownLimitUpRate: 0, yesterdayLimitUpPerf: 0, yesterdayBrokenPerf: 0, date: "", trendData: [] },
+  };
+}
+
 /* ---------------- 市场情绪v2: 基于 kpl 三接口 (mood / sentiment-indicator / rise-fall) ---------------- */
 async function handleMarketSentimentV2() {
   try {
@@ -1583,10 +1635,12 @@ async function handleMarketSentimentV2() {
     const sentimentInd = results[1].status === "fulfilled" ? results[1].value : null;
     const riseFall = results[2].status === "fulfilled" ? results[2].value : null;
 
-    // 如果 mood 接口失败，视作整体不可用
+    // 如果 mood 接口失败: 回退到日内最后一次成功快照; 无快照则返回兜底结构
     if (!mood) {
       console.error("[market-sentiment-v2] mood API failed, results:", results.map(r => r.status));
-      return { dataSuccess: false, error: "mood API 不可用" };
+      const snap = loadMsSnapshot();
+      if (snap) return { ...snap, fromCache: true, refetch: "fallback-snapshot" };
+      return msFallbackPayload();
     }
 
     // --- mood ---
@@ -1663,13 +1717,12 @@ async function handleMarketSentimentV2() {
     // --- rise-fall ---
     const rf = riseFall || {};
     const rawData = Array.isArray(rf?.raw_data) ? rf.raw_data : [];
-    // 最近7天趋势数据 (用于图表)
-    const trendData = rawData.slice(0, 7).map(r => ({
-      date: r[6], limitUp: r[0], limitDown: r[1],
-      brokenUp: r[2], blownUp: r[3], blownRate: r[4],
-    }));
+    // 合并进本地存储(实时更新当天数据, 新增替换最旧; 当日数据实时落盘)
+    const stored = mergeMsTrend(rawData);
+    // 从本地存储取最近半年趋势数据(最新在前), 供图表使用
+    const trendData = msTrendFromStore();
 
-    return {
+    const payload = {
       dataSuccess: true,
       mood: {
         upCount, downCount, limitUp, limitDown,
@@ -1698,9 +1751,15 @@ async function handleMarketSentimentV2() {
         trendData,
       },
     };
+    // 保存最近一次成功快照(实时持久化, 供失败时回退)
+    saveMsSnapshot(payload);
+    return payload;
   } catch (e) {
     console.error("[market-sentiment-v2] kpl error:", e.message);
-    return { dataSuccess: false, error: e.message };
+    // 实时加载失败: 回退到日内最后一次成功刷新数据
+    const snap = loadMsSnapshot();
+    if (snap) return { ...snap, fromCache: true, refetch: "fallback-snapshot" };
+    return msFallbackPayload();
   }
 }
 
@@ -2172,14 +2231,14 @@ const routes = {
     handleStockFlows(q.get("code") || "").then((rows) => rows[0] || Promise.reject(new Error("empty stock-flow"))),
   "/api/stock-flows": async (q) => handleStockFlows(q.get("codes") || ""),
   "/api/stock-main-forces": async (q) =>
-    cached(`smf:${q.get("code")}`, 15000, () => handleStockMainForces(q.get("code") || "")), // 主力净额, 15s 缓存
+    cached(`smf:${q.get("code")}`, 30000, () => handleStockMainForces(q.get("code") || "")), // 主力净额, 30s 缓存(减少上游慢请求)
   "/api/board-flow": async (q) => cached(`bf:${q.get("n")}`, 120000, () => handleBoardFlow(q.get("n") || "20")),
   "/api/stock-boards": async (q) =>
     cached(`sb:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockBoards(q.get("code") || "")), // 行业/概念, 24h 缓存
   "/api/stock-profile": async (q) =>
     cached(`sp:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockProfile(q.get("code") || "")), // 主营/公司名, 24h 缓存
   "/api/stock-quote": async (q) =>
-    cached(`sq:${q.get("code")}`, 5000, () => handleStockQuote(q.get("code") || "")), // 实时行情, 5s 缓存
+    cached(`sq:${q.get("code")}`, 10000, () => handleStockQuote(q.get("code") || "")), // 实时行情, 10s 缓存(价格由报价中心5s覆盖, 此处减少上游慢请求)
   "/api/stock-finance": async (q) =>
     cached(`sfn:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockFinance(q.get("code") || "")), // 财务指标, 24h 缓存
   "/api/news": async (q) =>
