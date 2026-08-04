@@ -1,15 +1,7 @@
 import { Panel, type PanelZoomProps } from "./Panel";
-import { QuoteRow } from "./QuoteRow";
-import { usePolling } from "@/hooks/usePolling";
-import { api } from "@/lib/api";
-import { clsChg, fmtYuan } from "@/lib/format";
 
-/** 实时资金流向 — 个股主力净流入 TOP(东财口径) */
+/** 主力净流入排行 — 预留空面板，数据内容已清空 */
 export function MoneyFlowPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
-  const { data, error } = usePolling(() => api.moneyflow(15), 20000);
-
-  const total = data?.reduce((s, d) => s + d.netIn, 0) ?? 0;
-
   return (
     <Panel
       className={className}
@@ -17,34 +9,11 @@ export function MoneyFlowPanel({ className = "", ...zoomProps }: { className?: s
       title="主力净流入排行"
       icon="⇄"
       accent="#d4943a"
-      right={
-        <span className="text-[10px] text-[#a8987e]">
-          TOP15 合计 <span className={clsChg(total)}>{fmtYuan(total)}</span>
-        </span>
-      }
     >
-      <div className="h-full overflow-y-auto p-1.5">
-        <div className="flex items-center justify-between px-2 py-1 text-[10px] text-[#a8987e]">
-          <span>个股 · 主力净额/净占比</span>
-          <span>成交额 · 现价</span>
+      <div className="flex h-full min-h-0 flex-col items-center justify-center">
+        <div className="text-center text-[11px] text-[#a8987e]">
+          预留位置<br />待替换新功能
         </div>
-        {data?.map((s) => (
-          <QuoteRow
-            key={s.symbol}
-            code={s.symbol}
-            name={s.name}
-            amount={s.amount > 0 ? fmtYuan(s.amount) : undefined}
-            turnover={s.turnover > 0 ? `${s.turnover.toFixed(1)}%` : undefined}
-            spark
-            boards
-            flow
-          />
-        ))}
-        {!data && (
-          <div className="p-6 text-center text-[11px] text-[#a8987e]">
-            {error ? <span className="text-[#b8533a]">资金流数据源连接失败,自动重试中…<br />{error}</span> : "资金流数据加载中…"}
-          </div>
-        )}
       </div>
     </Panel>
   );

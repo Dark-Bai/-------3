@@ -399,51 +399,15 @@ async function handleMinute(code) {
 }
 
 /* ---------------- 腾讯板块榜(行业 t=01 / 概念 t=02) ---------------- */
+/* 已清空: 预留新功能, 接口返回空数组 */
 async function handleBoards(type, dir, n) {
-  const url = `https://ifzq.gtimg.cn/appstock/app/mktHs/rank?l=${encodeURIComponent(n)}&p=1&t=${encodeURIComponent(type)}/averatio&o=${encodeURIComponent(dir)}`;
-  const text = await fetchText(url);
-  const json = JSON.parse(text);
-  return (json?.data || []).map((b) => ({
-    code: b.bd_code,
-    name: b.bd_name,
-    price: num(b.bd_zxj),
-    change: num(b.bd_zd),
-    pct: num(b.bd_zdf),
-    pct5: num(b.bd_zdf5),
-    pct20: num(b.bd_zdf20),
-    leadCode: b.nzg_code,
-    leadName: b.nzg_name,
-    leadPrice: num(b.nzg_zxj),
-    leadPct: num(b.nzg_zdf),
-  }));
+  return [];
 }
 
 /* ---------------- 板块成分股(上游单页上限100, 自动翻页) ---------------- */
+/* 已清空: 预留新功能, 接口返回空数组 */
 async function handleBoardStocks(code, dir, n) {
-  const want = Math.min(parseInt(n) || 12, 400);
-  const map = (s) => ({
-    code: s.code,
-    name: s.name,
-    price: num(s.zxj),
-    pct: num(s.zdf),
-    turnover: num(s.hsl),
-    pe: num(s.pe_ttm),
-    speed: num(s.speed),
-    circ_mv: num(s.ltsz), // 流通市值(亿)
-    total_mv: num(s.zsz),
-    amount: num(s.volume) * 100 * num(s.zxj), // 成交量(手)估算成交额(元)
-  });
-  const out = [];
-  for (let offset = 0; out.length < want; offset += 100) {
-    const url = `https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList?board_code=${encodeURIComponent(code)}&sort_type=PriceRatio&direct=${encodeURIComponent(dir)}&offset=${offset}&count=100`;
-    const text = await fetchText(url);
-    const json = JSON.parse(text);
-    const list = json?.data?.rank_list || [];
-    if (!list.length) break;
-    out.push(...list.map(map));
-    if (list.length < 100) break;
-  }
-  return out.slice(0, want);
+  return [];
 }
 
 /* ---------------- 外盘期货(金银铜油):腾讯主源 + 新浪兜底 ---------------- */
@@ -760,30 +724,14 @@ async function rankViaTencent(sort, asc, want) {
 }
 
 async function handleRank(sort, asc, n) {
-  const want = parseInt(n) || 30;
-  try {
-    const rows = await rankViaSina(sort, asc, want);
-    if (rows.length) return rows;
-  } catch { /* 新浪不可用则走腾讯 */ }
-  return rankViaTencent(sort, asc, want);
+  /* 已清空: 预留新功能, 接口返回空数组 */
+  return [];
 }
 
 /* ---------------- 新浪个股主力资金流(兜底) ---------------- */
+/* 已清空: 预留新功能, 接口返回空数组 */
 async function handleMoneyFlow(n) {
-  const url = `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj?page=1&num=${n}&sort=netamount&asc=0`;
-  const arr = await fetchSinaJson(url);
-  if (!Array.isArray(arr)) return [];
-  return arr.filter((s) => typeof s.name === "string" && s.name.trim()).map((s) => ({
-    symbol: s.symbol,
-    name: s.name,
-    price: num(s.trade),
-    pct: +(num(s.changeratio) * 100).toFixed(2),
-    amount: num(s.amount),
-    netIn: num(s.netamount), // 主力净流入(元)
-    netRatio: +(num(s.ratioamount) * 100).toFixed(2),
-    r0Net: num(s.r0_net), // 超大单净流入
-    turnover: num(s.turnover),
-  }));
+  return [];
 }
 
 /* ---------------- 个股所属板块(东财): 行业/地域/概念 ---------------- */
@@ -876,24 +824,8 @@ const emSymbol = (code6) => `${"689".includes(code6[0]) ? "sh" : code6[0] === "4
 
 /** 主力净流入排名(clist, f62 降序) */
 async function handleMoneyFlowEM(n) {
-  return emEnqueue(async () => {
-    const fields = "f12,f14,f2,f3,f62,f184,f66,f6,f8";
-    const url = `https://push2delay.eastmoney.com/api/qt/clist/get?fid=f62&po=1&pz=${n}&pn=1&np=1&fltt=2&invt=2&fs=${encodeURIComponent(EM_FS)}&fields=${fields}`;
-    const diff = (await emGet(url))?.data?.diff || [];
-    return diff
-      .filter((s) => s.f14 && num(s.f2) > 0)
-      .map((s) => ({
-        symbol: emSymbol(s.f12),
-        name: s.f14,
-        price: num(s.f2),
-        pct: num(s.f3),
-        amount: num(s.f6), // 成交额(元)
-        netIn: num(s.f62), // 主力净流入(元)
-        netRatio: num(s.f184), // 主力净占比(%)
-        r0Net: num(s.f66), // 超大单净流入
-        turnover: num(s.f8),
-      }));
-  });
+  /* 已清空: 预留新功能, 接口返回空数组 */
+  return [];
 }
 
 /** 批量个股资金流(ulist 一次最多 50 只, 按 code 30s 缓存) */
