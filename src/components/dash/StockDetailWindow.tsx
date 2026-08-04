@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FloatingWindow } from "./FloatingWindow";
-import { api, type Quote } from "@/lib/api";
+import { api, type MinuteData, type Quote } from "@/lib/api";
 import { useQuote } from "@/lib/market";
 import { clsChg, fmtPct, fmtPrice, fmtYuan } from "@/lib/format";
-import { Spark } from "./Spark";
+import { MinuteChart } from "./MinuteChart";
 import { usePolling } from "@/hooks/usePolling";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
@@ -17,9 +17,68 @@ interface StockDetailWindowProps {
 /** 统计数据项: 标签 + 值 */
 function StatRow({ label, value, valueCls = "text-[#6b5b3e]", className = "" }: { label: string; value: string; valueCls?: string; className?: string }) {
   return (
-    <div className={`flex items-center justify-between border-b border-[#e0d5c0]/30 py-1.5 last:border-0 ${className}`}>
-      <span className="text-[11px] text-[#a8987e]">{label}</span>
-      <span className={`text-[14px] font-semibold ${valueCls}`} style={TNUM}>{value}</span>
+    <div className={`flex items-center justify-between border-b border-[#e0d5c0]/30 py-[5px] last:border-0 ${className}`}>
+      <span className="text-[10px] text-[#a8987e]">{label}</span>
+      <span className={`text-[12px] font-semibold ${valueCls}`} style={TNUM}>{value}</span>
+    </div>
+  );
+}
+
+const MINUTE_H_KEY = "stock-detail-minute-height";
+const MINUTE_H_MIN = 52;
+const MINUTE_H_MAX = 320;
+
+/** 可调高度的分时图容器: 底部拖拽手柄调整高度, 结果持久化到 localStorage */
+function ResizableMinuteChart({ minute }: { minute: MinuteData | null }) {
+  const [h, setH] = useState(() => {
+    const saved = Number(localStorage.getItem(MINUTE_H_KEY));
+    return Number.isFinite(saved) && saved > 0 ? Math.min(MINUTE_H_MAX, Math.max(MINUTE_H_MIN, saved)) : 200;
+  });
+  const hRef = useRef(h);
+  const rafRef = useRef(0);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = hRef.current;
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(MINUTE_H_MAX, Math.max(MINUTE_H_MIN, startH + (ev.clientY - startY)));
+      hRef.current = next;
+      if (rafRef.current) return; // 单帧合并, 保证拖拽流畅
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0;
+        setH(hRef.current);
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      localStorage.setItem(MINUTE_H_KEY, String(hRef.current));
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  return (
+    <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6]">
+      <div className="p-2">
+        {minute && minute.points.length > 1 ? (
+          <MinuteChart points={minute.points} prec={minute.prec} height={h} />
+        ) : (
+          <div className="flex items-center justify-center text-[10px] text-[#a8987e]" style={{ height: h }}>
+            {minute ? "暂无分时数据" : "分时数据加载中..."}
+          </div>
+        )}
+      </div>
+      <div
+        className="group flex cursor-ns-resize touch-none items-center justify-center py-1"
+        onPointerDown={onPointerDown}
+        title="拖动调整分时图高度"
+      >
+        <span className="h-[3px] w-8 rounded-full bg-[#d4943a]/40 transition group-hover:bg-[#d4943a]/80" />
+      </div>
     </div>
   );
 }
@@ -118,7 +177,7 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
       accent="#d4943a"
       onClose={onClose}
       defaultWidth={460}
-      defaultHeight={430}
+      defaultHeight={600}
     >
       <div className="flex h-full flex-col gap-3 p-4">
         {/* 顶部: 代码 + 价格 + 涨跌幅 */}
@@ -143,23 +202,24 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
           </div>
         </div>
 
-        {/* 分时走势图 */}
-        <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6] p-2">
-          {minute && minute.points.length > 1 ? (
-            <Spark points={minute.points} prec={minute.prec} width={428} height={52} fluid session="ashare" />
-          ) : (
-            <div className="flex h-[52px] items-center justify-center text-[10px] text-[#a8987e]">
-              {minute ? "暂无分时数据" : "分时数据加载中..."}
-            </div>
-          )}
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        {/* 昨收/最高/最低/开盘: 纯文本, 无边框 */}
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-[#a8987e]">昨收</span>
+          <span className="font-semibold text-[#6b5b3e]" style={TNUM}>{prev != null ? fmtPrice(prev) : "—"}</span>
+          <span className="text-[#a8987e]">最高</span>
+          <span className="font-semibold text-[#6b5b3e]" style={TNUM}>{high != null ? fmtPrice(high) : "—"}</span>
+          <span className="text-[#a8987e]">最低</span>
+          <span className="font-semibold text-[#6b5b3e]" style={TNUM}>{low != null ? fmtPrice(low) : "—"}</span>
+          <span className="text-[#a8987e]">开盘</span>
+          <span className="font-semibold text-[#6b5b3e]" style={TNUM}>{open != null ? fmtPrice(open) : "—"}</span>
         </div>
 
+        {/* 可拖拽调整高度的分时走势图 */}
+        <ResizableMinuteChart minute={minute} />
+
         {/* 核心数据格 */}
-        <div className="grid grid-cols-2 gap-x-5 rounded border border-[#e0d5c0] bg-[#f5f0e6] p-3">
-          <StatRow label="昨收" value={prev != null ? fmtPrice(prev) : "—"} />
-          <StatRow label="开盘" value={open != null ? fmtPrice(open) : "—"} />
-          <StatRow label="最高" value={high != null ? fmtPrice(high) : "—"} />
-          <StatRow label="最低" value={low != null ? fmtPrice(low) : "—"} />
+        <div className="grid grid-cols-4 gap-x-3">
           <StatRow label="成交额" value={amount != null && amount > 0 ? fmtYuan(amount * 10000) : "—"} />
           <StatRow label="换手率" value={turnover != null ? `${turnover.toFixed(2)}%` : "—"} />
           <StatRow
@@ -168,12 +228,7 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
             valueCls={mainForces ? clsChg(mainForces.netAmount) : "text-[#6b5b3e]"}
           />
           <StatRow
-            label="主动买/卖"
-            value={mainForces ? `${fmtYuan(mainForces.buyAmount)} / ${fmtYuan(mainForces.sellAmount)}` : "—"}
-          />
-          <StatRow
             label="总市值"
-            className="col-span-2"
             value={marketValue != null && marketValue > 0 ? fmtYuan(marketValue) : "—"}
           />
         </div>
@@ -211,9 +266,10 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
             )}
           </div>
         )}
+        </div>
 
         {/* 底部时间戳 */}
-        <div className="mt-auto flex items-center justify-between border-t border-[#e0d5c0] pt-2 text-[9px] text-[#a8987e]">
+        <div className="flex items-center justify-between border-t border-[#e0d5c0] pt-2 text-[9px] text-[#a8987e]">
           <span>数据来源: 开盘啦 KPL · 实时</span>
           <span>更新: {hub?.updated ? new Date(hub.updated).toLocaleTimeString("zh-CN") : "—"}</span>
         </div>
