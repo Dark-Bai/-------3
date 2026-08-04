@@ -1,9 +1,14 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Panel, type PanelZoomProps } from "./Panel";
 import { usePolling } from "@/hooks/usePolling";
 import { api, type PluginMarketSentimentData } from "@/lib/api";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
+/** 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。此处纯时间判断, 前端据此启停轮询 */
+function inPollWindow(now = new Date()) {
+  const m = now.getHours() * 60 + now.getMinutes();
+  return m >= 8 * 60 + 59 && m < 15 * 60;
+}
 const COLORS = {
   red: "#b8533a",
   green: "#4a6b3f",
@@ -445,15 +450,40 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
 
 /* ========== 主面板: 市场情绪 (独立) ========== */
 export function MarketSentimentPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
+  // 轮询时段: 每日 08:59-15:00; 每 30s 校准一次, 收盘后停发、次日开盘自动恢复
+  const [inWindow, setInWindow] = useState(() => inPollWindow());
+  useEffect(() => {
+    const t = setInterval(() => setInWindow(inPollWindow()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 轮询: 时段内每 15s 拉取; 收盘后 enabled=false → 完全停发, 保留当前数据(定格)
   const { data: sentData, loading } = usePolling(
     () => api.pluginMarketSentiment(),
-    15000,
-    []
+    inWindow ? 15000 : 0,
+    [],
+    undefined,
+    inWindow
   );
+
+  // 收盘停止期间: 单次拉取后端持久化的定格快照(不轮询), 保证刷新/重开页面也能展示定格数据
+  const [frozen, setFrozen] = useState<PluginMarketSentimentData | null>(null);
+  useEffect(() => {
+    if (inWindow) return;
+    let cancelled = false;
+    api.pluginMarketSentiment().then((d) => { if (!cancelled) setFrozen(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [inWindow]);
+
+  const effective = sentData ?? frozen;
+  // 状态: 已停止 / 数据加载中 / 轮询中
+  const stateKey = !inWindow ? "stopped" : (loading && !effective ? "loading" : "polling");
+  const stateLabel = stateKey === "stopped" ? "已停止" : stateKey === "loading" ? "数据加载中" : "轮询中";
+  const stateColor = stateKey === "stopped" ? "#8b7a5e" : stateKey === "loading" ? "#d4943a" : "#4a6b3f";
 
   const updateTime = useMemo(() => {
     return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }, [sentData]);
+  }, [effective]);
 
   return (
     <Panel
@@ -471,18 +501,24 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
             <span className="text-[#d4c5a8]">|</span>
             <span>数据源: 开盘啦</span>
             <span className="text-[#d4c5a8]">|</span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: stateColor }} />
+              <span style={{ color: stateColor }}>{stateLabel}</span>
+            </span>
+            {stateKey === "stopped" && <span className="text-[10px] text-[#a8987e]">(数据定格)</span>}
+            <span className="text-[#d4c5a8]">|</span>
             <span>更新: {updateTime}</span>
           </div>
         </div>
 
-        {loading ? (
+        {loading && !effective ? (
           <Loading />
-        ) : !sentData?.dataSuccess ? (
-          <Failed msg="市场情绪数据暂不可用" />
+        ) : !effective?.dataSuccess ? (
+          <Failed msg={stateKey === "stopped" ? "暂无定格数据" : "市场情绪数据暂不可用"} />
         ) : (
           <ScrollSentinel>
             {(() => {
-              const { mood, sentiment: si, riseFall } = sentData;
+              const { mood, sentiment: si, riseFall } = effective;
               return (
                 <>
                   <div className="flex gap-2">

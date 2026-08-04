@@ -12,12 +12,14 @@ if (typeof document !== "undefined") {
 /** 通用轮询 hook: 立即执行 + 固定间隔刷新
  *  - 上一轮完成后才排下一轮, 组件卸载自动停止
  *  - 后台标签页(hidden)暂停轮询, 回到前台立即补拉一次并恢复
- *  - 传入 isEqual 且新旧数据相等时复用旧引用且不刷新 updated, 整次跳过重渲染 */
+ *  - 传入 isEqual 且新旧数据相等时复用旧引用且不刷新 updated, 整次跳过重渲染
+ *  - enabled=false 时完全停发请求并保留当前数据(定格), 置 true 立即补拉一次 */
 export function usePolling<T>(
   fn: () => Promise<T>,
   interval: number,
   deps: unknown[] = [],
   isEqual?: (a: T, b: T) => boolean,
+  enabled = true,
 ) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +36,8 @@ export function usePolling<T>(
   });
 
   useEffect(() => {
+    // 停用(如收盘后): 不请求、不调度, 保留当前数据(定格); 重新启用时本 effect 重跑并立即补拉
+    if (!enabled) return;
     let dead = false;
     let timer = 0;
     let inflight = false; // 上一轮仍在途时跳过新触发, 防乱序返回旧数据覆盖新数据
@@ -77,7 +81,7 @@ export function usePolling<T>(
       visListeners.delete(onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interval, ...deps]);
+  }, [interval, ...deps, enabled]);
 
   return { data, error, updated, loading };
 }

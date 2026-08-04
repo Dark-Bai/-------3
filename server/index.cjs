@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
+const { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -1386,7 +1386,43 @@ function msFallbackPayload() {
 // 不必随 mood 每 15s 轮询; 用较长 TTL 缓存(5min)解耦, 约 20 倍削减该接口调用量。
 // 实时涨停/跌停家数已由 mood API 提供, 不受影响。cached 失败会自动回退旧数据。
 const MS_RISE_FALL_TTL = 5 * 60 * 1000; // 5 分钟
+// 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。15:00 后停止轮询并定格数据, 次日 08:59 自动恢复。
+// 返回 { active, state, label } state = "polling" | "stopped"
+function marketSentimentPollState(now = new Date()) {
+  const m = now.getHours() * 60 + now.getMinutes();
+  const start = 8 * 60 + 59; // 08:59
+  const end = 15 * 60;       // 15:00
+  const active = m >= start && m < end;
+  return { active, state: active ? "polling" : "stopped", label: active ? "轮询中" : "已停止" };
+}
+// 收盘定格: 15:00 后把当日最后一次成功数据持久化为离线快照(存 SQLite meta).
+// 用 meta 键去重, 每天仅落一次; 开盘拿到新数据后由 handleMarketSentimentV2 清除。
+function scheduleMsDaily() {
+  const tryCapture = () => {
+    try {
+      const ps = marketSentimentPollState();
+      if (ps.active) return; // 轮询时段: 数据由实时轮询负责, 无需离线快照
+      const off = loadMsOffline();
+      if (off && off.date === new Date().toISOString().slice(0, 10)) return; // 今日已保存
+      const snap = loadMsSnapshot();
+      if (snap) {
+        saveMsOffline(snap.payload || snap);
+        console.log(`[ms-daily] 收盘定格已保存 ${off ? "overwrite" : "new"} (${new Date().toLocaleString("zh-CN")})`);
+      }
+    } catch (e) { console.error("[ms-daily] error:", e?.message || e); }
+  };
+  tryCapture();
+  setInterval(tryCapture, 30 * 1000).unref();
+}
 async function handleMarketSentimentV2() {
+  const ps = marketSentimentPollState();
+  // 收盘(15:00后): 停止轮询, 直接返回定格快照, 不请求上游 KPL
+  if (!ps.active) {
+    const off = loadMsOffline();
+    const last = off?.payload || loadMsSnapshot()?.payload;
+    if (last) return { ...last, dataSuccess: true, fromCache: true, pollState: "stopped" };
+    return { ...msFallbackPayload(), pollState: "stopped" };
+  }
   try {
     // 使用 allSettled 防止单个API失败拖垮整体; rise-fall 走 5min 缓存降低调用频率
     const results = await Promise.allSettled([
@@ -1518,13 +1554,15 @@ async function handleMarketSentimentV2() {
     };
     // 保存最近一次成功快照(实时持久化, 供失败时回退)
     saveMsSnapshot(payload);
-    return payload;
+    // 开盘拿到实时新数据: 清除前一日收盘定格的离线快照
+    if (loadMsOffline()) { clearMsOffline(); console.log("[ms-daily] 已清除前一日离线定格数据"); }
+    return { ...payload, pollState: "polling" };
   } catch (e) {
     console.error("[market-sentiment-v2] kpl error:", e.message);
     // 实时加载失败: 回退到日内最后一次成功刷新数据
     const snap = loadMsSnapshot();
-    if (snap) return { ...snap, fromCache: true, refetch: "fallback-snapshot" };
-    return msFallbackPayload();
+    if (snap) return { ...snap, fromCache: true, refetch: "fallback-snapshot", pollState: "polling" };
+    return { ...msFallbackPayload(), pollState: "polling" };
   }
 }
 
@@ -1748,13 +1786,16 @@ function fengWeightedScore(dims, w) {
 
 // 聚合各 kpl 接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
 async function handleFengFrontBase(date) {
+  // 6 个上游各自限时 3s: 慢/挂起的接口独立超时, 由 allSettled 捕获为 rejected → 该字段返回空/兜底,
+  // 不再因最慢接口拖累整体(此前最坏 10-15s, 超前端 8s 超时被误判为调取失败)
+  const FENG_UPSTREAM_TTL = 3000;
   const results = await Promise.allSettled([
-    kplFetch("/api/ladder/realtime-boards"),
-    kplFetch("/api/ladder/sector", date ? { date } : {}),
-    kplFetch("/api/fengk/yd-plate", date ? { date } : {}),
-    kplFetch("/api/theme/hot"),
-    kplFetch("/api/news/theme"),
-    kplFetch("/api/advanced/fengk-best"),
+    withTimeout(kplFetch("/api/ladder/realtime-boards"), FENG_UPSTREAM_TTL, "realtime-boards"),
+    withTimeout(kplFetch("/api/ladder/sector", date ? { date } : {}), FENG_UPSTREAM_TTL, "sector"),
+    withTimeout(kplFetch("/api/fengk/yd-plate", date ? { date } : {}), FENG_UPSTREAM_TTL, "yd-plate"),
+    withTimeout(kplFetch("/api/theme/hot"), FENG_UPSTREAM_TTL, "theme-hot"),
+    withTimeout(kplFetch("/api/news/theme"), FENG_UPSTREAM_TTL, "theme-news"),
+    withTimeout(kplFetch("/api/advanced/fengk-best"), FENG_UPSTREAM_TTL, "fengk-best"),
   ]);
 
   const [boardsRes, ladderSecRes, ydRes, themeRes, newsRes, fengBestRes] = results;
@@ -2370,4 +2411,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`[market-cockpit] listening on :${PORT}`);
   scheduleDailyBoardsRefresh(); // 每日行业/概念批量刷新(启动后立即检查一次, 之后每小时)
+  scheduleMsDaily(); // 市场情绪收盘定格(15:00后保存离线快照, 每30s检查)
 });

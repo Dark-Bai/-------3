@@ -143,6 +143,36 @@ function setMeta(key, value) {
   db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
 }
 
+/** 删除持久化键值元数据 */
+function deleteMeta(key) {
+  db.prepare(`DELETE FROM meta WHERE key = ?`).run(key);
+}
+
+/* ---------------- 市场情绪离线数据(收盘定格) ---------------- */
+// 收盘(15:00)后把当日最后一次成功数据持久化为"离线快照", 开盘重新拿到新数据后删除,
+// 保证停止轮询期间前端始终展示定格数据。存储于 meta 表, 键 ms_offline。
+const MS_OFFLINE_KEY = "ms_offline";
+
+/** 保存市场情绪离线快照(收盘定格) */
+function saveMsOffline(payload) {
+  try {
+    setMeta(MS_OFFLINE_KEY, JSON.stringify({ date: new Date().toISOString().slice(0, 10), savedAt: Date.now(), payload }));
+  } catch (e) { console.error("[ms-offline] save error:", e?.message || e); }
+}
+
+/** 读取市场情绪离线快照; 不存在返回 null */
+function loadMsOffline() {
+  try {
+    const v = getMeta(MS_OFFLINE_KEY);
+    return v ? JSON.parse(v) : null;
+  } catch { return null; }
+}
+
+/** 删除市场情绪离线快照(开盘拿到新数据后调用) */
+function clearMsOffline() {
+  deleteMeta(MS_OFFLINE_KEY);
+}
+
 /* ---------------- 涨跌停趋势(market_trend) ---------------- */
 
 /** 批量 UPSERT 趋势记录(按日期, 已存在则更新, 历史不变行开销极小) */
@@ -184,4 +214,4 @@ function trendCount() {
   return r ? r.c : 0;
 }
 
-module.exports = { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, upsertTrends, getTrends, trendCount, DB_PATH };
+module.exports = { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, DB_PATH };
