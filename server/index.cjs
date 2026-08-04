@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount } = require("./stock-db.cjs");
+const { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -333,6 +333,15 @@ async function handleQuotes(codes) {
 
 /* ---------------- 腾讯分钟线(指数/个股 日内走势) ---------------- */
 async function handleMinute(code) {
+  // 归一化代码: 裸 6 位 A股代码(如板块榜/涨停数据给的 600519)补上 sh/sz/bj 前缀,
+  // 否则分时取数会跳过 KPL 路径、落回腾讯且带错格式(腾讯需要 sh600519), 导致分时图加载失败
+  code = String(code || "").toLowerCase();
+  if (/^\d{6}$/.test(code)) {
+    const c = code[0];
+    if (c === "6" || c === "9") code = `sh${code}`;
+    else if (c === "0" || c === "2" || c === "3") code = `sz${code}`;
+    else if (c === "4" || c === "8") code = `bj${code}`;
+  }
   // 美股指数(us*)只有 usMinute 接口返回全日序列, minute/query 只给最后一个点
   // usN225(日经225) 和 usKS11(韩国KOSPI) 从新浪全球指数分钟线获取
   const SINA_INDEX_MAP = { usN225: "N225", usKS11: "KS11" };
@@ -411,183 +420,9 @@ async function handleBoardStocks(code, dir, n) {
   return [];
 }
 
-/* ---------------- 外盘期货(金银铜油):腾讯主源 + 新浪兜底 ---------------- */
-function parseFutures(text) {
-  const out = Object.create(null); // 无原型对象: 上游 symbol 作为 key, 杜绝 __proto__ 污染
-  const re = /(?:hq_str_|v_)(\w+)="([^"]*)"/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const f = m[2].split(",");
-    if (f.length < 14 || !f[0]) continue;
-    const price = num(f[0]);
-    const prevSettle = num(f[7]);
-    out[m[1]] = {
-      symbol: m[1],
-      name: f[13],
-      price,
-      high: num(f[4]),
-      low: num(f[5]),
-      open: num(f[8]),
-      prev: prevSettle,
-      change: +(price - prevSettle).toFixed(4),
-      pct: prevSettle ? +(((price - prevSettle) / prevSettle) * 100).toFixed(3) : 0,
-      time: `${f[12]} ${f[6]}`,
-    };
-  }
-  return out;
-}
-
+/* ---------------- 通用工具(供指数/榜单等共用) ---------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-
-
-/* ---------------- 内盘期货(沪金等):新浪 nf_ ---------------- */
-function parseSinaDomestic(text) {
-  const out = Object.create(null); // 无原型对象: 上游 symbol 作为 key, 杜绝 __proto__ 污染
-  const re = /hq_str_(nf_\w+)="([^"]*)"/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const f = m[2].split(",");
-    if (f.length < 17 || !f[0]) continue;
-    const prevSettle = num(f[8]); // f[8]=昨收
-    let price = num(f[5]); // 最新价(夜盘可能为0)
-    if (!price) {
-      const bid = num(f[6]), ask = num(f[7]);
-      price = bid && ask ? +((bid + ask) / 2).toFixed(2) : (bid || ask || prevSettle);
-    }
-    out[m[1]] = {
-      symbol: m[1],
-      name: f[0],
-      price,
-      high: num(f[3]),
-      low: num(f[4]),
-      open: num(f[2]),
-      prev: prevSettle,
-      change: +(price - prevSettle).toFixed(4),
-      pct: prevSettle ? +(((price - prevSettle) / prevSettle) * 100).toFixed(3) : 0,
-      time: f[16],
-    };
-  }
-  return out;
-}
-
-/* ---------------- 加密货币(Binance 主源 + OKX 兜底, fetch/curl 双通道) ---------------- */
-async function fetchJsonAny(urls) {
-  let lastErr = new Error("fetch failed");
-  for (const url of urls) {
-    for (const via of ["fetch", "curl"]) {
-      try {
-        const text =
-          via === "fetch"
-            ? await fetchText(url, { referer: "https://www.binance.com/" })
-            : await curlText(url, { encoding: "utf-8" });
-        return JSON.parse(text);
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-  }
-  throw lastErr;
-}
-
-async function fetchBtc() {
-  try {
-    const j = await fetchJsonAny(["https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"]);
-    return {
-      symbol: "BTCUSDT", name: "BTC/USDT", price: num(j.lastPrice), prev: num(j.prevClosePrice),
-      open: num(j.openPrice), high: num(j.highPrice), low: num(j.lowPrice),
-      change: num(j.priceChange), pct: num(j.priceChangePercent), time: "",
-    };
-  } catch { /* Binance 不可达时走 OKX */ }
-  const j = await fetchJsonAny(["https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT"]);
-  const d = j?.data?.[0];
-  if (!d) throw new Error("btc blocked");
-  const price = num(d.last);
-  const prev = num(d.open24h);
-  return {
-    symbol: "BTCUSDT", name: "BTC/USDT", price, prev,
-    open: prev, high: num(d.high24h), low: num(d.low24h),
-    change: +(price - prev).toFixed(2),
-    pct: prev ? +(((price - prev) / prev) * 100).toFixed(3) : 0,
-    time: "",
-  };
-}
-
-async function handleFutures(list) {
-  // 代码白名单 + 数量上限: 防止畸形代码注入上游 URL 或制造超长请求
-  const codes = String(list || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => /^(hf|nf)_[A-Za-z0-9]{1,12}$/.test(s) || s === "BTCUSDT")
-    .slice(0, 60);
-  const hf = codes.filter((c) => c.startsWith("hf_"));
-  const nf = codes.filter((c) => c.startsWith("nf_"));
-  const out = {};
-  const jobs = [];
-  if (hf.length) {
-    jobs.push((async () => {
-      // 主源:腾讯(稳定,无WAF)
-      try {
-        const r = parseFutures(await fetchText(`https://qt.gtimg.cn/q=${hf.map(encodeURIComponent).join(",")}`, { gbk: true }));
-        if (Object.keys(r).length >= Math.min(2, hf.length)) return Object.assign(out, r);
-      } catch { /* fallthrough */ }
-      // 兜底:新浪
-      const url = `https://hq.sinajs.cn/list=${hf.map(encodeURIComponent).join(",")}`; // 新浪要求逗号不转码
-      const opts = { referer: "https://finance.sina.com.cn/futures/quotes/CL.shtml" };
-      let r = parseFutures(await curlText(url, opts));
-      if (Object.keys(r).length === 0) {
-        await sleep(1200);
-        r = parseFutures(await curlText(url, opts));
-      }
-      Object.assign(out, r);
-    })());
-  }
-  if (nf.length) {
-    jobs.push((async () => {
-      const url = `https://hq.sinajs.cn/list=${nf.map(encodeURIComponent).join(",")}`;
-      const opts = { referer: "https://finance.sina.com.cn/futures/quotes/AU0.shtml" };
-      let r = parseSinaDomestic(await curlText(url, opts));
-      if (Object.keys(r).length === 0) {
-        await sleep(1200);
-        r = parseSinaDomestic(await curlText(url, opts));
-      }
-      // 夜盘期间 hq.sinajs.cn 最新价可能为0,从分钟线接口补实时价格
-      for (const code of nf) {
-        const item = r[code];
-        if (!item || item.price > 0) continue;
-        const symbol = code.slice(3);
-        try {
-          const text = await curlText(
-            `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/InnerFuturesNewService.getMinLine?symbol=${symbol}`,
-            { referer: `https://finance.sina.com.cn/futures/quotes/${symbol}.shtml`, encoding: "utf-8" }
-          );
-          const arr = parseJsonp(text);
-          if (arr && arr.length && arr[0][1]) {
-            const livePrice = num(arr[0][1]);
-            if (livePrice > 0) {
-              item.price = livePrice;
-              item.change = +(livePrice - item.prev).toFixed(4);
-              item.pct = item.prev ? +(((livePrice - item.prev) / item.prev) * 100).toFixed(3) : 0;
-            }
-          }
-        } catch { /* minLine 失败就保留现有值 */ }
-      }
-      Object.assign(out, r);
-    })());
-  }
-  if (codes.includes("BTCUSDT")) {
-    jobs.push((async () => {
-      try {
-        out.BTCUSDT = await fetchBtc();
-      } catch { /* BTC 源全挂时不拖垮其他品种 */ }
-    })());
-  }
-  await Promise.all(jobs);
-  if (Object.keys(out).length === 0) throw new Error("futures blocked");
-  return out;
-}
-
-/* ---------------- 大宗商品分钟线 ---------------- */
 function parseJsonp(text) {
   // 尝试 callback({...}) 格式
   const a = text.indexOf("(");
@@ -600,74 +435,6 @@ function parseJsonp(text) {
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) return JSON.parse(trimmed.replace(/;$/, ""));
   }
   throw new Error("bad jsonp: " + text.slice(0, 80));
-}
-
-async function handleFutureMinute(code) {
-  if (code === "BTCUSDT") {
-    try {
-      const [klines, ticker] = await Promise.all([
-        fetchJsonAny(["https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=240"]),
-        fetchJsonAny(["https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"]),
-      ]);
-      const pts = klines.map((k) => {
-        const d = new Date(k[0]);
-        return { t: `${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}`, p: num(k[4]) };
-      });
-      return { code, prec: num(ticker.prevClosePrice), points: pts };
-    } catch { return { code, prec: 0, points: [] }; }
-  }
-  if (code.startsWith("hf_")) {
-    const symbol = code.slice(3);
-    const text = await curlText(
-      `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/GlobalFuturesService.getGlobalFuturesMinLine?symbol=${symbol}`,
-      { referer: `https://finance.sina.com.cn/futures/quotes/${symbol}.shtml`, encoding: "utf-8" }
-    );
-    const arr = parseJsonp(text)?.minLine_1d || [];
-    const pts = arr.filter((f) => String(f[0]).includes(":")).map((f) => ({ t: f[0], p: num(f[1]) }));
-    const q = parseFutures(await fetchText(`https://qt.gtimg.cn/q=${code}`, { gbk: true }));
-    return { code, prec: q[code]?.prev || 0, points: pts };
-  }
-  if (code.startsWith("nf_")) {
-    const symbol = code.slice(3);
-    const referer = `https://finance.sina.com.cn/futures/quotes/${symbol}.shtml`;
-    const text = await curlText(
-      `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/InnerFuturesNewService.getMinLine?symbol=${symbol}`,
-      { referer, encoding: "utf-8" }
-    );
-    const arr = parseJsonp(text) || [];
-    const pts = arr.map((f) => ({ t: f[0], p: num(f[1]) }));
-    const q = parseSinaDomestic(await curlText(`https://hq.sinajs.cn/list=${code}`, { referer }));
-    return { code, prec: q[code]?.prev || 0, points: pts };
-  }
-  throw new Error("bad code");
-}
-
-/* ---------------- 期货日线K线(新浪 内盘nf_/外盘hf_, 全历史免费) ---------------- */
-async function handleFutureDaily(code, n = 400) {
-  const isGlobal = code.startsWith("hf_");
-  const symbol = code.replace(/^(nf_|hf_)/, "");
-  if (!symbol || (!code.startsWith("nf_") && !isGlobal)) throw new Error("bad code");
-  const api = isGlobal
-    ? `GlobalFuturesService.getGlobalFuturesDailyKLine?symbol=${encodeURIComponent(symbol)}`
-    : `InnerFuturesNewService.getDailyKLine?symbol=${encodeURIComponent(symbol)}`;
-  const text = await curlText(
-    `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/${api}`,
-    { referer: `https://finance.sina.com.cn/futures/quotes/${symbol}.shtml`, encoding: "utf-8" }
-  );
-  const arr = parseJsonp(text) || [];
-  // 内盘字段 d/o/h/l/c/v; 外盘 date/open/high/low/close/volume, 归一化
-  const pts = arr
-    .map((k) => ({
-      t: k.d || k.date,
-      o: num(k.o ?? k.open),
-      h: num(k.h ?? k.high),
-      l: num(k.l ?? k.low),
-      c: num(k.c ?? k.close),
-      v: num(k.v ?? k.volume),
-    }))
-    .filter((p) => p.t && p.c);
-  // 只回最近 n 根(页面最大区间 365d): 全历史传输量 10 倍于所需, 是大 payload 超时的根因
-  return { code, points: pts.slice(-n) };
 }
 
 /* ---------------- 个股榜单(涨幅/跌幅/热门) — 新浪盘中 + 腾讯盘后双源 ---------------- */
@@ -797,7 +564,7 @@ async function handleStockDetail(code) {
   let row = getStock(code);
   if (!row) row = { code, created_at: now };
 
-  // 并行抓取所有"过期/缺失 且 不在冷却中"的字段(按需), 失败时保留库中旧值(回退)
+  // 快字段(实时/分时/主力): 溢出时阻塞响应, 保证打开小窗即返回核心数据
   const jobs = [];
   if (stale(row.quote, row.quote_ts, SD_TTL.quote) && !inCooldown(code, "quote")) jobs.push(async () => {
     const q = await handleStockQuote(code);
@@ -811,20 +578,24 @@ async function handleStockDetail(code) {
     const mf = await handleStockMainForces(code);
     if (mf) { row.main_forces = mf; row.main_forces_ts = now; clearBackoff(code, "main_forces"); } else failBackoff(code, "main_forces");
   });
-  // 行业/地域/概念: 长期数据, 永久保留; 仅首次、超24h、或库中为空(无效)时才刷新; 空结果视为失败(不覆盖旧值, 稍后重试)
+  await Promise.all(jobs.map((j) => j().catch(() => {})));
+
+  // 慢字段(行业/概念/主营业务): 长期数据, 后台刷新不阻塞小窗响应, 避免分时/报价被拖慢
+  const bg = [];
   const boardsEmpty = !row.industry && !row.area && (!row.concepts || row.concepts.length === 0);
-  if ((!row.boards_ts || now - row.boards_ts > SD_TTL.boards || boardsEmpty) && !inCooldown(code, "boards")) jobs.push(async () => {
+  if ((!row.boards_ts || now - row.boards_ts > SD_TTL.boards || boardsEmpty) && !inCooldown(code, "boards")) bg.push(async () => {
     const b = await handleStockBoards(code);
     if (b && (b.industry || b.area || b.concepts.length > 0)) {
       row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = now; clearBackoff(code, "boards");
     } else failBackoff(code, "boards");
+    upsertStock(row); // 落库供下次读取
   });
-  // 主营业务: 长期数据, 永久保留; 仅首次、超24h、或库中为空时才刷新; 空结果视为失败
-  if ((!row.profile_ts || now - row.profile_ts > SD_TTL.profile || !row.main_business) && !inCooldown(code, "profile")) jobs.push(async () => {
+  if ((!row.profile_ts || now - row.profile_ts > SD_TTL.profile || !row.main_business) && !inCooldown(code, "profile")) bg.push(async () => {
     const p = await handleStockProfile(code);
     if (p && p.mainBusiness) { row.main_business = p.mainBusiness; row.profile_ts = now; clearBackoff(code, "profile"); } else failBackoff(code, "profile");
+    upsertStock(row);
   });
-  await Promise.all(jobs.map((j) => j().catch(() => {})));
+  bg.forEach((j) => j().catch(() => {})); // 后台执行, 不阻塞本次响应
 
   if (!row.name) row.name = row.quote?.name || null;
 
@@ -1489,149 +1260,6 @@ async function handleOpenRouterUsage() {
     return [{ date: todayStr, total: 0, providers: [], countries: [] }];
   }
 }
-/* ---------------- 生意社现期对照表(现货价/期货价/基差) + 现货历史积累 ---------------- */
-const SPOT_DATA_FILE = path.join(__dirname, "data", "spot-history.json");
-
-// 现货积累按北京时间取日期(商品交易日历)
-const bjToday = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
-
-// 生意社华为云 HW_CHECK 质询绕过: 质询页 JS 内嵌 cookie 值, 提取后带 cookie 重试
-async function fetchSunsir(url, { timeout = 12000 } = {}) {
-  const once = (cookie) => {
-    const headers = { "User-Agent": UA, Accept: "text/html" };
-    if (cookie) headers.Cookie = cookie;
-    return fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
-  };
-  let resp = await once();
-  let text = await resp.text();
-  if (text.length < 4000 && text.includes("HW_CHECK")) {
-    const m = text.match(/=\s*"([0-9a-f]{16,})"/);
-    if (m) {
-      resp = await once(`HW_CHECK=${m[1]}`);
-      text = await resp.text();
-    }
-  }
-  if (text.includes("HW_CHECK") && text.length < 4000) throw new Error("sunsir waf challenge failed");
-  return text;
-}
-
-function parseSfTable(html) {
-  const parts = html.split(/<td colspan="8"[^>]*>([^<]+)<\/td>/i);
-  const rows = [];
-  for (let i = 1; i < parts.length; i += 2) {
-    const exchange = parts[i];
-    const body = parts[i + 1] || "";
-    const chunks = body.split(/<tr[^>]*bgcolor="#fafdff"[^>]*>/i);
-    for (let c = 1; c < chunks.length; c++) {
-      let chunk = chunks[c];
-      // 嵌套 table 内的 font 值依次为 基差1/基差率1/基差2/基差率2
-      const fonts = [...chunk.matchAll(/<font[^>]*>(-?[\d.,]+%?)<\/font>/g)].map((m) => m[1]);
-      chunk = chunk.replace(/<table[\s\S]*?<\/table>/g, "");
-      const cells = [...chunk.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)]
-        .map((m) => m[1].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, "").trim())
-        .filter((v) => v !== "");
-      if (cells.length < 4 || !cells[0]) continue;
-      const basisPct1 = parseFloat(fonts[1]);
-      rows.push({
-        exchange,
-        name: cells[0],
-        spot: num(cells[1]),
-        contract: cells[2] || "",
-        futures: num(cells[3]),
-        basis: num(fonts[0]),
-        basisPct: Number.isFinite(basisPct1) ? basisPct1 : 0,
-      });
-    }
-  }
-  return rows;
-}
-
-async function handleSpotTable() {
-  const html = await fetchSunsir("https://www.100ppi.com/sf/");
-  const dm = html.match(/20\d{2}年\d{1,2}月\d{1,2}日/);
-  const date = dm ? dm[0].replace(/[年月]/g, "-").replace("日", "") : new Date().toISOString().slice(0, 10);
-  const rows = parseSfTable(html);
-  if (!rows.length) throw new Error("sunsir sf table parse empty");
-  // 现货价按日积累(与 openrouter-usage 同模式), 供现货趋势线使用
-  let history = {};
-  try { history = JSON.parse(fs.readFileSync(SPOT_DATA_FILE, "utf-8") || "{}"); } catch {}
-  const today = bjToday();
-  for (const r of rows) {
-    if (!r.spot) continue;
-    const arr = history[r.name] || (history[r.name] = []);
-    if (arr.length && arr[arr.length - 1].t === today) arr[arr.length - 1].p = r.spot;
-    else arr.push({ t: today, p: r.spot });
-    if (arr.length > 400) arr.splice(0, arr.length - 400);
-  }
-  try {
-    fs.mkdirSync(path.dirname(SPOT_DATA_FILE), { recursive: true });
-    await fs.promises.writeFile(SPOT_DATA_FILE, JSON.stringify(history)); // 异步写
-  } catch (e) { console.error("[spot] write history error:", e?.message || e); }
-  return { date, rows, history };
-}
-
-/* ---------------- 生意社化工现货(报价中心 plist 页, 中位数为代表价) ---------------- */
-async function handleChemSpot(id, name) {
-  if (!/^\d{1,10}$/.test(id)) { const e = new Error("bad id"); e.status = 400; throw e; }
-  name = String(name || id).slice(0, 40); // name 来自用户输入并写入历史文件, 限长
-  const html = await fetchSunsir(`https://www.100ppi.com/mprice/plist-1-${encodeURIComponent(id)}-1.html`);
-  // 行结构: 品名/规格/产地/价格(元/吨)/价格类型/交货地/企业/日期
-  const market = []; // 市场价(真实行情)
-  const all = [];
-  for (const m of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)) {
-    const row = m[1];
-    const pm = row.match(/>\s*([\d.]+)\s*元\/吨\s*</);
-    if (!pm || !row.includes("p-name")) continue;
-    const p = num(pm[1]);
-    all.push(p);
-    if (row.includes("市场价")) market.push(p);
-  }
-  if (!all.length) throw new Error("chem spot parse empty");
-  // 优先市场价中位数(出厂价多为厂商挂高价); 无市场价则全体中位数
-  const pool = market.length ? market : all;
-  pool.sort((a, b) => a - b);
-  const mid = pool.length >> 1;
-  const price = pool.length % 2 ? pool[mid] : +((pool[mid - 1] + pool[mid]) / 2).toFixed(2);
-  const dm = html.match(/>(20\d{2}-\d{2}-\d{2})</);
-  // 历史积累(与现货表同一文件); 条目总数有界, 防止恶意 name 缓慢填满磁盘
-  let history = {};
-  try { history = JSON.parse(fs.readFileSync(SPOT_DATA_FILE, "utf-8") || "{}"); } catch {}
-  const today = bjToday();
-  let arr = history[name];
-  if (!arr && Object.keys(history).length < 500) arr = history[name] = [];
-  if (arr) {
-    if (arr.length && arr[arr.length - 1].t === today) arr[arr.length - 1].p = price;
-    else arr.push({ t: today, p: price });
-    if (arr.length > 400) arr.splice(0, arr.length - 400);
-    try {
-      fs.mkdirSync(path.dirname(SPOT_DATA_FILE), { recursive: true });
-      await fs.promises.writeFile(SPOT_DATA_FILE, JSON.stringify(history));
-    } catch (e) { console.error("[chem-spot] write history error:", e?.message || e); }
-  }
-  return { id, name, price, quotes: all.length, date: dm ? dm[1] : today, history: arr || [] };
-}
-
-/* ---------------- 现货每日定时采集(服务端自驱, 无需前端在线) ---------------- */
-// 与前端 src/config/goods.ts 的 CHEM_SPOTS 保持一致
-const CHEM_SPOT_SEEDS = [["7250", "碳酸亚乙烯酯"]];
-
-async function collectSpotDaily() {
-  try {
-    await handleSpotTable();
-    console.log("[spot] 定时采集: 现期表完成");
-  } catch (e) { console.error("[spot] 定时采集: 现期表失败:", e?.message || e); }
-  for (const [id, name] of CHEM_SPOT_SEEDS) {
-    try {
-      await handleChemSpot(id, name);
-      console.log("[spot] 定时采集: 化工现货", name, "完成");
-    } catch (e) { console.error("[spot] 定时采集: 化工现货", name, "失败:", e?.message || e); }
-  }
-}
-// 生意社交易日 16:30 更新, 每 4 小时采集一轮保证覆盖; unref 不阻止进程退出
-setInterval(collectSpotDaily, 4 * 3600 * 1000).unref();
-// 启动 1 分钟后先补一轮(部署当日即有数据)
-setTimeout(collectSpotDaily, 60 * 1000).unref();
-
 /* ---------------- 市场情绪折线数据本地存储与容错 ---------------- */
 // 本地持久化目录: server/data/market-sentiment/
 //   snapshot.json: 最近一次成功刷新的完整面板快照(供实时失败时回退)
@@ -2281,18 +1909,6 @@ const routes = {
     cached(`bstocks:${q.get("code")}:${q.get("dir")}:${q.get("n")}`, 8000, () =>
       handleBoardStocks(q.get("code") || "", q.get("dir") || "down", q.get("n") || "10")
     ),
-  "/api/futures": async (q) =>
-    cached(`futures:${q.get("list")}`, 15000, () => handleFutures(q.get("list") || "hf_GC,hf_XAU,hf_SI,hf_CAD,hf_CL,hf_VX,nf_AU0,BTCUSDT")),
-  "/api/future-daily": async (q) =>
-    cached(`fdaily:${q.get("code")}:${q.get("n") || ""}`, 3600000, () =>
-      handleFutureDaily(q.get("code") || "", Math.min(parseInt(q.get("n")) || 400, 5000))
-    ), // 日线K线(默认近400根), 1h缓存
-  "/api/spot-table": async () => cached("spot:table", 8 * 3600000, () => handleSpotTable()), // 生意社现期表, 8h缓存(每日16:30更新)
-  "/api/chem-spot": async (q) =>
-    cached(`chem:${q.get("id")}:${q.get("name") || ""}`, 8 * 3600000, () =>
-      handleChemSpot(q.get("id") || "", q.get("name") || q.get("id") || "")), // 生意社化工现货, 8h缓存
-  "/api/future-minute": async (q) =>
-    cached(`fmin:${q.get("code")}`, 60000, () => handleFutureMinute(q.get("code") || "")),
   "/api/rank": async (q) =>
     cached(`rank:${q.get("sort")}:${q.get("asc")}:${q.get("n")}`, 5000, () =>
       handleRank(q.get("sort") || "changepercent", q.get("asc") || "0", q.get("n") || "30")
@@ -2337,6 +1953,17 @@ const routes = {
   },
   "/api/treasury-history": async () => cached("treasury-history", 6 * 3600 * 1000, () => handleTreasuryHistory()),
   "/api/health": async () => ({ status: "up", ts: Date.now(), cache: cache.size }),
+  /* --------------------------------------------------------------------------
+   * GET /api/monitor — 系统监控接口(供前端"系统监控"面板)
+   * 功能: 汇总各 API 接口的调用性能指标、服务端内存状态与本地数据库状态。
+   * 输入: 无(不受用户输入影响, 亦不参与限流 IP 计数)。
+   * 输出: {ok:true, data: MonitorData, ts} 其中 data 结构见 buildMonitorData。
+   * 返回: 200 成功; 正常情况下不会失败(500 级为进程级异常)。
+   * 错误: 无业务错误码; 仅当进程异常时由外层统一返回 502。
+   * 调用: 前端 monitor() 每 10s 轮询一次; 本接口自身不计入性能指标统计。
+   * 注意: 指标为内存滚动统计, 服务重启后清零; 本接口不落库、不写日志。
+   * ------------------------------------------------------------------------ */
+  "/api/monitor": async () => buildMonitorData(),
   "/api/openrouter-usage": async () => cached("or-usage", 3600000, () => handleOpenRouterUsage()), // 1h cache
   "/api/stock-search": async (q) =>
     cached(`ssearch:${q.get("q")}`, 5000, () => handleStockSearch(q.get("q") || "")), // 前端击键触发, 短缓存防新浪WAF
@@ -2471,6 +2098,105 @@ function readBodyWithLimit(req, limit) {
   });
 }
 
+/* ============================================================================
+ * 接口性能监控子系统(供前端"系统监控"面板使用)
+ * ----------------------------------------------------------------------------
+ * 功能: 在服务端以内存滚动统计的方式, 记录每个 API 接口的调用次数、响应耗时、
+ *       成功率与错误信息, 并通过 /api/monitor 暴露给前端监控面板展示。
+ * 存储: 全部指标保存在进程内存(API_METRICS Map)中, 服务重启即清空, 不做持久化。
+ * 目的: 定位接口资源挤占(慢接口/高频接口/报错接口), 支撑性能优化与告警。
+ * 注意: 指标累计量随进程运行时间持续增长, 但样本最近 200 条滚动, 内存占用有界。
+ * ========================================================================== */
+const METRIC_SAMPLES = 200; // 每个接口路径在内存中保留的最近样本数(滚动窗口)
+/** 各接口性能指标容器: path -> { count,total,max,errors,errs[],samples[],lastTs,winStart,winCount } */
+const API_METRICS = new Map();
+
+/**
+ * 记录一次接口调用指标。
+ *
+ * @param {string} path  接口路径(如 "/api/stock-detail"), 作为指标分组键。
+ * @param {number} ms    本次调用的耗时(毫秒)。
+ * @param {boolean} ok   本次调用是否成功(true=成功, false=失败/异常)。
+ * @param {string} [errMsg] 失败时的错误信息(可选), 仅成功时为空; 会截断至 120 字符入列。
+ * @returns {void} 无返回值。指标写入内存 Map, 由 /api/monitor 读取。
+ * @note 调用方在服务端请求处理流程中统一调用(见底部 http.createServer);
+ *       失败的错误信息仅在 !ok 时记录, 成功后清空历史错误列表, 避免错误堆积。
+ */
+function recordMetric(path, ms, ok, errMsg) {
+  let m = API_METRICS.get(path);
+  if (!m) {
+    m = { count: 0, total: 0, max: 0, errors: 0, errs: [], samples: [], lastTs: 0, winStart: Date.now(), winCount: 0 };
+    API_METRICS.set(path, m);
+  }
+  m.count++; m.total += ms; if (ms > m.max) m.max = ms;
+  if (!ok) { m.errors++; if (errMsg) m.errs.push({ ts: Date.now(), msg: String(errMsg).slice(0, 120) }); }
+  else m.errs = [];
+  m.samples.push({ ms, ok, ts: Date.now() });
+  if (m.samples.length > METRIC_SAMPLES) m.samples.shift();
+  m.lastTs = Date.now();
+  // 每分钟滑动窗口: 统计该分钟内调用次数, 用于计算调用速率(rate1m)
+  if (Date.now() - m.winStart > 60000) { m.winStart = Date.now(); m.winCount = 0; }
+  m.winCount++;
+}
+
+/**
+ * 计算一段耗时样本的分位数(如 p95/p99)。
+ *
+ * @param {Array<{ms:number,ok:boolean,ts:number}>} arr 近 METRIC_SAMPLES 条耗时样本。
+ * @param {number} q 分位数(0~1, 如 0.95 表示 95 分位)。
+ * @returns {number} 该分位对应的耗时(毫秒); 样本为空时返回 0。
+ * @note 采用排序后取索引法, 非真分位数插值, 对监控场景足够且实现简单。
+ */
+function pct(arr, q) {
+  const n = arr.length; if (!n) return 0;
+  const s = [...arr].sort((a, b) => a.ms - b.ms);
+  return s[Math.min(n - 1, Math.ceil(q * n) - 1)].ms;
+}
+
+/**
+ * 汇总 /api/monitor 的响应数据: 各接口性能指标 + 服务端状态 + 本地数据库状态。
+ *
+ * @returns {Object} 监控数据对象, 结构如下:
+ *   - ts:        {number} 数据生成时间戳(毫秒)。
+ *   - uptime:    {number} 服务进程已运行时长(秒)。
+ *   - serverMem: {Object} Node 进程内存占用(字节), 含 rss/heapTotal/heapUsed/external/arrayBuffers。
+ *   - endpoints: {Array}  各接口指标数组(按调用次数降序), 每项见下方注释。
+ *   - db:        {Object} SQLite 本地库状态: stocks=个股缓存条数, trends=趋势记录条数, dbPath=库文件路径。
+ *   - cache:     {Object} 内存缓存条目数: entries=内存缓存 Map 当前大小。
+ * @note 无输入参数; 每次调用都实时读取内存指标与进程状态, 开销极小。
+ */
+function buildMonitorData() {
+  const now = Date.now();
+  const endpoints = [];
+  for (const [path, m] of API_METRICS) {
+    endpoints.push({
+      path,                                  // 接口路径
+      count: m.count,                        // 累计调用次数(进程启动以来)
+      avg: m.count ? Math.round(m.total / m.count) : 0,            // 平均耗时(ms)
+      p95: m.samples.length ? pct(m.samples, 0.95) : 0,            // 95 分位耗时(ms), 无样本时为 0
+      max: m.max,                            // 最大耗时(ms)
+      errors: m.errors,                      // 累计错误次数
+      successRate: m.count ? Math.round((1 - m.errors / m.count) * 1000) / 10 : 100, // 成功率(%, 保留 1 位小数)
+      rate1m: m.winCount,                    // 最近 1 分钟调用次数(调用速率)
+      lastTs: m.lastTs,                      // 最近一次调用时间戳(毫秒)
+      lastErr: m.errs[m.errs.length - 1] || null, // 最近一条错误 {ts,msg}, 无错误为 null
+    });
+  }
+  endpoints.sort((a, b) => b.count - a.count);
+  return {
+    ts: now,
+    uptime: process.uptime(),
+    serverMem: process.memoryUsage(),
+    endpoints,
+    db: {
+      stocks: stockCount(),
+      trends: trendCount(),
+      dbPath: DB_PATH,
+    },
+    cache: { entries: cache.size },
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, "http://localhost");
@@ -2494,6 +2220,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
+      let t0 = 0;
       try {
         let body;
         if (req.method === "POST") {
@@ -2505,10 +2232,16 @@ const server = http.createServer(async (req, res) => {
           }
           try { body = JSON.parse(r.buf.toString()); } catch { body = {}; }
         }
+        t0 = Date.now();
         const data = await routes[u.pathname](u.searchParams, body);
+        const ms = Date.now() - t0;
+        recordMetric(u.pathname, ms, true);
+        if (u.pathname !== "/api/monitor") console.log(`[api] ${u.pathname} ${ms}ms`);
         send(res, 200, { ok: true, data, ts: Date.now() }, cors);
       } catch (e) {
         // 内部细节只记日志; err.status 由可预期的业务错误(如队列满)携带, 其 message 可安全回显
+        const ms = Date.now() - t0;
+        recordMetric(u.pathname, ms, false, e?.message || e);
         console.error("[api]", u.pathname, "error:", e?.message || e);
         send(res, e?.status || 502, { ok: false, error: e?.status ? e.message : "upstream error" }, cors);
       }

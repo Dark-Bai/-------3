@@ -17,13 +17,28 @@ const StockDetailContext = createContext<StockDetailContextValue>({
   stocks: [],
 });
 
+/** 归一化为腾讯代码: 6/9→sh, 0/2/3→sz, 4/8→bj; 已带 sh/sz/bj 前缀则原样。
+ *  板块榜/涨停数据给的裸 6 位代码(如 600519)若不补前缀, 分时与报价都会取数失败 */
+function normalizeCode(input: string): string {
+  const s = String(input || "").trim().toLowerCase();
+  if (/^(sh|sz|bj)\d{6}$/.test(s)) return s;
+  if (/^\d{6}$/.test(s)) {
+    const c = s[0];
+    if (c === "6" || c === "9") return `sh${s}`;
+    if (c === "0" || c === "2" || c === "3") return `sz${s}`;
+    if (c === "4" || c === "8") return `bj${s}`;
+  }
+  return s;
+}
+
 export function StockDetailProvider({ children }: { children: ReactNode }) {
   const [stocks, setStocks] = useState<StockDetailItem[]>([]);
 
   const openStockDetail = useCallback((code: string, name: string) => {
+    const normalized = normalizeCode(code);
     setStocks((prev) => {
-      if (prev.some((s) => s.code === code)) return prev; // 已存在则不重复
-      return [...prev, { code, name }];
+      if (prev.some((s) => s.code === normalized)) return prev; // 已存在则不重复
+      return [...prev, { code: normalized, name }];
     });
   }, []);
 

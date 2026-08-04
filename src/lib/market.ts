@@ -32,12 +32,10 @@ let version = 0;
 let timer: number | null = null;
 let flushTimer: number | null = null;
 
-const isFuturesCode = (c: string) => /^(nf_|hf_)|BTCUSDT/.test(c);
-
-function emit() {
+const emit = () => {
   version++;
   listeners.forEach((l) => l());
-}
+};
 
 function subscribe(l: () => void) {
   listeners.add(l);
@@ -56,12 +54,7 @@ const num = (v: unknown) => {
 async function tick() {
   if (!refCounts.size) return;
   const codes = [...refCounts.keys()];
-  const stocks = codes.filter((c) => !isFuturesCode(c));
-  const futures = codes.filter(isFuturesCode);
-  const jobs: Promise<Record<string, { name?: string; price: number; pct: number; amount?: number; turnover?: number }>>[] = [];
-  if (stocks.length) jobs.push(api.quotes(stocks));
-  if (futures.length) jobs.push(api.futuresBatch(futures));
-  const rs = await Promise.allSettled(jobs);
+  const rs = await Promise.allSettled([api.quotes(codes)]);
   const now = Date.now();
   let changed = false;
   for (const r of rs) {

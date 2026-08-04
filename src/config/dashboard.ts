@@ -26,23 +26,6 @@ export const INDICES: IndexDef[] = [
 
 export const FOREX: IndexDef[] = [{ code: "whUSDCNY", label: "美元/人民币", region: "FX" }];
 
-export interface CommodityDef {
-  code: string;
-  label: string;
-  unit: string;
-  accent: string;
-}
-
-export const COMMODITIES: CommodityDef[] = [
-  { code: "hf_GC", label: "纽约黄金", unit: "COMEX · 美元/盎司", accent: "#f5c542" },
-  { code: "hf_XAU", label: "伦敦金", unit: "现货 · 美元/盎司", accent: "#ffca28" },
-  { code: "nf_AU0", label: "沪金", unit: "元/克", accent: "#e6c25a" },
-  { code: "hf_SI", label: "纽约白银", unit: "COMEX · 美元/盎司", accent: "#c0d0e0" },
-  { code: "hf_CAD", label: "LME伦铜", unit: "美元/吨", accent: "#e8833a" },
-  { code: "hf_CL", label: "NYMEX原油", unit: "美元/桶", accent: "#5aa9e6" },
-  { code: "BTCUSDT", label: "BTC/USDT", unit: "美元", accent: "#f7931a" },
-];
-
 /** 宏观关键词 — 快讯高亮 */
 export const MACRO_KEYWORDS = [
   "央行", "美联储", "降息", "加息", "降准", "GDP", "CPI", "PMI",

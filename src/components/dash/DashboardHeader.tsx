@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { ArrowLeft, Github, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeft, Activity, Github, Maximize2, Minimize2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useClock } from "@/hooks/useClock";
 import { isTv } from "@/lib/tv";
@@ -30,6 +30,9 @@ export function DashboardHeader({
   githubUrl,
   isFullscreen,
   onToggleFullscreen,
+  onToggleMonitor,
+  monitorActive = false,
+  monitorAlert = false,
 }: {
   title: string;
   subtitle: string;
@@ -43,6 +46,9 @@ export function DashboardHeader({
   githubUrl?: string;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  onToggleMonitor?: () => void;
+  monitorActive?: boolean;
+  monitorAlert?: boolean;
 }) {
   const now = useClock(isTv ? 60000 : 1000);
   const hh = String(now.getHours()).padStart(2, "0");
@@ -101,6 +107,22 @@ export function DashboardHeader({
           >
             <Github size={12} />
           </a>
+        )}
+        {onToggleMonitor && (
+          <button
+            onClick={onToggleMonitor}
+            title={monitorActive ? "关闭系统监控" : "打开系统监控"}
+            className={`relative flex h-[22px] w-[22px] items-center justify-center rounded border transition-colors ${
+              monitorActive
+                ? "border-[#4a6b3f]/60 bg-[#4a6b3f]/10 text-[#4a6b3f]"
+                : "border-[#e0d5c0] bg-[#ede4d4] text-[#8b7a5e] hover:border-[#4a6b3f]/60 hover:text-[#4a6b3f]"
+            }`}
+          >
+            <Activity size={12} />
+            {monitorAlert && !monitorActive && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#b8533a]" />
+            )}
+          </button>
         )}
         <button
           onClick={onToggleFullscreen}

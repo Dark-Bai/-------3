@@ -25,19 +25,6 @@ export interface Quote {
   amplitude?: number;
 }
 
-export interface FutureQuote {
-  symbol: string;
-  name: string;
-  price: number;
-  prev: number;
-  open: number;
-  high: number;
-  low: number;
-  change: number;
-  pct: number;
-  time: string;
-}
-
 export interface Board {
   code: string;
   name: string;
@@ -222,49 +209,6 @@ export interface MinuteData {
   code: string;
   prec: number;
   points: { t: string; p: number }[];
-}
-
-/** 期货日线K线(归一化) */
-export interface DailyBar {
-  t: string; // "2026-07-23"
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-}
-
-export interface FutureDaily {
-  code: string;
-  points: DailyBar[];
-}
-
-/** 生意社现期对照行 */
-export interface SpotRow {
-  exchange: string;
-  name: string;
-  spot: number;
-  contract: string;
-  futures: number;
-  basis: number;
-  basisPct: number;
-}
-
-export interface SpotTable {
-  date: string;
-  rows: SpotRow[];
-  /** 按品种名积累的现货日度历史 */
-  history: Record<string, { t: string; p: number }[]>;
-}
-
-/** 生意社化工现货(报价中心) */
-export interface ChemSpot {
-  id: string;
-  name: string;
-  price: number;
-  quotes: number;
-  date: string;
-  history: { t: string; p: number }[];
 }
 
 /** 股票搜索(名称/拼音首字母→代码) */
@@ -565,19 +509,12 @@ export const api = {
   /** 个股详情聚合(本地数据库): 一次请求返回 行情/分时/主力/行业概念/主营 */
   stockDetail: (code: string) => get<StockDetail>(`/api/stock-detail?code=${encodeURIComponent(code)}`),
   stockFinance: (code: string) => get<StockFinance>(`/api/stock-finance?code=${encodeURIComponent(code)}`),
-  futureMinute: (code: string) => get<MinuteData>(`/api/future-minute?code=${encodeURIComponent(code)}`),
-  futureDaily: (code: string) => get<FutureDaily>(`/api/future-daily?code=${encodeURIComponent(code)}`),
-  futuresBatch: (codes: string[]) =>
-    get<Record<string, FutureQuote>>(`/api/futures?list=${codes.map(encodeURIComponent).join(",")}`),
   boardFlow: (n = 20) => get<BoardFlow[]>(`/api/board-flow?n=${n}`),
   news: (size = 60) => withFallback(() => get<NewsItem[]>(`/api/news?size=${size}`), () => directNews(size)),
   treasuries: () => get<Treasury[]>(`/api/treasuries`),
   treasuryHistory: () => get<TreasuryCurvePoint[]>(`/api/treasury-history`),
   openRouterUsage: () => get<OrUsageDay[]>(`/api/openrouter-usage`),
   stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`),
-  spotTable: () => get<SpotTable>(`/api/spot-table`),
-  chemSpot: (id: string, name: string) =>
-    get<ChemSpot>(`/api/chem-spot?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`),
   financeMain: (code: string) => get<FinanceMain>(`/api/finance-main?code=${encodeURIComponent(code)}`),
   financeBoard: (period = "") => get<FinanceBoard>(`/api/finance-board${period ? `?period=${encodeURIComponent(period)}` : ""}`),
   financeForecast: (period = "") => get<FinanceForecast>(`/api/finance-forecast${period ? `?period=${encodeURIComponent(period)}` : ""}`),
@@ -586,7 +523,63 @@ export const api = {
   /** 风口聚合: 后端按 date 聚合 dims, 用传入权重计算最终评分 */
   fengkFront: (date = "", weights?: Record<FengDimKey, number>) =>
     get<FengFrontData>(`/api/fengk-front${date ? `?date=${date}` : ""}${weights ? `${date ? "&" : "?"}weights=${FENG_DIM_ORDER.map((k) => weights[k]).join(",")}` : ""}`),
+  /**
+   * 系统监控接口 — 获取各 API 接口性能指标、服务端内存与本地数据库状态。
+   *
+   * @returns {Promise<MonitorData>} 监控数据(详见 MonitorData 类型说明)。
+   * @throws {Error} 网络错误/超时/429 时抛错, 失败重试由 get() 统一处理。
+   * @note 由系统监控面板(MonitorWindow)每 10s 轮询调用; 后端返回内存滚动统计,
+   *       无持久化, 服务重启后指标清零。
+   * @example
+   *   const data = await api.monitor();
+   *   data.endpoints.forEach(e => console.log(e.path, e.avg + "ms", e.successRate + "%"));
+   */
+  monitor: () => get<MonitorData>(`/api/monitor`),
 };
+
+/**
+ * 单个接口路径的性能指标(来自后端 /api/monitor 的 endpoints 数组)。
+ */
+export interface MonitorEndpoint {
+  /** 接口路径(如 "/api/stock-detail") */
+  path: string;
+  /** 累计调用次数(进程启动以来的总量) */
+  count: number;
+  /** 平均响应耗时(毫秒) */
+  avg: number;
+  /** 95 分位响应耗时(毫秒); 无样本时为 0 */
+  p95: number;
+  /** 最大响应耗时(毫秒) */
+  max: number;
+  /** 累计错误次数 */
+  errors: number;
+  /** 成功率(百分比, 保留 1 位小数; 无调用时为 100) */
+  successRate: number;
+  /** 最近 1 分钟调用次数(用于评估调用速率/资源挤占) */
+  rate1m: number;
+  /** 最近一次调用时间戳(毫秒) */
+  lastTs: number;
+  /** 最近一条错误信息; 无错误为 null */
+  lastErr: { ts: number; msg: string } | null;
+}
+
+/**
+ * 系统监控数据(来自后端 /api/monitor)。
+ */
+export interface MonitorData {
+  /** 数据生成时间戳(毫秒) */
+  ts: number;
+  /** 服务进程已运行时长(秒) */
+  uptime: number;
+  /** Node 进程内存占用(字节): rss=常驻内存, heapTotal/heapUsed=堆内存, external=外部内存, arrayBuffers=缓冲区 */
+  serverMem: { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers: number };
+  /** 各接口性能指标数组(按调用次数降序) */
+  endpoints: MonitorEndpoint[];
+  /** SQLite 本地库状态: stocks=个股缓存条数, trends=趋势记录条数, dbPath=库文件路径 */
+  db: { stocks: number; trends: number; dbPath: string };
+  /** 内存缓存状态: entries=内存缓存条目数 */
+  cache: { entries: number };
+}
 
 /** 新闻分析师插件数据结构 */
 export interface PluginPlatformDetail {
