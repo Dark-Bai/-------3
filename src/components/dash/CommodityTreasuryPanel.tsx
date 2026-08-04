@@ -120,7 +120,7 @@ export function CommodityTreasuryPanel({ className = "", ...zoomProps }: { class
 
   // 拖拽开始
   const handleDragStart = useCallback((e: React.DragEvent, idx: number) => {
-    dragNode.current = e.currentTarget;
+    dragNode.current = e.currentTarget as HTMLElement;
     setDragIndex(idx);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", String(idx));

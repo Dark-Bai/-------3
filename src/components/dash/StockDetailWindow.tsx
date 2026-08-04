@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { FloatingWindow } from "./FloatingWindow";
-import { api, type Quote, type StockBoards } from "@/lib/api";
+import { api, type Quote } from "@/lib/api";
 import { useQuote } from "@/lib/market";
 import { clsChg, fmtPct, fmtPrice, fmtYuan } from "@/lib/format";
 import { Spark } from "./Spark";

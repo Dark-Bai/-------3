@@ -1,7 +1,7 @@
 import { memo, useMemo, type ComponentType } from "react";
 import { type PanelZoomProps } from "@/components/dash/Panel";
 import { usePanelZoom } from "@/hooks/usePanelZoom";
-import { isTv } from "@/lib/tv";
+
 
 export type PanelRowDef = {
   defaultH: number;
@@ -22,7 +22,7 @@ const MemoPanel = memo(function MemoPanel({
 
 /** 一屏式大屏: 行高与列宽按缩放状态动态分配 */
 export function DashboardLayout({ rows }: { rows: PanelRowDef[] }) {
-  const { isZoomed, toggle: toggleZoom, layout } = usePanelZoom(rows);
+  const { isZoomed, toggle: toggleZoom } = usePanelZoom(rows);
 
   // TV: 缩放走全屏浮层(Panel.tsx), 兄弟面板尺寸保持默认不变 — 整屏重排在老电视上是卡顿主因
   const defaultLayout = useMemo(

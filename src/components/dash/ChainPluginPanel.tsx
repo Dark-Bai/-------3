@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { usePolling } from "@/hooks/usePolling";
 import { api, type PluginMarketSentimentData } from "@/lib/api";
 
@@ -343,60 +343,14 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
 
 /* ========== 可滚动面板容器 ========== */
 function ScrollSentinel({ children }: { children: React.ReactNode }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [scrollState, setScrollState] = useState({ top: 0, canScroll: false, atBottom: true });
-
-  const update = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const maxScroll = el.scrollHeight - el.clientHeight;
-    setScrollState({
-      top: el.scrollTop,
-      canScroll: maxScroll > 1,
-      atBottom: maxScroll <= 1 || el.scrollTop >= maxScroll - 2,
-    });
-  }, []);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    update();
-    el.addEventListener("scroll", update, { passive: true });
-    const ro = new ResizeObserver(() => update());
-    ro.observe(el);
-    return () => { el.removeEventListener("scroll", update); ro.disconnect(); };
-  }, [update]);
-
-  const scrollToBottom = () => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  };
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {scrollState.canScroll && scrollState.top > 2 && (
-        <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-10 bg-gradient-to-b from-[#f5f0e6] to-transparent" />
-      )}
       <div
-        ref={scrollRef}
-        className="scroll-sentinel flex flex-col gap-2 overflow-y-auto scroll-smooth"
+        className="scroll-sentinel flex flex-col gap-2 overflow-y-auto"
         style={{ scrollbarWidth: "thin", scrollbarColor: "#d4c5a8 transparent" }}
       >
         {children}
       </div>
-      {scrollState.canScroll && !scrollState.atBottom && (
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex flex-col items-center pb-2">
-          <div className="h-10 w-full bg-gradient-to-b from-transparent to-[#f5f0e6]/90" />
-          <button
-            onClick={scrollToBottom}
-            className="pointer-events-auto mt-[-12px] rounded-full bg-[#d4c5a8]/90 p-1.5 shadow-sm ring-1 ring-[#c8b89a]/40 transition-all duration-200 hover:bg-[#c8b89a] hover:ring-[#b8a888] active:scale-95"
-            title="滚动到底部"
-          >
-            <svg className="h-3.5 w-3.5 text-[#6b5b3e]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 9l6 6 6-6" />
-            </svg>
-          </button>
-        </div>
-      )}
       <style>{`
         .scroll-sentinel::-webkit-scrollbar { width: 4px; }
         .scroll-sentinel::-webkit-scrollbar-track { background: transparent; }

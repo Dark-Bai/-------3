@@ -4,8 +4,6 @@ import { TickerTape, type TapeItem } from "@/components/dash/TickerTape";
 import { DashboardHeader } from "@/components/dash/DashboardHeader";
 import { DashboardLayout, type PanelRowDef } from "@/components/dash/DashboardLayout";
 import { IndexPanel } from "@/components/dash/IndexPanel";
-import { CommodityPanel } from "@/components/dash/CommodityPanel";
-import { TreasuryPanel } from "@/components/dash/TreasuryPanel";
 import { CommodityTreasuryPanel } from "@/components/dash/CommodityTreasuryPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
 import { MoneyFlowPanel } from "@/components/dash/MoneyFlowPanel";

@@ -16,7 +16,6 @@ interface FloatingWindowProps {
 let globalZIndex = 1000;
 
 export function FloatingWindow({
-  id,
   title,
   icon,
   accent = "#d4943a",
@@ -35,7 +34,6 @@ export function FloatingWindow({
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
   const resizing = useRef(false);
-  const resizeDir = useRef<string>("");
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, px: 0, py: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
 
