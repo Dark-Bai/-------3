@@ -38,6 +38,17 @@ db.exec(`
     created_at    INTEGER,
     updated_at    INTEGER
   );
+
+  -- 市场情绪涨跌停趋势(历史累计, 按交易日一行, 永久保留)
+  CREATE TABLE IF NOT EXISTS market_trend (
+    date        TEXT PRIMARY KEY,   -- 交易日 YYYY-MM-DD
+    limit_up    INTEGER,            -- 涨停家数
+    limit_down  INTEGER,            -- 跌停家数
+    broken_up   INTEGER,            -- 炸板家数
+    blown_up    INTEGER,            -- 破板家数
+    blown_rate  REAL,               -- 炸板率(%)
+    updated_at  INTEGER
+  );
 `);
 
 const j = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
@@ -110,4 +121,45 @@ function stockCount() {
   return r ? r.c : 0;
 }
 
-module.exports = { getStock, upsertStock, stockCount, DB_PATH };
+/* ---------------- 涨跌停趋势(market_trend) ---------------- */
+
+/** 批量 UPSERT 趋势记录(按日期, 已存在则更新, 历史不变行开销极小) */
+function upsertTrends(records) {
+  const stmt = db.prepare(`
+    INSERT INTO market_trend (date, limit_up, limit_down, broken_up, blown_up, blown_rate, updated_at)
+    VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(date) DO UPDATE SET
+      limit_up   = excluded.limit_up,
+      limit_down = excluded.limit_down,
+      broken_up  = excluded.broken_up,
+      blown_up   = excluded.blown_up,
+      blown_rate = excluded.blown_rate,
+      updated_at = excluded.updated_at
+  `);
+  const now = Date.now();
+  db.exec("BEGIN");
+  try {
+    for (const r of records) {
+      if (!r || !r.date) continue;
+      stmt.run(r.date, r.limitUp ?? null, r.limitDown ?? null, r.brokenUp ?? null, r.blownUp ?? null, r.blownRate ?? null, now);
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return records.length;
+}
+
+/** 读取全部趋势记录(按日期升序) */
+function getTrends() {
+  return db.prepare(`SELECT date, limit_up AS limitUp, limit_down AS limitDown, broken_up AS brokenUp, blown_up AS blownUp, blown_rate AS blownRate FROM market_trend ORDER BY date ASC`).all();
+}
+
+/** 趋势记录总数 */
+function trendCount() {
+  const r = db.prepare(`SELECT COUNT(*) AS c FROM market_trend`).get();
+  return r ? r.c : 0;
+}
+
+module.exports = { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount, DB_PATH };

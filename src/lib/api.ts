@@ -360,12 +360,62 @@ function timeoutSignal(ms: number): AbortSignal {
   return ctrl.signal;
 }
 
-async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path, { signal: timeoutSignal(10000) });
+/* ---------- 前端 API 调用机制(均衡型): 并发上限 + 超时 + 重试 + 429 冷却 ---------- */
+const REQ_CAP = 6;         // 同时在途请求上限(均衡型 8 × 下调20% = 6.4 → 6)
+const REQ_TIMEOUT = 8000;  // 单请求超时(ms)
+const REQ_MAX_RETRY = 2;   // 幂等 GET 最大重试次数
+const RETRY_BASE = 500;    // 首次重试基础退避(ms)
+const RETRY_BACKOFF = 4;   // 指数退避倍数(500ms → 2s)
+const RETRY_429_WAIT = 30000; // 429 后整体冷却(ms), 不重试当前请求
+
+// 简单信号量: 限制同时在途请求数, 出站请求排队, 防止后端超载
+let inFlight = 0;
+const waiters: Array<() => void> = [];
+function acquire(): Promise<void> {
+  if (inFlight < REQ_CAP) { inFlight++; return Promise.resolve(); }
+  return new Promise((r) => waiters.push(r));
+}
+function release(): void {
+  inFlight--;
+  const next = waiters.shift();
+  if (next) { inFlight++; next(); }
+}
+
+let cooldownUntil = 0; // 429 冷却截止时间戳
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const backoff = (attempt: number) => RETRY_BASE * Math.pow(RETRY_BACKOFF, attempt);
+
+async function doGet<T>(path: string, attempt = 0): Promise<T> {
+  // 若处于 429 冷却期, 先等待冷却结束再发请求
+  if (cooldownUntil > Date.now()) await sleep(cooldownUntil - Date.now());
+  let r: Response;
+  try {
+    r = await fetch(path, { signal: timeoutSignal(REQ_TIMEOUT) });
+  } catch (e) {
+    // 网络错误/超时: 幂等 GET 可重试, 指数退避
+    if (attempt < REQ_MAX_RETRY) {
+      await sleep(backoff(attempt));
+      return doGet<T>(path, attempt + 1);
+    }
+    throw e;
+  }
   const j = await r.json().catch(() => null);
+  if (r.status === 429) {
+    cooldownUntil = Date.now() + RETRY_429_WAIT; // 进入冷却, 不重试当前请求
+    throw new Error(j?.error || "rate limited");
+  }
   if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
   if (!j?.ok) throw new Error(j?.error || "api error");
   return j.data as T;
+}
+
+async function get<T>(path: string): Promise<T> {
+  await acquire();
+  try {
+    return await doGet<T>(path);
+  } finally {
+    release();
+  }
 }
 
 /* ---------- 浏览器直连腾讯(兜底) ---------- */

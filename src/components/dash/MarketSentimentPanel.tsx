@@ -270,7 +270,7 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
   const [daysInput, setDaysInput] = useState<string>(String(Math.min(7, maxDays, allReversed.length)));
   const reversed = viewDays < allReversed.length ? allReversed.slice(0, viewDays) : allReversed;
   const maxVal = Math.max(...reversed.map(d => Math.max(d.limitUp, d.limitDown, d.blownUp)), 10);
-  const minNonZero = Math.min(...reversed.map(d => [d.limitUp, d.limitDown, d.blownUp].filter(v => v > 0)), maxVal);
+  const minNonZero = Math.min(...reversed.map(d => [d.limitUp, d.limitDown, d.blownUp].filter(v => v > 0)).flat(), maxVal);
   const w = 600, h = 120, pad = { top: 10, bottom: 18, left: 28, right: 8 };
   const chartW = w - pad.left - pad.right;
   const chartH = h - pad.top - pad.bottom;

@@ -20,7 +20,7 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
       right={<FengWeights {...fengWeights} />}
     >
       <div className="h-full min-h-0 p-1.5">
-        <FengWindList data={data} loading={loading} error={error} />
+        <FengWindList data={data ?? undefined} loading={loading} error={!!error} />
       </div>
     </Panel>
   );

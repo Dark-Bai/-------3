@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, upsertStock, stockCount } = require("./stock-db.cjs");
+const { getStock, upsertStock, stockCount, upsertTrends, getTrends, trendCount } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -1634,43 +1634,53 @@ setTimeout(collectSpotDaily, 60 * 1000).unref();
 
 /* ---------------- 市场情绪折线数据本地存储与容错 ---------------- */
 // 本地持久化目录: server/data/market-sentiment/
-//   trend.json  : 合并后的全量涨跌趋势(按日期去重/更新, 超上限丢弃最旧)
 //   snapshot.json: 最近一次成功刷新的完整面板快照(供实时失败时回退)
+//   涨跌停趋势(250日历史)已迁移至 SQLite 库 market_trend 表(见 stock-db.cjs)
 const MS_DATA_DIR = path.join(__dirname, "data", "market-sentiment");
-const MS_TREND_FILE = path.join(MS_DATA_DIR, "trend.json");
+const MS_TREND_FILE = path.join(MS_DATA_DIR, "trend.json"); // 仅作一次性迁移来源
 const MS_SNAPSHOT_FILE = path.join(MS_DATA_DIR, "snapshot.json");
 const MS_TREND_MAX = 250; // 上游 raw_data 最多约250个交易日, 上限即一份完整年度记录
 
-function loadMsTrend() {
-  try { return JSON.parse(fs.readFileSync(MS_TREND_FILE, "utf-8") || "[]"); } catch { return []; }
-}
 function loadMsSnapshot() {
   try { return JSON.parse(fs.readFileSync(MS_SNAPSHOT_FILE, "utf-8") || "null"); } catch { return null; }
 }
-// 将上游 raw_data 合并进本地存储: 按日期覆盖更新, 新增保留, 超出上限丢弃最旧记录
+// 启动迁移: 若 SQLite 趋势表为空而旧 trend.json 存在, 一次性导入历史, 之后趋势完全走数据库
+function migrateMsTrendIfNeeded() {
+  try {
+    if (trendCount() > 0) return;
+    const legacy = JSON.parse(fs.readFileSync(MS_TREND_FILE, "utf-8") || "[]");
+    if (!Array.isArray(legacy) || !legacy.length) return;
+    const recs = legacy.filter((r) => r && r.date).map((r) => ({
+      date: r.date, limitUp: r.limitUp, limitDown: r.limitDown, brokenUp: r.brokenUp, blownUp: r.blownUp, blownRate: r.blownRate,
+    }));
+    upsertTrends(recs);
+    console.log(`[ms-trend] 已从 trend.json 迁移 ${recs.length} 条历史到 SQLite market_trend`);
+  } catch (e) { console.error("[ms-trend] migrate error:", e?.message || e); }
+}
+migrateMsTrendIfNeeded();
+// 将上游 raw_data 合并进 SQLite: 仅更新/新增当日及变化记录(历史不变行由 UPSERT 去重, 开销极小)
+// 炸板口径: raw_data 第5字段 r[5] 即"炸板家数", 且 炸板率 = r[5]/(涨停数 + r[5]) 与上游自洽(已验证8天)
+// 注意 r[3](blown_limit_up_count) 今日异常为0虽率9.8%, 与率无关, 不得采用
 function mergeMsTrend(rawData) {
-  if (!Array.isArray(rawData) || !rawData.length) return loadMsTrend();
-  const byDate = new Map();
+  if (!Array.isArray(rawData) || !rawData.length) return getTrends();
+  const recs = [];
   for (const r of rawData) {
     const date = r && r[6];
     if (!date) continue;
-    byDate.set(date, { date, limitUp: r[0], limitDown: r[1], brokenUp: r[2], blownUp: r[3], blownRate: r[4] });
+    recs.push({ date, limitUp: r[0] || 0, limitDown: r[1] || 0, brokenUp: r[2] || 0, blownUp: r[5] || 0, blownRate: r[4] });
   }
-  for (const rec of loadMsTrend()) if (rec && rec.date) byDate.set(rec.date, rec);
-  let list = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  if (list.length > MS_TREND_MAX) list = list.slice(list.length - MS_TREND_MAX); // 丢弃最旧
-  try { fs.mkdirSync(MS_DATA_DIR, { recursive: true }); fs.writeFileSync(MS_TREND_FILE, JSON.stringify(list), "utf-8"); }
-  catch (e) { console.error("[ms-trend] write error:", e?.message || e); }
-  return list;
+  if (!recs.length) return getTrends();
+  upsertTrends(recs);
+  return getTrends();
 }
 // 保存最近一次成功刷新快照(实时持久化)
 function saveMsSnapshot(payload) {
   try { fs.mkdirSync(MS_DATA_DIR, { recursive: true }); fs.writeFileSync(MS_SNAPSHOT_FILE, JSON.stringify({ savedAt: Date.now(), payload }), "utf-8"); }
   catch (e) { console.error("[ms-snapshot] write error:", e?.message || e); }
 }
-// 从本地存储构建趋势数据: 取最近半年(130个交易日), 最新日期在前(与前端 reversed 预期一致)
+// 从 SQLite 构建趋势数据: 取最近半年(130个交易日), 最新日期在前(与前端 reversed 预期一致)
 function msTrendFromStore() {
-  const asc = [...loadMsTrend()].sort((a, b) => a.date.localeCompare(b.date));
+  const asc = getTrends();
   return asc.slice(-130).reverse();
 }
 // 市场情绪数据完全不可用时的兜底结构, 保证前端整体不受影响
@@ -1685,13 +1695,17 @@ function msFallbackPayload() {
 }
 
 /* ---------------- 市场情绪v2: 基于 kpl 三接口 (mood / sentiment-indicator / rise-fall) ---------------- */
+// 降API压力优化: rise-fall 返回的 250 日历史趋势 + 昨日表现是"每日变化"的低频数据,
+// 不必随 mood 每 15s 轮询; 用较长 TTL 缓存(5min)解耦, 约 20 倍削减该接口调用量。
+// 实时涨停/跌停家数已由 mood API 提供, 不受影响。cached 失败会自动回退旧数据。
+const MS_RISE_FALL_TTL = 5 * 60 * 1000; // 5 分钟
 async function handleMarketSentimentV2() {
   try {
-    // 使用 allSettled 防止单个API失败拖垮整体
+    // 使用 allSettled 防止单个API失败拖垮整体; rise-fall 走 5min 缓存降低调用频率
     const results = await Promise.allSettled([
       kplFetch("/api/market/mood"),
       kplFetch("/api/market/sentiment-indicator"),
-      kplFetch("/api/market/rise-fall"),
+      cached("kpl-rise-fall", MS_RISE_FALL_TTL, () => kplFetch("/api/market/rise-fall")),
     ]);
 
     const mood = results[0].status === "fulfilled" ? results[0].value : null;
@@ -1805,7 +1819,8 @@ async function handleMarketSentimentV2() {
       riseFall: {
         limitUpCount: rf?.limit_up_count ?? 0,
         limitDownCount: rf?.limit_down_count ?? 0,
-        blownLimitUpCount: rf?.blown_limit_up_count ?? 0,
+        // 炸板 = raw_data 最新一条第5字段 r[5]; 炸板率 = r[5]/(涨停数 + r[5]) 与上游自洽
+        blownLimitUpCount: rawData[0] ? (rawData[0][5] || 0) : (rf?.blown_limit_up_count ?? 0),
         brokenLimitUpCount: rf?.broken_limit_up_count ?? 0,
         blownLimitUpRate: rf?.blown_limit_up_rate ?? 0,
         yesterdayLimitUpPerf: rf?.yesterday_limit_up_performance ?? 0,
