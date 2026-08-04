@@ -77,12 +77,17 @@ async function kplFetch(path, params = {}) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  const resp = await fetch(url.toString(), {
-    headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
-    signal: AbortSignal.timeout(8000),
-  });
-  const json = await resp.json();
-  return json;
+  try {
+    const resp = await fetch(url.toString(), {
+      headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
+      signal: AbortSignal.timeout(15000),
+    });
+    const json = await resp.json();
+    return json;
+  } catch (e) {
+    console.error(`[kplFetch] ${path} failed:`, e.message);
+    return null;
+  }
 }
 
 function todayStr() {
@@ -1665,42 +1670,206 @@ setInterval(collectSpotDaily, 4 * 3600 * 1000).unref();
 // 启动 1 分钟后先补一轮(部署当日即有数据)
 setTimeout(collectSpotDaily, 60 * 1000).unref();
 
-/* ---------------- 插件系统: 新闻分析师 (Python: jieba + requests) ---------------- */
-async function handleNewsAnalyst() {
-  return new Promise((resolve) => {
-    const script = path.join(__dirname, "plugin_news_analyst.py");
-    execFile("python", [script], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-      if (err) {
-        console.error("[plugin-news-analyst] python error:", err.message);
-        return resolve({ success: false, error: err.message });
-      }
+/* ---------------- 市场情绪v2: 基于 kpl 三接口 (mood / sentiment-indicator / rise-fall) ---------------- */
+async function handleMarketSentimentV2() {
+  try {
+    // 使用 allSettled 防止单个API失败拖垮整体
+    const results = await Promise.allSettled([
+      kplFetch("/api/market/mood"),
+      kplFetch("/api/market/sentiment-indicator"),
+      kplFetch("/api/market/rise-fall"),
+    ]);
+
+    const mood = results[0].status === "fulfilled" ? results[0].value : null;
+    const sentimentInd = results[1].status === "fulfilled" ? results[1].value : null;
+    const riseFall = results[2].status === "fulfilled" ? results[2].value : null;
+
+    // 如果 mood 接口失败，视作整体不可用
+    if (!mood) {
+      console.error("[market-sentiment-v2] mood API failed, results:", results.map(r => r.status));
+      return { dataSuccess: false, error: "mood API 不可用" };
+    }
+
+    // --- mood ---
+    const upCount = mood?.上涨家数 ?? 0;
+    const downCount = mood?.下跌家数 ?? 0;
+    const limitUp = mood?.涨停家数 ?? 0;
+    const limitDown = mood?.跌停家数 ?? 0;
+    const turnover = mood?.全市场流通量 ?? 0;
+    const prevTurnover = mood?.前日流通量 ?? 0;
+    const ratio = mood?.涨跌比 ?? 1;
+    const marketColor = mood?.市场颜色 ?? 0;
+    const totalCount = upCount + downCount;
+    const upRatio = totalCount > 0 ? (upCount / totalCount * 100) : 50;
+
+    // 市场情绪评分 (0-100)
+    const sentimentScore = Math.min(100, Math.max(0, Math.round(upRatio)));
+    let sentimentLevel, sentimentDesc;
+    if (sentimentScore >= 75) { sentimentLevel = "极强"; sentimentDesc = "市场情绪高涨"; }
+    else if (sentimentScore >= 60) { sentimentLevel = "偏强"; sentimentDesc = "市场情绪乐观"; }
+    else if (sentimentScore >= 45) { sentimentLevel = "震荡"; sentimentDesc = "市场情绪平稳"; }
+    else if (sentimentScore >= 30) { sentimentLevel = "偏弱"; sentimentDesc = "市场情绪低迷"; }
+    else { sentimentLevel = "极弱"; sentimentDesc = "市场情绪恐慌"; }
+
+    // 量能变化
+    const turnoverChange = prevTurnover > 0 ? ((turnover - prevTurnover) / prevTurnover * 100) : 0;
+    let volLevel;
+    if (turnoverChange >= 20) volLevel = "放量";
+    else if (turnoverChange >= 5) volLevel = "温和放量";
+    else if (turnoverChange >= -5) volLevel = "正常";
+    else if (turnoverChange >= -20) volLevel = "温和缩量";
+    else volLevel = "缩量";
+
+    // --- sentiment-indicator ---
+    const bullishCodes = sentimentInd?.bullish_codes || [];
+    const bearishCodes = sentimentInd?.bearish_codes || [];
+    const allStocks = sentimentInd?.all_stocks || [];
+    let bullishCount = bullishCodes.length;
+    let bearishCount = bearishCodes.length;
+    const totalStockCount = allStocks.length;
+    let stockSamples = [];
+
+    // 若bullish/bearish为空，通过all_stocks实时查询涨跌分布
+    if (bullishCount === 0 && bearishCount === 0 && allStocks.length > 0) {
+      const sample = allStocks.slice(0, 20);
+      const sinaCodes = sample.map(c => c.startsWith("6") ? `sh${c}` : `sz${c}`);
       try {
-        resolve(JSON.parse(stdout));
+        const text = await fetchTextAny(`https://hq.sinajs.cn/list=${sinaCodes.join(",")}`, {
+          referer: "https://finance.sina.com.cn/", gbk: true, timeout: 5000,
+        });
+        const re = /hq_str_(\w+)="([^"]*)"/g;
+        let m;
+        while ((m = re.exec(text))) {
+          const f = m[2].split(",");
+          if (f.length >= 4 && f[0]) {
+            const prev = parseFloat(f[2]);
+            const cur = parseFloat(f[3]);
+            if (isFinite(prev) && isFinite(cur)) {
+              if (cur > prev) bullishCount++;
+              else if (cur < prev) bearishCount++;
+              stockSamples.push({
+                code: m[1].slice(2), // 去掉sh/sz前缀
+                name: f[0],
+                price: cur,
+                change: ((cur - prev) / prev * 100).toFixed(2),
+              });
+            }
+          }
+        }
       } catch (e) {
-        console.error("[plugin-news-analyst] parse error:", e.message, "stdout:", stdout.slice(0, 200));
-        resolve({ success: false, error: "python output parse failed" });
+        console.error("[sentiment] stock quote fetch failed:", e.message);
       }
-    });
-  });
+    }
+
+    // --- rise-fall ---
+    const rf = riseFall || {};
+    const rawData = Array.isArray(rf?.raw_data) ? rf.raw_data : [];
+    // 最近7天趋势数据 (用于图表)
+    const trendData = rawData.slice(0, 7).map(r => ({
+      date: r[6], limitUp: r[0], limitDown: r[1],
+      brokenUp: r[2], blownUp: r[3], blownRate: r[4],
+    }));
+
+    return {
+      dataSuccess: true,
+      mood: {
+        upCount, downCount, limitUp, limitDown,
+        turnover, prevTurnover, ratio, marketColor,
+        totalCount, upRatio: Math.round(upRatio * 10) / 10,
+        downRatio: totalCount > 0 ? Math.round((downCount / totalCount * 100) * 10) / 10 : 0,
+        turnoverChange: Math.round(turnoverChange * 10) / 10,
+        volLevel,
+      },
+      sentiment: {
+        plateId: sentimentInd?.plate_id || "",
+        bullishCount, bearishCount, totalStockCount,
+        netBullish: bullishCount - bearishCount,
+        sentimentScore, sentimentLevel, sentimentDesc,
+        stockSamples, // 成分股列表
+      },
+      riseFall: {
+        limitUpCount: rf?.limit_up_count ?? 0,
+        limitDownCount: rf?.limit_down_count ?? 0,
+        blownLimitUpCount: rf?.blown_limit_up_count ?? 0,
+        brokenLimitUpCount: rf?.broken_limit_up_count ?? 0,
+        blownLimitUpRate: rf?.blown_limit_up_rate ?? 0,
+        yesterdayLimitUpPerf: rf?.yesterday_limit_up_performance ?? 0,
+        yesterdayBrokenPerf: rf?.yesterday_broken_performance ?? 0,
+        date: rf?.date ?? "",
+        trendData,
+      },
+    };
+  } catch (e) {
+    console.error("[market-sentiment-v2] kpl error:", e.message);
+    return { dataSuccess: false, error: e.message };
+  }
 }
 
-/* ---------------- 插件系统: 市场情绪分析师 (Python: akshare + pandas + numpy) ---------------- */
-async function handleMarketSentiment() {
-  return new Promise((resolve) => {
-    const script = path.join(__dirname, "plugin_market_sentiment.py");
-    execFile("python", [script], { timeout: 60000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-      if (err) {
-        console.error("[plugin-market-sentiment] python error:", err.message);
-        return resolve({ dataSuccess: false, error: err.message });
-      }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (e) {
-        console.error("[plugin-market-sentiment] parse error:", e.message, "stdout:", stdout.slice(0, 200));
-        resolve({ dataSuccess: false, error: "python output parse failed" });
-      }
+/* ---------------- 市场情绪新闻: 基于 kpl.liuhepc.cn API (替代原Python插件) ---------------- */
+async function handleNewsAnalystKPL() {
+  try {
+    const news = await kplFetch("/api/advanced/news-flash", { page_size: 30 });
+    const items = news?.data || [];
+    if (!items.length) {
+      return { success: true, fetchTime: new Date().toISOString(), platformStats: { success: 0, total: 0 }, flowData: null, sentimentData: null, hotTopics: [], stockNews: [] };
+    }
+    // 提取关键词做情绪分析
+    const positiveKw = ["涨", "升", "增", "利好", "突破", "创新高", "反弹", "放量", "拉升", "资金流入"];
+    const negativeKw = ["跌", "降", "减", "利空", "破位", "新低", "回调", "缩量", "流出", "风险"];
+    let posCount = 0, negCount = 0;
+    const stockNews = items.map(item => {
+      const title = item.Title || "";
+      let score = 0;
+      for (const kw of positiveKw) { if (title.includes(kw)) score += 10; }
+      for (const kw of negativeKw) { if (title.includes(kw)) score -= 10; }
+      if (score > 0) posCount++;
+      else if (score < 0) negCount++;
+      return {
+        platform: item.Source || "开盘啦",
+        category: item.ZSName || "",
+        title,
+        content: title,
+        matchedKeywords: [],
+        score,
+      };
     });
-  });
+    const total = items.length;
+    const sentimentIndex = total > 0 ? Math.round((posCount / total) * 100) : 50;
+    const sentimentClass = sentimentIndex >= 60 ? "乐观" : sentimentIndex >= 40 ? "中性" : "悲观";
+    // 提取热门话题 (按板块名聚类)
+    const topicMap = {};
+    for (const item of items) {
+      const name = item.ZSName || "";
+      if (name) {
+        topicMap[name] = (topicMap[name] || 0) + 1;
+      }
+    }
+    const hotTopics = Object.entries(topicMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([topic, count]) => ({ topic, count, heat: Math.round(count / total * 100), crossPlatform: 1, sources: ["开盘啦"] }));
+    return {
+      success: true,
+      fetchTime: new Date().toISOString(),
+      platformStats: { success: items.length > 0 ? 1 : 0, total: 1 },
+      flowData: {
+        totalScore: posCount + negCount + 500,
+        socialScore: Math.round(posCount * 40 + 100),
+        newsScore: Math.round(negCount * 30 + 100),
+        financeScore: Math.round((posCount + negCount) * 20 + 100),
+        techScore: Math.round(hotTopics.length * 15 + 50),
+        level: sentimentClass,
+        analysis: `共${total}条快讯，积极${posCount}条，消极${negCount}条`,
+        platformDetails: [{ platform: "kpl", name: "开盘啦快讯", category: "快讯", count: total, score: sentimentIndex }],
+      },
+      sentimentData: { sentimentIndex, sentimentClass, flowFactor: 0, financeFactor: 0, keywordFactor: sentimentIndex, positiveCount: posCount, negativeCount: negCount },
+      hotTopics,
+      stockNews,
+    };
+  } catch (e) {
+    console.error("[news-analyst] kpl error:", e.message);
+    return { success: false, error: e.message };
+  }
 }
 
 /* ---------------- 股票搜索(名称/拼音首字母→代码) ---------------- */
@@ -1914,8 +2083,8 @@ const routes = {
   "/api/stock-search": async (q) =>
     cached(`ssearch:${q.get("q")}`, 5000, () => handleStockSearch(q.get("q") || "")), // 前端击键触发, 短缓存防新浪WAF
   "/api/chain-parse": async (_q, body) => handleChainParse(body || {}),
-  "/api/plugin-news-analyst": async () => cached("plugin-news-analyst", 300000, () => handleNewsAnalyst()),
-  "/api/plugin-market-sentiment": async () => cached("plugin-market-sentiment", 60000, () => handleMarketSentiment()),
+  "/api/plugin-news-analyst": async () => cached("plugin-news-analyst", 30000, () => handleNewsAnalystKPL()),
+  "/api/plugin-market-sentiment": async () => cached("plugin-market-sentiment", 15000, () => handleMarketSentimentV2()),
 };
 
 const MIME = {

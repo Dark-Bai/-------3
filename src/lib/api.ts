@@ -550,66 +550,58 @@ export interface PluginNewsAnalystData {
   stockNews: PluginStockNews[];
 }
 
-/** 市场情绪插件数据结构 */
-export interface PluginMarketIndex {
-  indexName: string;
-  currentPrice?: number;
-  changePercent: number;
+/** 市场情绪v2: 基于 kpl 三接口 (mood / sentiment-indicator / rise-fall) */
+export interface MarketMoodData {
   upCount: number;
   downCount: number;
+  limitUp: number;
+  limitDown: number;
+  turnover: number;
+  prevTurnover: number;
+  ratio: number;
+  marketColor: number;
   totalCount: number;
-  sentimentScore: string;
-  sentimentInterpretation: string;
+  upRatio: number;
+  downRatio: number;
+  turnoverChange: number;
+  volLevel: string;
 }
-export interface PluginLimitUpDown {
+export interface MarketSentimentIndData {
+  plateId: string;
+  bullishCount: number;
+  bearishCount: number;
+  totalStockCount: number;
+  netBullish: number;
+  sentimentScore: number;
+  sentimentLevel: string;
+  sentimentDesc: string;
+  /** 成分股快照(当bullish/bearish为空时，从新浪实时拉取) */
+  stockSamples?: { code: string; name: string; price: number; change: string }[];
+}
+export interface MarketRiseFallTrend {
+  date: string;
+  limitUp: number;
+  limitDown: number;
+  brokenUp: number;
+  blownUp: number;
+  blownRate: number;
+}
+export interface MarketRiseFallData {
   limitUpCount: number;
   limitDownCount: number;
-  limitRatio: string;
-  interpretation: string;
+  blownLimitUpCount: number;
+  brokenLimitUpCount: number;
+  blownLimitUpRate: number;
+  yesterdayLimitUpPerf: number;
+  yesterdayBrokenPerf: number;
   date: string;
-}
-export interface PluginFearGreed {
-  score: string;
-  level: string;
-  interpretation: string;
-}
-export interface PluginArbr {
-  ar: number;
-  br: number;
-  arJudgment: string;
-  brJudgment: string;
-  interpretation: string;
-  period: string;
-}
-export interface PluginVolumeAnalysis {
-  currentVolume: number;
-  avgVolume5: number;
-  ratio: number;
-  level: string;
-  interpretation: string;
-}
-export interface PluginDistributionInterval {
-  range: string;
-  count: number;
-  pct: number;
-}
-export interface PluginDistribution {
-  upCount: number;
-  downCount: number;
-  flatCount: number;
-  totalCount: number;
-  upPct: number;
-  downPct: number;
-  intervals: PluginDistributionInterval[];
+  trendData: MarketRiseFallTrend[];
 }
 export interface PluginMarketSentimentData {
-  arbr: PluginArbr | null;
-  marketIndex: PluginMarketIndex | null;
-  limitUpDown: PluginLimitUpDown | null;
-  fearGreed: PluginFearGreed | null;
-  volumeAnalysis: PluginVolumeAnalysis | null;
-  distribution: PluginDistribution | null;
   dataSuccess: boolean;
+  mood: MarketMoodData;
+  sentiment: MarketSentimentIndData;
+  riseFall: MarketRiseFallData;
 }
 export function useOpenRouterUsage() {
   return usePolling(() => api.openRouterUsage(), 3600000);

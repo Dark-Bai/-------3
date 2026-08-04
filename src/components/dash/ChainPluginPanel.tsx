@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "@/hooks/usePolling";
-import { api, type PluginNewsAnalystData, type PluginMarketSentimentData } from "@/lib/api";
-import { clsChg } from "@/lib/format";
+import { api, type PluginMarketSentimentData } from "@/lib/api";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
+const COLORS = {
+  red: "#b8533a",
+  green: "#4a6b3f",
+  orange: "#d4943a",
+  beige: "#a8987e",
+  dark: "#6b5b3e",
+  bg: "#f5f0e6",
+  border: "#e0d5c0",
+  text: "#8b7a5e",
+};
 
-/* ========== 加载/错误共用 ========== */
+/* ========== 加载/错误 ========== */
 function Loading() {
   return <div className="flex h-full items-center justify-center text-[15px] text-[#a8987e]">加载中…</div>;
 }
@@ -13,225 +22,326 @@ function Failed({ msg = "数据加载失败" }: { msg?: string }) {
   return <div className="flex h-full items-center justify-center text-[15px] text-[#a8987e]">{msg}</div>;
 }
 
-/* ========== 情绪卡片: 恐慌贪婪指数(圆形仪表) ========== */
-function FearGreedGauge({ score, level, interpretation }: { score: string; level: string; interpretation: string }) {
-  const s = parseFloat(score);
-  const color = s >= 75 ? "#b8533a" : s >= 60 ? "#d4943a" : s >= 40 ? "#a8987e" : s >= 25 ? "#4a6b3f" : "#4a6b3f";
-  const bg = s >= 75 ? "bg-[#b8533a]/15 text-[#b8533a]" : s >= 60 ? "bg-[#d4943a]/15 text-[#d4943a]" : s >= 40 ? "bg-[#a8987e]/15 text-[#a8987e]" : s >= 25 ? "bg-[#4a6b3f]/15 text-[#4a6b3f]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
+/* ========== 工具函数 ========== */
+function clsChg(v: number) {
+  if (v > 0) return "text-[#b8533a]";
+  if (v < 0) return "text-[#4a6b3f]";
+  return "text-[#6b5b3e]";
+}
+function fmt(v: number) { return v.toLocaleString("zh-CN"); }
+function fmtPct(v: number) { return v >= 0 ? `+${v.toFixed(2)}%` : `${v.toFixed(2)}%`; }
+function fmtTurnover(v: number) {
+  if (v >= 10000) return (v / 10000).toFixed(1) + "亿";
+  if (v >= 1) return v.toFixed(1) + "万";
+  return v + "";
+}
+
+/* ========== 卡片1: 市场情绪评分 (圆形仪表盘) ========== */
+function SentimentScoreCard({ score, level, desc }: { score: number; level: string; desc: string }) {
+  const color = score >= 75 ? COLORS.red : score >= 60 ? COLORS.orange : score >= 45 ? COLORS.beige : score >= 30 ? COLORS.green : "#4a6b3f";
+  const bgTag = score >= 75 ? "bg-[#b8533a]/15 text-[#b8533a]" : score >= 60 ? "bg-[#d4943a]/15 text-[#d4943a]" : score >= 45 ? "bg-[#a8987e]/15 text-[#a8987e]" : score >= 30 ? "bg-[#4a6b3f]/15 text-[#4a6b3f]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
+  // 圆弧参数
+  const r = 28, cx = 36, cy = 36, circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - score / 100);
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">恐慌贪婪指数</div>
+      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">市场情绪评分</div>
       <div className="flex items-center gap-3">
-        <div className="relative flex h-18 w-18 shrink-0 items-center justify-center rounded-full border-2 border-[#e0d5c0]">
-          <div className="text-center">
-            <div className="text-[20px] font-bold leading-none" style={{ color, ...TNUM }}>{parseFloat(score).toFixed(0)}</div>
-            <div className="text-[11px] text-[#a8987e]">/100</div>
-          </div>
-        </div>
+        {/* SVG 圆形仪表 */}
+        <svg width={72} height={72} viewBox="0 0 72 72" className="shrink-0">
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e0d5c0" strokeWidth={6} />
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={6}
+            strokeDasharray={circumference} strokeDashoffset={offset}
+            strokeLinecap="round" transform={`rotate(-90 ${cx} ${cy})`}
+            style={{ transition: "stroke-dashoffset 0.6s ease" }} />
+          <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight="bold" fill={color} style={{ fontVariantNumeric: "tabular-nums" }}>
+            {score}
+          </text>
+          <text x={cx} y={cy + 12} textAnchor="middle" fontSize={8} fill="#a8987e">/100</text>
+        </svg>
         <div className="min-w-0 flex-1">
-          <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${bg}`}>{level}</span>
-          <div className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{interpretation}</div>
+          <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${bgTag}`}>{level}</span>
+          <div className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{desc}</div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ========== 情绪卡片: 新闻情绪指数(进度条) ========== */
-function SentimentBar({ index, cls, pos, neg }: { index: number; cls: string; pos: number; neg: number }) {
-  const barColor = index >= 60 ? "#b8533a" : index >= 40 ? "#d4943a" : "#4a6b3f";
-  const tagCls = index >= 60 ? "bg-[#b8533a]/15 text-[#b8533a]" : index >= 40 ? "bg-[#d4943a]/15 text-[#d4943a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
+/* ========== 卡片2: 涨跌统计 ========== */
+function UpDownCard({ upCount, downCount, upRatio, downRatio, total }: { upCount: number; downCount: number; upRatio: number; downRatio: number; total: number }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">新闻情绪指数</span>
-        <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${tagCls}`}>{cls}</span>
-      </div>
-      <div className="mb-1 flex items-center gap-2">
-        <span className="text-[20px] font-bold leading-none text-[#6b5b3e]" style={TNUM}>{index}</span>
-        <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-[#e0d5c0]">
-          <div className="h-full rounded-full transition-all" style={{ width: `${index}%`, background: barColor }} />
-        </div>
-      </div>
-      <div className="flex items-center gap-2 text-[12px] text-[#a8987e]">
-        <span className="flex items-center gap-0.5"><span className="h-2.5 w-2 rounded-full bg-[#b8533a]" />积极 {pos}</span>
-        <span className="flex items-center gap-0.5"><span className="h-2.5 w-2 rounded-full bg-[#4a6b3f]" />消极 {neg}</span>
-      </div>
-    </div>
-  );
-}
-
-/* ========== 情绪卡片: 大盘市场情绪 ========== */
-function MarketIndexCard({ idx }: { idx: PluginMarketSentimentData["marketIndex"] }) {
-  if (!idx) return null;
-  const upRatio = idx.totalCount > 0 ? (idx.upCount / idx.totalCount * 100).toFixed(0) : "0";
-  return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">大盘市场情绪</div>
-      <div className="flex items-baseline justify-between">
-        <span className="text-[12px] text-[#6b5b3e]">{idx.indexName}</span>
-        <span className={`text-[15px] font-bold ${clsChg(idx.changePercent)}`} style={TNUM}>
-          {idx.changePercent >= 0 ? "+" : ""}{idx.changePercent}%
-        </span>
-      </div>
-      <div className="mt-1 flex items-center gap-2">
-        <div className="flex flex-1 overflow-hidden rounded-full bg-[#e0d5c0] text-[0]">
-          <div className="h-4 rounded-l-full bg-[#b8533a] leading-none" style={{ width: `${upRatio}%` }} />
-          <div className="h-4 bg-[#4a6b3f] leading-none" style={{ flex: 1 }} />
-        </div>
-      </div>
-      <div className="mt-1.5 flex items-center justify-between text-[12px] text-[#a8987e]">
-        <span>涨 {idx.upCount}</span>
-        <span>跌 {idx.downCount}</span>
-      </div>
-      <div className="mt-0.5 text-[12px] leading-relaxed text-[#8b7a5e]">{idx.sentimentInterpretation}</div>
-    </div>
-  );
-}
-
-/* ========== ARBR 情绪指标卡片 ========== */
-function ArbrCard({ arbr }: { arbr: PluginMarketSentimentData["arbr"] }) {
-  if (!arbr) return null;
-  const arColor = arbr.arJudgment === "多头" ? "#b8533a" : arbr.arJudgment === "偏多" ? "#d4943a" : arbr.arJudgment === "中性" ? "#a8987e" : "#4a6b3f";
-  const brColor = arbr.brJudgment === "多头" ? "#b8533a" : arbr.brJudgment === "偏多" ? "#d4943a" : arbr.brJudgment === "中性" ? "#a8987e" : "#4a6b3f";
-  return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">ARBR 情绪指标</div>
-      <div className="flex items-center gap-3">
-        <div className="flex flex-col items-center">
-          <span className="text-[11px] text-[#a8987e]">AR</span>
-          <span className="text-[20px] font-bold" style={{ color: arColor, ...TNUM }}>{arbr.ar}</span>
-          <span className="text-[11px]" style={{ color: arColor }}>{arbr.arJudgment}</span>
-        </div>
-        <div className="text-[20px] text-[#d4c5a8]">/</div>
-        <div className="flex flex-col items-center">
-          <span className="text-[11px] text-[#a8987e]">BR</span>
-          <span className="text-[20px] font-bold" style={{ color: brColor, ...TNUM }}>{arbr.br}</span>
-          <span className="text-[11px]" style={{ color: brColor }}>{arbr.brJudgment}</span>
-        </div>
-      </div>
-      <div className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{arbr.interpretation}</div>
-    </div>
-  );
-}
-
-/* ========== 成交量分析卡片 ========== */
-function VolumeCard({ vol }: { vol: PluginMarketSentimentData["volumeAnalysis"] }) {
-  if (!vol) return null;
-  const volColor = vol.level === "放量" || vol.level === "温和放量" ? "#b8533a" : vol.level === "正常" ? "#a8987e" : "#4a6b3f";
-  const tagCls = vol.level === "放量" || vol.level === "温和放量" ? "bg-[#b8533a]/15 text-[#b8533a]" : vol.level === "正常" ? "bg-[#a8987e]/15 text-[#a8987e]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
-  return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">成交量分析</span>
-        <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${tagCls}`}>{vol.level}</span>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{vol.ratio.toFixed(2)}x</span>
-        <span className="text-[12px] text-[#a8987e]">量比</span>
-      </div>
-      <div className="mt-1 flex items-center gap-2">
-        <div className="flex flex-1 overflow-hidden rounded-full bg-[#e0d5c0] text-[0]">
-          <div className="h-2 rounded-full transition-all" style={{ width: `${Math.min(vol.ratio / 2 * 100, 100)}%`, background: volColor }} />
-        </div>
-      </div>
-      <div className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{vol.interpretation}</div>
-    </div>
-  );
-}
-
-/* ========== 涨跌分布卡片 ========== */
-function DistributionCard({ dist }: { dist: PluginMarketSentimentData["distribution"] }) {
-  if (!dist) return null;
-  return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨跌分布</div>
-      <div className="mb-1 flex items-center gap-2 text-[12px]">
-        <span className="font-medium text-[#b8533a]">涨 {dist.upPct}%</span>
-        <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-[#e0d5c0]">
-          <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${dist.upPct}%` }} />
-          <div className="h-full bg-[#d4c5a8]" style={{ width: `${dist.flatCount / dist.totalCount * 100}%` }} />
-          <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
-        </div>
-        <span className="font-medium text-[#4a6b3f]">跌 {dist.downPct}%</span>
-      </div>
-      <div className="flex flex-wrap gap-0.5">
-        {dist.intervals.filter(i => i.count > 0).map(i => (
-          <span key={i.range} className="rounded bg-[#e0d5c0]/50 px-1 text-[11px] text-[#8b7a5e]">
-            {i.range} <span className="font-medium text-[#6b5b3e]">{i.count}</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ========== 流量分析卡片 ========== */
-function FlowCard({ flowData }: { flowData: PluginNewsAnalystData["flowData"] }) {
-  const cats = [
-    { label: "社交", value: flowData.socialScore, color: "#d4943a" },
-    { label: "新闻", value: flowData.newsScore, color: "#4a6b3f" },
-    { label: "财经", value: flowData.financeScore, color: "#b8533a" },
-    { label: "科技", value: flowData.techScore, color: "#a8987e" },
-  ];
-  const maxVal = Math.max(...cats.map(c => c.value), 1);
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">流量分析</span>
-        <span className="rounded bg-[#d4943a]/15 px-1.5 py-0.5 text-[12px] font-medium text-[#d4943a]">{flowData.level}</span>
-      </div>
-      <div className="mb-1 flex items-baseline gap-2">
-        <span className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{flowData.totalScore}</span>
-        <span className="text-[11px] text-[#a8987e]">/ 1000</span>
-      </div>
-      <div className="mb-1 flex min-w-0 flex-col gap-0.5">
-        {cats.map(c => (
-          <div key={c.label} className="flex min-w-0 items-center gap-1.5 text-[12px]">
-            <span className="w-8 shrink-0 text-right text-[#a8987e]">{c.label}</span>
-            <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-[#e0d5c0]">
-              <div className="h-full rounded-full" style={{ width: `${(c.value / maxVal) * 100}%`, background: c.color }} />
-            </div>
-            <span className="w-10 shrink-0 text-right font-medium text-[#6b5b3e]" style={TNUM}>{c.value}</span>
-          </div>
-        ))}
-      </div>
-      <div className="break-words text-[12px] leading-relaxed text-[#8b7a5e]">{flowData.analysis}</div>
-    </div>
-  );
-}
-
-/* ========== 涨跌停统计卡片 ========== */
-function LimitUpDownCard({ lud }: { lud: PluginMarketSentimentData["limitUpDown"] }) {
-  if (!lud) return null;
-  const total = lud.limitUpCount + lud.limitDownCount;
-  const upPct = total > 0 ? (lud.limitUpCount / total * 100) : 50;
-  return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1.5 text-[11px] font-semibold text-[#8b7a5e]">涨跌停统计</div>
+      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨跌统计</div>
       <div className="flex items-center justify-around py-1">
         <div className="text-center">
-          <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{lud.limitUpCount}</div>
+          <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{fmt(upCount)}</div>
+          <div className="text-[12px] text-[#a8987e]">上涨</div>
+        </div>
+        <div className="text-[20px] text-[#d4c5a8]">/</div>
+        <div className="text-center">
+          <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{fmt(downCount)}</div>
+          <div className="text-[12px] text-[#a8987e]">下跌</div>
+        </div>
+      </div>
+      {/* 涨跌比例条 */}
+      <div className="mb-1 flex h-3 overflow-hidden rounded-full bg-[#e0d5c0]">
+        <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${upRatio}%` }} />
+        <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
+      </div>
+      <div className="flex items-center justify-between text-[12px] text-[#a8987e]">
+        <span>涨 {upRatio.toFixed(1)}%</span>
+        <span>总 {fmt(total)}</span>
+        <span>跌 {downRatio.toFixed(1)}%</span>
+      </div>
+    </div>
+  );
+}
+
+/* ========== 卡片3: 涨停跌停对比 ========== */
+function LimitUpDownCard({ limitUp, limitDown, blownUp, blownRate }: { limitUp: number; limitDown: number; blownUp: number; blownRate: number }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停跌停</div>
+      <div className="flex items-center justify-around py-1">
+        <div className="text-center">
+          <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{limitUp}</div>
           <div className="text-[12px] text-[#a8987e]">涨停</div>
         </div>
         <div className="text-[20px] text-[#d4c5a8]">/</div>
         <div className="text-center">
-          <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{lud.limitDownCount}</div>
+          <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{limitDown}</div>
           <div className="text-[12px] text-[#a8987e]">跌停</div>
         </div>
+        <div className="w-px self-stretch bg-[#e0d5c0]" />
+        <div className="text-center">
+          <div className="text-[20px] font-bold text-[#d4943a]" style={TNUM}>{blownUp}</div>
+          <div className="text-[12px] text-[#a8987e]">炸板</div>
+        </div>
+        <div className="w-px self-stretch bg-[#e0d5c0]" />
+        <div className="text-center">
+          <div className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{blownRate.toFixed(1)}%</div>
+          <div className="text-[12px] text-[#a8987e]">炸板率</div>
+        </div>
       </div>
-      <div className="mb-1 flex h-2 overflow-hidden rounded-full bg-[#e0d5c0]">
-        <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${upPct}%` }} />
-        <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
-      </div>
-      <div className="text-[12px] leading-relaxed text-[#8b7a5e]">{lud.interpretation}</div>
     </div>
   );
 }
 
+/* ========== 卡片4: 多空情绪 ========== */
+function BullBearCard({ bullish, bearish, net, total, samples }: {
+  bullish: number; bearish: number; net: number; total: number;
+  samples?: { code: string; name: string; price: number; change: string }[];
+}) {
+  const hasApiData = bullish > 0 || bearish > 0;
+  const hasSamples = samples && samples.length > 0;
+  const totalRatio = hasApiData && total > 0 ? (bullish / total * 100) : 50;
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-[#8b7a5e]">多空情绪</span>
+        {hasApiData && (
+          <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${net >= 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]"}`}>
+            {net >= 0 ? "偏多" : "偏空"} {net >= 0 ? "+" : ""}{net}
+          </span>
+        )}
+        {hasSamples && !hasApiData && (
+          <span className="rounded bg-[#a8987e]/15 px-1.5 py-0.5 text-[12px] font-medium text-[#a8987e]">
+            实时 {bullish}/{bearish}
+          </span>
+        )}
+      </div>
+      {hasApiData ? (
+        <>
+          <div className="flex items-center gap-3 py-1">
+            <div className="flex-1 text-center">
+              <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{bullish}</div>
+              <div className="text-[12px] text-[#a8987e]">看多</div>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{bearish}</div>
+              <div className="text-[12px] text-[#a8987e]">看空</div>
+            </div>
+          </div>
+          <div className="flex h-2 overflow-hidden rounded-full bg-[#e0d5c0]">
+            <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${totalRatio}%` }} />
+            <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
+          </div>
+          <div className="mt-1 text-center text-[12px] text-[#a8987e]">共 {total} 只成分股</div>
+        </>
+      ) : hasSamples ? (
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: 160 }}>
+          {samples.map(s => (
+            <div key={s.code} className="flex items-center justify-between text-[12px]">
+              <span className="truncate text-[#6b5b3e]">{s.name}</span>
+              <span className={`shrink-0 font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
+                {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-1 items-center justify-center text-[12px] text-[#a8987e]">暂无数据</div>
+      )}
+    </div>
+  );
+}
 
+/* ========== 卡片5: 量能分析 ========== */
+function VolumeCard({ turnover, prevTurnover, ratio, change, level }: { turnover: number; prevTurnover: number; ratio: number; change: number; level: string }) {
+  const tagCls = change >= 20 ? "bg-[#b8533a]/15 text-[#b8533a]" : change >= 5 ? "bg-[#d4943a]/15 text-[#d4943a]" : change >= -5 ? "bg-[#a8987e]/15 text-[#a8987e]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
+  // 提示灯条：正涨(红)负跌(绿)，绝对值越大颜色越深
+  const intensity = Math.min(Math.abs(change) / 40, 1); // 0~1
+  const lampOpacity = 0.20 + intensity * 0.65; // 透明度 0.20~0.85
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-[#8b7a5e]">量能分析</span>
+        <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${tagCls}`}>{level}</span>
+      </div>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{fmtTurnover(turnover)}</span>
+        <span className="text-[12px] text-[#a8987e]">流通量</span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-[12px] text-[#a8987e]">
+        <span>前日 {fmtTurnover(prevTurnover)}</span>
+        <span className={`font-medium ${clsChg(change)}`} style={TNUM}>{change >= 0 ? "+" : ""}{change.toFixed(1)}%</span>
+      </div>
+      {/* 提示灯条：居中，颜色深浅反映量能变化幅度 */}
+      <div className="mt-1.5 h-2 w-3/4 overflow-hidden rounded-full transition-all mx-auto"
+        style={{ backgroundColor: `rgba(0,0,0,0.06)` }}>
+        <div className="h-full w-full rounded-full transition-all duration-500"
+          style={{ backgroundColor: `rgba(${change > 0 ? "184,83,58" : change < 0 ? "74,107,63" : "160,150,130"},${lampOpacity})` }} />
+      </div>
+      <div className="mt-1 text-[12px] text-[#a8987e]">量比 <span className="font-medium text-[#6b5b3e]" style={TNUM}>{ratio.toFixed(2)}x</span></div>
+    </div>
+  );
+}
 
-/* ========== 可滚动面板容器(带滚动指示器) ========== */
+/* ========== 卡片6: 涨停表现 ========== */
+function LimitPerfCard({ yestPerf, yestBroken, brokenUp }: { yestPerf: number; yestBroken: number; brokenUp: number }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停表现</div>
+      <div className="flex items-center justify-around py-1">
+        <div className="text-center">
+          <div className={`text-[20px] font-bold ${clsChg(yestPerf)}`} style={TNUM}>{fmtPct(yestPerf)}</div>
+          <div className="text-[12px] text-[#a8987e]">昨涨停表现</div>
+        </div>
+        <div className="w-px self-stretch bg-[#e0d5c0]" />
+        <div className="text-center">
+          <div className={`text-[20px] font-bold ${clsChg(yestBroken)}`} style={TNUM}>{fmtPct(yestBroken)}</div>
+          <div className="text-[12px] text-[#a8987e]">昨破板表现</div>
+        </div>
+        <div className="w-px self-stretch bg-[#e0d5c0]" />
+        <div className="text-center">
+          <div className="text-[20px] font-bold text-[#d4943a]" style={TNUM}>{brokenUp}</div>
+          <div className="text-[12px] text-[#a8987e]">破板数</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========== 卡片7: 历史趋势迷你图 (SVG) ========== */
+function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["trendData"] }) {
+  if (!data || data.length < 2) return null;
+  const reversed = [...data].reverse();
+  const maxVal = Math.max(...reversed.map(d => Math.max(d.limitUp, d.limitDown, d.blownUp)), 10);
+  const w = 600, h = 120, pad = { top: 10, bottom: 18, left: 28, right: 8 };
+  const chartW = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+  const stepX = chartW / (reversed.length - 1);
+  const scaleY = (v: number) => pad.top + chartH - (v / maxVal * chartH);
+
+  const upPath = reversed.map((d, i) => `${i === 0 ? "M" : "L"}${pad.left + i * stepX},${scaleY(d.limitUp)}`).join(" ");
+  const downPath = reversed.map((d, i) => `${i === 0 ? "M" : "L"}${pad.left + i * stepX},${scaleY(d.limitDown)}`).join(" ");
+  const blownPath = reversed.map((d, i) => `${i === 0 ? "M" : "L"}${pad.left + i * stepX},${scaleY(d.blownUp)}`).join(" ");
+
+  const areaUp = upPath + ` L${pad.left + (reversed.length - 1) * stepX},${pad.top + chartH} L${pad.left},${pad.top + chartH} Z`;
+  const areaDown = downPath + ` L${pad.left + (reversed.length - 1) * stepX},${pad.top + chartH} L${pad.left},${pad.top + chartH} Z`;
+
+  /* ---- 鼠标悬停 ---- */
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const scale = w / rect.width;
+    const mx = (e.clientX - rect.left) * scale;
+    const cx = mx - pad.left;
+    if (cx < 0 || cx > chartW) { setHoverIdx(null); return; }
+    const idx = Math.round(cx / stepX);
+    setHoverIdx(idx >= 0 && idx < reversed.length ? idx : null);
+  };
+  const handleMouseLeave = () => setHoverIdx(null);
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-[#8b7a5e]">涨停跌停趋势 (近{reversed.length}天)</span>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#b8533a]" />涨停</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#4a6b3f]" />跌停</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#d4943a]" />炸板</span>
+        </div>
+      </div>
+      <svg ref={svgRef} viewBox={`0 0 ${w} ${h}`} className="h-[120px] w-full" preserveAspectRatio="xMidYMid meet"
+        onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} style={{ cursor: hoverIdx !== null ? "crosshair" : "default" }}>
+        {/* 网格线 + Y轴标签 */}
+        {[0, 0.25, 0.5, 0.75, 1].map(p => (
+          <g key={p}>
+            <line x1={pad.left} y1={pad.top + chartH * (1 - p)} x2={pad.left + chartW} y2={pad.top + chartH * (1 - p)} stroke="#e0d5c0" strokeWidth={0.5} strokeDasharray="3,3" />
+            <text x={pad.left - 4} y={pad.top + chartH * (1 - p) + 3} textAnchor="end" fontSize={8} fill="#a8987e">{Math.round(maxVal * p)}</text>
+          </g>
+        ))}
+        {/* 面积填充 */}
+        <path d={areaUp} fill="#b8533a" opacity={0.08} />
+        <path d={areaDown} fill="#4a6b3f" opacity={0.08} />
+        {/* 折线 */}
+        <path d={upPath} fill="none" stroke="#b8533a" strokeWidth={1.5} strokeLinejoin="round" />
+        <path d={downPath} fill="none" stroke="#4a6b3f" strokeWidth={1.5} strokeLinejoin="round" />
+        <path d={blownPath} fill="none" stroke="#d4943a" strokeWidth={1.5} strokeLinejoin="round" strokeDasharray="4,2" />
+        {/* 日期标签 */}
+        {reversed.map((d, i) => {
+          if (i % Math.max(1, Math.floor(reversed.length / 5)) !== 0 && i !== reversed.length - 1) return null;
+          const dateStr = d.date?.slice(5) || "";
+          return (
+            <text key={i} x={pad.left + i * stepX} y={h - 3} textAnchor="middle" fontSize={8} fill="#a8987e">
+              {dateStr}
+            </text>
+          );
+        })}
+        {/* 十字交叉线 + 数据提示框 */}
+        {hoverIdx !== null && (() => {
+          const d = reversed[hoverIdx];
+          const cx = pad.left + hoverIdx * stepX;
+          const tipW = 90, tipH = 48;
+          let boxX = cx + 8;
+          if (boxX + tipW > w - pad.right) boxX = cx - tipW - 8;
+          const boxY = pad.top + 2;
+          return (
+            <g>
+              <line x1={cx} y1={pad.top} x2={cx} y2={pad.top + chartH} stroke="#8b7a5e" strokeWidth={1} strokeDasharray="2,3" />
+              <circle cx={cx} cy={scaleY(d.limitUp)} r={3} fill="#b8533a" />
+              <circle cx={cx} cy={scaleY(d.limitDown)} r={3} fill="#4a6b3f" />
+              <circle cx={cx} cy={scaleY(d.blownUp)} r={3} fill="#d4943a" />
+              <rect x={boxX} y={boxY} width={tipW} height={tipH} rx={3} fill="#f5f0e6" stroke="#d4c5a8" strokeWidth={0.8} opacity={0.95} />
+              <text x={boxX + tipW / 2} y={boxY + 12} textAnchor="middle" fontSize={9} fontWeight="bold" fill="#6b5b3e">{d.date?.slice(5) || d.date}</text>
+              <text x={boxX + 6} y={boxY + 24} fontSize={8} fill="#b8533a">↑ {d.limitUp}</text>
+              <text x={boxX + tipW / 2} y={boxY + 24} textAnchor="middle" fontSize={8} fill="#4a6b3f">↓ {d.limitDown}</text>
+              <text x={boxX + tipW - 6} y={boxY + 24} textAnchor="end" fontSize={8} fill="#d4943a">⚡ {d.blownUp}</text>
+              <text x={boxX + 6} y={boxY + 37} fontSize={8} fill="#8b7a5e">炸板率 {d.blownRate != null ? d.blownRate.toFixed(1) + "%" : "-"}</text>
+            </g>
+          );
+        })()}
+      </svg>
+    </div>
+  );
+}
+
+/* ========== 可滚动面板容器 ========== */
 function ScrollSentinel({ children }: { children: React.ReactNode }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollState, setScrollState] = useState({ top: 0, canScroll: false, atBottom: true });
@@ -263,7 +373,6 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* 顶部渐变遮罩 — 滚动到顶部时隐藏 */}
       {scrollState.canScroll && scrollState.top > 2 && (
         <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-10 bg-gradient-to-b from-[#f5f0e6] to-transparent" />
       )}
@@ -274,7 +383,6 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
       >
         {children}
       </div>
-      {/* 底部渐变遮罩 + 滚动箭头指示器 — 到达底部时隐藏 */}
       {scrollState.canScroll && !scrollState.atBottom && (
         <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex flex-col items-center pb-2">
           <div className="h-10 w-full bg-gradient-to-b from-transparent to-[#f5f0e6]/90" />
@@ -301,85 +409,54 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
 
 /* ========== 主面板 ========== */
 export function ChainPluginPanel({ className = "" }: { className?: string }) {
-  const { data: newsData, loading: newsLoading } = usePolling(
-    () => api.pluginNewsAnalyst(),
-    300000,
-    []
-  );
-  const { data: sentimentData, loading: sentimentLoading } = usePolling(
+  const { data: sentData, loading } = usePolling(
     () => api.pluginMarketSentiment(),
-    60000,
+    15000,
     []
   );
-
-  const loading = newsLoading || sentimentLoading;
-  const newsOk = newsData?.success;
-  const sentimentOk = sentimentData?.dataSuccess;
 
   const updateTime = useMemo(() => {
-    const t = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    return t;
-  }, [newsData, sentimentData]);
+    return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }, [sentData]);
 
   if (loading) return <Loading />;
-  if (!newsOk && !sentimentOk) return <Failed msg="数据接口暂不可用" />;
+  if (!sentData?.dataSuccess) return <Failed msg="市场情绪数据暂不可用" />;
+
+  const { mood, sentiment: si, riseFall } = sentData;
 
   return (
     <div className={`flex h-full min-h-0 flex-col p-2.5 ${className}`}>
-      {/* 顶部状态栏 — 始终固定 */}
+      {/* 顶部状态栏 */}
       <div className="mb-2 shrink-0 rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
         <div className="flex items-center gap-2 text-[12px] text-[#8b7a5e]">
-          <span className="font-semibold text-[#6b5b3e]">市场情绪总览</span>
+          <span className="font-semibold text-[#6b5b3e]">市场情绪</span>
           <span className="text-[#d4c5a8]">|</span>
-          <span>
-            数据源:
-            {newsOk && ` 新闻(22平台) `}
-            {newsOk && sentimentOk && <span className="text-[#d4c5a8]">·</span>}
-            {sentimentOk && ` 大盘(上证/涨跌停/ARBR)`}
-          </span>
+          <span>数据源: 开盘啦</span>
           <span className="text-[#d4c5a8]">|</span>
           <span>更新: {updateTime}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {newsData?.platformStats && (
-            <span className="text-[11px] text-[#a8987e]">
-              平台 {newsData.platformStats.success}/{newsData.platformStats.total}
-            </span>
-          )}
-          {newsData?.fetchTime && (
-            <span className="text-[11px] text-[#d4c5a8]">
-              {new Date(newsData.fetchTime).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
+          <span className="text-[#d4c5a8]">|</span>
+          <span className="text-[11px]">情绪评分 <span className={`font-medium ${clsChg(si.sentimentScore - 50)}`} style={TNUM}>{si.sentimentScore}</span> ({si.sentimentLevel})</span>
         </div>
       </div>
 
       <ScrollSentinel>
-        {/* 第一行: 四大情绪指标(恐慌贪婪 + 新闻情绪 + 大盘 + ARBR) */}
+        {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
         <div className="flex shrink-0 gap-2">
-          {sentimentData?.fearGreed && <FearGreedGauge {...sentimentData.fearGreed} />}
-          {newsData?.sentimentData && (
-            <SentimentBar
-              index={newsData.sentimentData.sentimentIndex}
-              cls={newsData.sentimentData.sentimentClass}
-              pos={newsData.sentimentData.positiveCount}
-              neg={newsData.sentimentData.negativeCount}
-            />
-          )}
-          <MarketIndexCard idx={sentimentData?.marketIndex ?? null} />
-          {sentimentData?.arbr && <ArbrCard arbr={sentimentData.arbr} />}
+          <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
+          <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
+          <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
         </div>
 
-        {/* 第二行: 涨跌停 + 成交量分析 + 涨跌分布 */}
+        {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
         <div className="flex shrink-0 gap-2">
-          {sentimentData?.limitUpDown && <LimitUpDownCard lud={sentimentData.limitUpDown} />}
-          {sentimentData?.volumeAnalysis && <VolumeCard vol={sentimentData.volumeAnalysis} />}
-          {sentimentData?.distribution && <DistributionCard dist={sentimentData.distribution} />}
+          <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
+          <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
+          <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
         </div>
 
-        {/* 第三行: 流量分析 */}
+        {/* 第三行: 历史趋势图 (跨列) */}
         <div className="flex shrink-0 gap-2">
-          {newsData?.flowData && <FlowCard flowData={newsData.flowData} />}
+          {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
         </div>
       </ScrollSentinel>
     </div>
