@@ -20,6 +20,8 @@ interface PanelProps extends PanelZoomProps {
   /** 弹出悬浮窗默认尺寸(默认 960x640) */
   defaultWidth?: number;
   defaultHeight?: number;
+  /** 点击悬浮窗任意处时的回调(置顶之外的可选副作用, 如 PHILIA 自动触发分析) */
+  onWindowClick?: () => void;
 }
 
 /** 驾驶舱面板容器 — 复古报刊专栏风格 */
@@ -36,6 +38,7 @@ export function Panel({
   onToggleZoom,
   defaultWidth,
   defaultHeight,
+  onWindowClick,
 }: PanelProps) {
   const tvOverlay = isTv && isZoomed;
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
@@ -118,6 +121,7 @@ export function Panel({
           onClose={handleToggleZoom}
           defaultWidth={defaultWidth}
           defaultHeight={defaultHeight}
+          onWindowClick={onWindowClick}
         >
           {children}
         </FloatingWindow>

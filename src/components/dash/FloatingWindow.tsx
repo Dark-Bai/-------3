@@ -1,6 +1,33 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Minus, Square, X, Maximize2 } from "lucide-react";
+import { Minus, Square, X, Maximize2, RotateCcw } from "lucide-react";
+
+/* ---------------- 小窗尺寸/位置记忆 ----------------
+ * 每次拖拽移动或调整大小结束后, 将 {x,y,w,h} 持久化到 localStorage(按窗口 id 分键),
+ * 应用重启后读取并应用, 保证用户调整过的小窗大小在重启后仍生效。
+ * key 形如 dash:float:{id}:layout, 与既有 localStorage 约定(dash:*)保持一致。
+ */
+interface SavedLayout { x: number; y: number; w: number; h: number; }
+const LAYOUT_KEY = (id: string) => `dash:float:${id}:layout`;
+function loadLayout(id: string): SavedLayout | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY(id));
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (typeof o !== "object" || o === null) return null;
+    const { x, y, w, h } = o as Partial<SavedLayout>;
+    if (![x, y, w, h].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+    return { x: x as number, y: y as number, w: w as number, h: h as number };
+  } catch {
+    return null;
+  }
+}
+function saveLayout(id: string, l: SavedLayout) {
+  try { localStorage.setItem(LAYOUT_KEY(id), JSON.stringify(l)); } catch { /* 存储不可用时静默忽略 */ }
+}
+function clearLayout(id: string) {
+  try { localStorage.removeItem(LAYOUT_KEY(id)); } catch { /* ignore */ }
+}
 
 interface FloatingWindowProps {
   id: string;
@@ -9,6 +36,8 @@ interface FloatingWindowProps {
   accent?: string;
   children: ReactNode;
   onClose: () => void;
+  /** 点击窗口任意处时的回调(置顶之外的可选副作用, 如 PHILIA 自动触发分析) */
+  onWindowClick?: () => void;
   defaultWidth?: number;
   defaultHeight?: number;
   /** 初始位置(默认居中); 屏幕分辨率变化时会自适应夹取到视口内 */
@@ -19,21 +48,33 @@ interface FloatingWindowProps {
 let globalZIndex = 1000;
 
 export function FloatingWindow({
+  id,
   title,
   icon,
   accent = "#d4943a",
   children,
   onClose,
+  onWindowClick,
   defaultWidth = 960,
   defaultHeight = 640,
   defaultX,
   defaultY,
 }: FloatingWindowProps) {
-  const [pos, setPos] = useState({
-    x: defaultX ?? (window.innerWidth - defaultWidth) / 2,
-    y: defaultY ?? 80,
+  // 初次挂载时读取已记忆的布局(尺寸+位置), 无记忆则用默认值; 均夹取到当前视口内
+  const initial = loadLayout(id);
+  const savedW = initial?.w ?? defaultWidth;
+  const savedH = initial?.h ?? defaultHeight;
+  const [pos, setPos] = useState(() => {
+    const w = Math.min(savedW, window.innerWidth - 80);
+    const h = Math.min(savedH, window.innerHeight - 120);
+    const x = initial?.x ?? defaultX ?? (window.innerWidth - w) / 2;
+    const y = initial?.y ?? defaultY ?? 80;
+    return {
+      x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w)),
+      y: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - h)),
+    };
   });
-  const [size, setSize] = useState({ w: Math.min(defaultWidth, window.innerWidth - 80), h: Math.min(defaultHeight, window.innerHeight - 120) });
+  const [size, setSize] = useState({ w: Math.min(savedW, window.innerWidth - 80), h: Math.min(savedH, window.innerHeight - 120) });
   const [zIndex, setZIndex] = useState(() => ++globalZIndex);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isMinimized, setIsMinimizedState] = useState(false);
@@ -107,6 +148,15 @@ export function FloatingWindow({
     bringToFront();
   }, [bringToFront]);
 
+  /** 恢复默认大小/位置: 清空记忆, 回到初始默认尺寸 */
+  const resetSize = useCallback(() => {
+    clearLayout(id);
+    const defW = Math.min(defaultWidth, window.innerWidth - 80);
+    const defH = Math.min(defaultHeight, window.innerHeight - 120);
+    setSize({ w: defW, h: defH });
+    setPos({ x: defaultX ?? (window.innerWidth - defW) / 2, y: defaultY ?? 80 });
+  }, [id, defaultWidth, defaultHeight, defaultX, defaultY]);
+
   /** 鼠标拖拽 - 窗口移动 */
   const onMouseDownTitle = useCallback((e: React.MouseEvent) => {
     if (isMaximized) return;
@@ -145,6 +195,10 @@ export function FloatingWindow({
       }
     };
     const handleMouseUp = () => {
+      // 拖拽/调整结束后, 持久化当前尺寸与位置, 供重启后恢复 (id 为稳定 prop, 闭包捕获安全)
+      if (dragging.current || resizing.current) {
+        saveLayout(id, { ...posRef.current, ...sizeRef.current });
+      }
       dragging.current = false;
       resizing.current = false;
     };
@@ -182,7 +236,7 @@ export function FloatingWindow({
         visibility: isMinimized ? "hidden" : "visible",
         pointerEvents: isMinimized ? "none" : undefined,
       }}
-      onClick={bringToFront}
+      onClick={() => { bringToFront(); onWindowClick?.(); }}
       onMouseDown={bringToFront}
     >
       {/* 标题栏 */}
@@ -210,6 +264,14 @@ export function FloatingWindow({
             className="flex h-[26px] w-[26px] items-center justify-center rounded text-[#8b7a5e] transition-colors hover:bg-[#ede4d4] hover:text-[#6b5b3e]"
           >
             {isMaximized ? <Maximize2 size={13} /> : <Square size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={resetSize}
+            title="恢复默认大小"
+            className="flex h-[26px] w-[26px] items-center justify-center rounded text-[#8b7a5e] transition-colors hover:bg-[#ede4d4] hover:text-[#6b5b3e]"
+          >
+            <RotateCcw size={13} />
           </button>
           <button
             type="button"

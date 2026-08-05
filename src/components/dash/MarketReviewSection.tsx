@@ -12,7 +12,7 @@
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { useCallback, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import {
   Sparkles,
   Loader2,
@@ -200,9 +200,18 @@ function RisksBody({ risks, names }: { risks: PhiliaMarketAnalysis["result"]["ri
   );
 }
 
-export function MarketReviewSection() {
+export interface MarketReviewSectionHandle {
+  /** 启动 AI 综合分析; force=true 强制绕过缓存 */
+  run: (force?: boolean) => Promise<void>;
+}
+
+// 模块级缓存: 切出主页面再切回时(组件重挂载)保留上次分析结果, 直接显示数据无需再点击。
+// SPA 路由切换不会重载模块, 故该变量在页面切换间常驻; 仅在整页刷新时清空。
+let cachedAnalysis: PhiliaMarketAnalysis | null = null;
+
+export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(function MarketReviewSection(_props, ref) {
   const { config } = usePhilia();
-  const [analysis, setAnalysis] = useState<PhiliaMarketAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<PhiliaMarketAnalysis | null>(cachedAnalysis);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showSrc, setShowSrc] = useState(false);
@@ -210,18 +219,29 @@ export function MarketReviewSection() {
   const [floats, setFloats] = useState<{ opportunities: boolean; risks: boolean }>({ opportunities: false, risks: false });
   const toggleFloat = (k: "opportunities" | "risks") => setFloats((f) => ({ ...f, [k]: !f[k] }));
 
+  // 并发防抖: 用 ref 记录是否已在分析中, 防止小窗 onClick 冒泡 + 按钮点击造成重复请求
+  const runningRef = useRef(false);
   const run = async (force = false) => {
+    if (runningRef.current) return;
+    runningRef.current = true;
     setLoading(true);
     setError("");
     try {
       const d = await api.philia.marketAnalyze({ skills: config?.skills || [], force });
       setAnalysis(d);
+      cachedAnalysis = d; // 同步模块级缓存, 供切回主页面时直接显示
     } catch (e) {
       setError((e as Error)?.message || "分析失败");
     } finally {
+      runningRef.current = false;
       setLoading(false);
     }
   };
+
+  // 暴露给父级(PhiliaPanel)回调的命令式句柄
+  useImperativeHandle(ref, () => ({
+    run,
+  }));
 
   // 自动轮询刷新: 复用 30min 降频缓存(不计费), 失败静默以保持当前内容稳定
   const [refreshing, setRefreshing] = useState(false);
@@ -230,6 +250,7 @@ export function MarketReviewSection() {
     try {
       const d = await api.philia.marketAnalyze({ skills: config?.skills || [], force: false });
       setAnalysis(d);
+      cachedAnalysis = d; // 同步模块级缓存, 供切回主页面时直接显示
     } catch {
       /* 静默失败, 展示区保留上一次成功内容 */
     } finally {
@@ -564,4 +585,4 @@ export function MarketReviewSection() {
       )}
     </div>
   );
-}
+});

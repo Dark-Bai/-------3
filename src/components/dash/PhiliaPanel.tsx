@@ -1,6 +1,7 @@
+import { useEffect, useRef } from "react";
 import { Panel, type PanelZoomProps } from "./Panel";
 import { LeaderPoolChip } from "./LeaderPoolChip";
-import { MarketReviewSection } from "./MarketReviewSection";
+import { MarketReviewSection, type MarketReviewSectionHandle } from "./MarketReviewSection";
 
 /**
  * 界面中央大型整体模块: 由"上部空白模块" + "原 philia 模块"纵向合并而成。
@@ -9,6 +10,44 @@ import { MarketReviewSection } from "./MarketReviewSection";
  * 综合分析视图已被龙头复盘取代, 仅保留启动键与龙头池。
  */
 export function PhiliaPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
+  const reviewRef = useRef<MarketReviewSectionHandle>(null);
+  const { isZoomed } = zoomProps;
+
+  // 进入 PHILIA 小窗(isZoomed 由 false→true)时自动触发一次「启动 AI 综合分析」,
+  // 无需任何点击即可直接显示数据。run 内部有并发防抖, 规避重复请求。
+  const prevZoomed = useRef(isZoomed);
+  useEffect(() => {
+    const wasZoomed = prevZoomed.current;
+    prevZoomed.current = isZoomed;
+    if (isZoomed && !wasZoomed) {
+      void reviewRef.current?.run();
+    }
+  }, [isZoomed]);
+
+  // 从其他软件切入(浏览器标签页重新可见 / 窗口重新获得焦点)时,
+  // 自动触发一次分析, 使 philia 内容直接显示。run 内部有并发防抖, 不会重复请求。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void reviewRef.current?.run();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
+
+  // 点击 PHILIA 小窗时自动点击一次「启动 AI 综合分析」。
+  // run 内部有并发防抖, 规避冒泡造成的重复请求; 忽略返回值避免未处理 Promise。
+  const handleWindowClick = () => {
+    if (reviewRef.current) {
+      void reviewRef.current.run();
+    }
+  };
+
   return (
     <Panel
       className={className}
@@ -18,6 +57,7 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
       accent="#d4943a"
       defaultWidth={1152}
       defaultHeight={768}
+      onWindowClick={handleWindowClick}
       right={
         <div className="ml-auto flex items-center gap-1.5">
           <LeaderPoolChip />
@@ -25,7 +65,7 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
       }
     >
       <div className="flex h-full flex-col">
-        <MarketReviewSection />
+        <MarketReviewSection ref={reviewRef} />
       </div>
     </Panel>
   );
