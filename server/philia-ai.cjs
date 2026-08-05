@@ -30,7 +30,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const MODEL_CACHE_TTL = 30 * 60 * 1000; // 模型列表缓存 30min
 const CONTEXT_CACHE_TTL = 5 * 60 * 1000; // 数据白皮书缓存 5min
 const ANALYSIS_CACHE_TTL = 30 * 60 * 1000; // 分析结果降频缓存 30min
-const MAX_PROMPT_SKILL_CHARS = 8000; // 注入技能提示词上限(控制 token 成本)
+const MAX_PROMPT_SKILL_CHARS = 20000; // 注入技能提示词上限(容纳全部技能+全览, SKILL.md 全文约 13K 字符)
 
 /** 兜底模型列表(OpenRouter 接口失败/未配置时使用) */
 const DEFAULT_MODELS = [

@@ -1697,6 +1697,27 @@ async function handleMarketSentimentV2() {
       blownLimitUpRate = denom > 0 ? Math.round((blownLimitUpCount / denom) * 1000) / 10 : 0;
     }
 
+    // 合成"今日实时点": market_trend 表中的最新一条来自日度接口 rise-fall, 盘中不更新,
+    // 导致趋势图最后一点停留在昨日。此处用 mood + ladder/broken 的实时值覆写/插入今日点,
+    // 使趋势图当日即随涨停/炸板变化, 消除"延后一天"的感知。
+    if (Array.isArray(trendData)) {
+      const today = dashToday();
+      const realtime = {
+        limitUp: mood?.涨停家数 ?? limitUp,
+        limitDown: mood?.跌停家数 ?? limitDown,
+        blownUp: blownLimitUpCount,
+        blownRate: blownLimitUpRate,
+      };
+      const first = trendData[0];
+      if (first && first.date === today) {
+        // 今日点已存在(日度值): 用实时值覆写
+        trendData[0] = { ...first, ...realtime, date: today };
+      } else {
+        // 无今日点(最新为昨日): 插入今日实时点在最前
+        trendData.unshift({ date: today, ...realtime });
+      }
+    }
+
     const payload = {
       dataSuccess: true,
       mood: {
