@@ -70,6 +70,22 @@ db.exec(`
     updated_at  INTEGER
   );
 
+  -- 连板梯队趋势(基于 limit-up-ladder, 按交易日一行, 永久保留)
+  CREATE TABLE IF NOT EXISTS ladder_trend (
+    date              TEXT PRIMARY KEY,   -- 交易日 YYYY-MM-DD
+    first_board       INTEGER,            -- 一板
+    second_board      INTEGER,            -- 二板
+    third_board       INTEGER,            -- 三板
+    high_board        INTEGER,            -- 高度板
+    ladder_rate       REAL,               -- 连板率(%)
+    blown_rate        REAL,               -- 今日涨停破板率(%)
+    yest_limitup_perf REAL,               -- 昨日涨停今表现(%)
+    yest_ladder_perf  REAL,               -- 昨日连板今表现(%)
+    yest_broken_perf  REAL,               -- 昨日破板今表现(%)
+    comment           TEXT,               -- 市场评价
+    updated_at        INTEGER
+  );
+
   -- 键值元数据(如每日批量刷新标记, 持久化避免重启重复执行)
   CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -110,6 +126,7 @@ const READ_SQL = {
   getMeta: `SELECT value FROM meta WHERE key = ?`,
   getTrends: `SELECT date, limit_up AS limitUp, limit_down AS limitDown, broken_up AS brokenUp, blown_up AS blownUp, blown_rate AS blownRate FROM market_trend ORDER BY date ASC`,
   trendCount: `SELECT COUNT(*) AS c FROM market_trend`,
+  getLadderTrend: `SELECT date, first_board AS firstBoard, second_board AS secondBoard, third_board AS thirdBoard, high_board AS highBoard, ladder_rate AS ladderRate, blown_rate AS blownRate, yest_limitup_perf AS yestLimitUpPerf, yest_ladder_perf AS yestLadderPerf, yest_broken_perf AS yestBrokenPerf, comment, updated_at AS updatedAt FROM ladder_trend ORDER BY date ASC`,
 };
 // 每条只读连接各编译一份读语句(轮询时按当前连接取用)
 const readStmt = dbRead.map((c) => {
@@ -177,6 +194,24 @@ const upsertTrendStmt = db.prepare(`
     blown_up   = excluded.blown_up,
     blown_rate = excluded.blown_rate,
     updated_at = excluded.updated_at
+`);
+
+// upsertLadderTrends 的批量写用独立语句(事务内复用)
+const upsertLadderStmt = db.prepare(`
+  INSERT INTO ladder_trend (date, first_board, second_board, third_board, high_board, ladder_rate, blown_rate, yest_limitup_perf, yest_ladder_perf, yest_broken_perf, comment, updated_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(date) DO UPDATE SET
+    first_board       = excluded.first_board,
+    second_board      = excluded.second_board,
+    third_board       = excluded.third_board,
+    high_board        = excluded.high_board,
+    ladder_rate       = excluded.ladder_rate,
+    blown_rate        = excluded.blown_rate,
+    yest_limitup_perf = excluded.yest_limitup_perf,
+    yest_ladder_perf  = excluded.yest_ladder_perf,
+    yest_broken_perf  = excluded.yest_broken_perf,
+    comment           = excluded.comment,
+    updated_at        = excluded.updated_at
 `);
 
 const j = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
@@ -364,6 +399,37 @@ function trendCount() {
   return r ? r.c : 0;
 }
 
+/* ---------------- 连板梯队趋势(ladder_trend) ---------------- */
+
+/** 批量 UPSERT 连板梯队记录(按日期, 已存在则更新) */
+function upsertLadderTrends(records) {
+  const now = Date.now();
+  return dbTimed("upsertLadderTrends", true, () => {
+    db.exec("BEGIN");
+    try {
+      for (const r of records) {
+        if (!r || !r.date) continue;
+        upsertLadderStmt.run(
+          r.date,
+          r.firstBoard ?? null, r.secondBoard ?? null, r.thirdBoard ?? null, r.highBoard ?? null,
+          r.ladderRate ?? null, r.blownRate ?? null, r.yestLimitUpPerf ?? null, r.yestLadderPerf ?? null, r.yestBrokenPerf ?? null,
+          r.comment ?? null, now,
+        );
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    return records.length;
+  });
+}
+
+/** 读取全部连板梯队记录(按日期升序) */
+function getLadderTrend() {
+  return dbTimed("getLadderTrend", false, () => nextReadStmt().getLadderTrend.all());
+}
+
 /* ---------------- 数据库性能监控(供 /api/monitor 面板) ----------------
  * 以内存计数方式记录每次读/写调用的耗时, 暴露给前端监控面板识别热路径与瓶颈。
  * 指标: 读次数/写次数/读耗时总和/写耗时总和/最近一次耗时/累计错误。 */
@@ -386,4 +452,4 @@ function getDbMetrics() {
   return { ...dbMetrics, reads: dbMetrics.reads, writes: dbMetrics.writes };
 }
 
-module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, getDbMetrics, DB_PATH };
+module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, DB_PATH };

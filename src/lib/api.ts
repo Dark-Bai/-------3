@@ -639,7 +639,7 @@ export interface PluginNewsAnalystData {
   stockNews: PluginStockNews[];
 }
 
-/** 市场情绪v2: 基于 kpl 三接口 (mood / sentiment-indicator / rise-fall) */
+/** 市场情绪v2: 基于 kpl 接口 (mood / limit-up-ladder / rise-fall) */
 export interface MarketMoodData {
   upCount: number;
   downCount: number;
@@ -655,17 +655,35 @@ export interface MarketMoodData {
   turnoverChange: number;
   volLevel: string;
 }
-export interface MarketSentimentIndData {
-  plateId: string;
-  bullishCount: number;
-  bearishCount: number;
-  totalStockCount: number;
-  netBullish: number;
+/** 市场情绪评分(由涨跌比派生, 与多空情绪无直接关系) */
+export interface MarketSentimentData {
   sentimentScore: number;
   sentimentLevel: string;
   sentimentDesc: string;
-  /** 成分股快照, 含多空标记(side): 供"多空情绪"弹窗展示 */
-  stockSamples?: { code: string; name: string; price: number; change: string; side: "bull" | "bear" | "flat" }[];
+}
+/** 连板梯队趋势点(ladder_trend, 升序) */
+export interface LadderTrendPoint {
+  date: string;
+  firstBoard: number;   // 一板
+  secondBoard: number;  // 二板
+  thirdBoard: number;   // 三板
+  highBoard: number;    // 高度板
+  ladderRate: number;   // 连板率(%)
+}
+/** 连板梯队数据(api/market/limit-up-ladder) */
+export interface LadderData {
+  date: string;               // 最新可用日期(盘中常为空, 取最近可用交易日)
+  firstBoard: number;         // 一板
+  secondBoard: number;        // 二板
+  thirdBoard: number;         // 三板
+  highBoard: number;          // 高度板
+  ladderRate: number;         // 连板率(%)
+  brokenRate: number;         // 今日涨停破板率(%)
+  yestLimitUpPerf: number;    // 昨日涨停今表现(%)
+  yestLadderPerf: number;     // 昨日连板今表现(%)
+  yestBrokenPerf: number;     // 昨日破板今表现(%)
+  comment: string;            // 市场评价
+  trend: LadderTrendPoint[];  // 近N日梯队趋势(最新在前)
 }
 export interface MarketRiseFallTrend {
   date: string;
@@ -689,7 +707,8 @@ export interface MarketRiseFallData {
 export interface PluginMarketSentimentData {
   dataSuccess: boolean;
   mood: MarketMoodData;
-  sentiment: MarketSentimentIndData;
+  sentiment: MarketSentimentData;
+  ladder: LadderData;
   riseFall: MarketRiseFallData;
 }
 export function useOpenRouterUsage() {

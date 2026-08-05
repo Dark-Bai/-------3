@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, type PanelZoomProps } from "./Panel";
 import { usePolling } from "@/hooks/usePolling";
-import { api, type PluginMarketSentimentData } from "@/lib/api";
+import { api, type LadderData, type LadderTrendPoint, type PluginMarketSentimentData } from "@/lib/api";
 
 const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 /** 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。此处纯时间判断, 前端据此启停轮询 */
@@ -134,86 +134,111 @@ function LimitUpDownCard({ limitUp, limitDown, blownUp, blownRate }: { limitUp: 
   );
 }
 
-/* ========== 卡片4: 多空情绪 ========== */
-function BullBearCard({ bullish, bearish, net, total, samples }: {
-  bullish: number; bearish: number; net: number; total: number;
-  samples?: { code: string; name: string; price: number; change: string; side?: "bull" | "bear" | "flat" }[];
-}) {
-  const hasApiData = bullish + bearish + total > 0;
-  const hasSamples = samples && samples.length > 0;
-  const totalRatio = hasApiData && total > 0 ? (bullish / total * 100) : 50;
-  const safeNet = Number.isFinite(net) ? net : bullish - bearish;
+/* ========== 卡片4: 连板梯队(api/market/limit-up-ladder) ========== */
+function LadderCard({ ladder }: { ladder: LadderData }) {
   const [open, setOpen] = useState(false);
+  const hasData = ladder.firstBoard + ladder.secondBoard + ladder.thirdBoard + ladder.highBoard > 0;
+  const boards = [
+    { label: "一板", v: ladder.firstBoard, color: COLORS.red },
+    { label: "二板", v: ladder.secondBoard, color: COLORS.orange },
+    { label: "三板", v: ladder.thirdBoard, color: COLORS.beige },
+    { label: "高度板", v: ladder.highBoard, color: COLORS.green },
+  ];
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
       <button
         type="button"
         onClick={() => setOpen(true)}
         className="flex w-full cursor-pointer items-center justify-between"
-        title="点击查看多空明细"
+        title="点击查看连板梯队明细"
       >
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">多空情绪</span>
-        {hasApiData && (
-          <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${safeNet >= 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]"}`}>
-            {safeNet >= 0 ? "偏多" : "偏空"} {safeNet >= 0 ? "+" : ""}{safeNet}
-          </span>
-        )}
-        {hasSamples && !hasApiData && (
-          <span className="rounded bg-[#a8987e]/15 px-1.5 py-0.5 text-[12px] font-medium text-[#a8987e]">
-            实时 {bullish}/{bearish}
+        <span className="text-[11px] font-semibold text-[#8b7a5e]">连板梯队</span>
+        {hasData && (
+          <span className="rounded bg-[#d4943a]/15 px-1.5 py-0.5 text-[11px] font-medium text-[#b07a2a]" style={TNUM}>
+            连板率 {ladder.ladderRate.toFixed(1)}%
           </span>
         )}
       </button>
-      {hasApiData ? (
+      {hasData ? (
         <>
-          <div className="flex items-center gap-3 py-1">
-            <div className="flex-1 text-center">
-              <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{bullish}</div>
-              <div className="text-[12px] text-[#a8987e]">看多</div>
-            </div>
-            <div className="flex-1 text-center">
-              <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{bearish}</div>
-              <div className="text-[12px] text-[#a8987e]">看空</div>
-            </div>
+          <div className="flex items-center justify-around py-1">
+            {boards.map((b) => (
+              <div key={b.label} className="text-center">
+                <div className="text-[18px] font-bold" style={{ color: b.color, fontVariantNumeric: "tabular-nums" }}>{b.v}</div>
+                <div className="text-[11px] text-[#a8987e]">{b.label}</div>
+              </div>
+            ))}
           </div>
-          <div className="flex h-2 overflow-hidden rounded-full bg-[#e0d5c0]">
-            <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${totalRatio}%` }} />
-            <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
+          <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#a8987e]" style={TNUM}>
+            <span>{ladder.date ? ladder.date.slice(5) : "—"}</span>
+            <span>破板率 {ladder.brokenRate.toFixed(1)}%</span>
           </div>
-          <div className="mt-1 text-center text-[12px] text-[#a8987e]">共 {total} 只成分股</div>
         </>
-      ) : hasSamples ? (
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: 160 }}>
-          {samples.map(s => (
-            <div key={s.code} className="flex items-center justify-between text-[12px]">
-              <span className="truncate text-[#6b5b3e]">{s.name}</span>
-              <span className={`shrink-0 font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
-                {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
-              </span>
-            </div>
-          ))}
-        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-[12px] text-[#a8987e]">暂无数据</div>
       )}
-      <BullBearModal
-        open={open}
-        onClose={() => setOpen(false)}
-        samples={samples}
-        bullish={hasApiData ? bullish : samples?.filter(s => s.side !== "bear").length || 0}
-        bearish={hasApiData ? bearish : samples?.filter(s => s.side === "bear").length || 0}
-      />
+      <LadderModal open={open} onClose={() => setOpen(false)} ladder={ladder} />
     </div>
   );
 }
 
-/* ========== 多空情绪明细模态小窗 ========== */
-function BullBearModal({ open, onClose, samples, bullish, bearish }: {
+/* ========== 连板梯队趋势图(SVG 多线, 各层级按自身最大值归一化) ========== */
+function LadderTrendChart({ trend }: { trend: LadderTrendPoint[] }) {
+  const data = trend ? [...trend].reverse() : []; // 升序
+  if (!data.length || data.length < 2) return <div className="text-[12px] text-[#a8987e]">暂无趋势数据</div>;
+  const W = 560, H = 168, PL = 30, PR = 12, PT = 10, PB = 22;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const x = (i: number) => PL + (i / (data.length - 1)) * iw;
+  const series: { key: keyof Pick<LadderTrendPoint, "firstBoard" | "secondBoard" | "thirdBoard" | "highBoard">; label: string; color: string }[] = [
+    { key: "firstBoard", label: "一板", color: COLORS.red },
+    { key: "secondBoard", label: "二板", color: COLORS.orange },
+    { key: "thirdBoard", label: "三板", color: COLORS.beige },
+    { key: "highBoard", label: "高度板", color: COLORS.green },
+  ];
+  const path = (key: typeof series[number]["key"]) => {
+    const vals = data.map((d) => d[key]);
+    const max = Math.max(...vals, 1);
+    return data.map((d, i) => {
+      const yy = PT + ih - (d[key] / max) * ih;
+      return `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${yy.toFixed(1)}`;
+    }).join(" ");
+  };
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-3">
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1 text-[10px] text-[#8b7a5e]">
+            <span className="h-1.5 w-3 rounded" style={{ background: s.color }} />{s.label}
+          </span>
+        ))}
+        <span className="ml-auto text-[10px] text-[#a8987e]">各层级按自身最大值归一化</span>
+      </div>
+      <svg width={W} height={H} className="w-full" viewBox={`0 0 ${W} ${H}`}>
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const yy = PT + ih * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={PL} x2={W - PR} y1={yy} y2={yy} stroke="#e0d5c0" strokeWidth={1} strokeDasharray="3 3" />
+              <text x={PL - 4} y={yy + 3} textAnchor="end" fontSize={9} fill="#a8987e">{Math.round(t * 100)}</text>
+            </g>
+          );
+        })}
+        {series.map((s) => <path key={s.key} d={path(s.key)} fill="none" stroke={s.color} strokeWidth={1.8} />)}
+        {data.map((d, i) => (
+          <text key={d.date} x={x(i)} y={H - 8} textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"} fontSize={9} fill="#a8987e">
+            {d.date.slice(5)}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/* ========== 连板梯队明细模态小窗 ========== */
+function LadderModal({ open, onClose, ladder }: {
   open: boolean;
   onClose: () => void;
-  samples?: { code: string; name: string; price: number; change: string; side?: "bull" | "bear" | "flat" }[];
-  bullish: number;
-  bearish: number;
+  ladder: LadderData;
 }) {
   // 平滑过渡: 卸载前先置 visible=false 播放退场动画, 动画结束后再真正卸载
   useEffect(() => {
@@ -239,9 +264,12 @@ function BullBearModal({ open, onClose, samples, bullish, bearish }: {
 
   if (!mounted) return null;
 
-  const bullList = (samples || []).filter(s => s.side !== "bear");
-  const bearList = (samples || []).filter(s => s.side === "bear");
-  const total = (samples || []).length;
+  const hasData = ladder.firstBoard + ladder.secondBoard + ladder.thirdBoard + ladder.highBoard > 0;
+  const perfItems = [
+    { label: "昨涨停今表现", v: ladder.yestLimitUpPerf },
+    { label: "昨连板今表现", v: ladder.yestLadderPerf },
+    { label: "昨破板今表现", v: ladder.yestBrokenPerf },
+  ];
 
   return (
     <div
@@ -251,13 +279,14 @@ function BullBearModal({ open, onClose, samples, bullish, bearish }: {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`flex max-h-[70vh] w-[420px] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[#d4c5a8] bg-[#faf6ec] shadow-2xl transition-all duration-200 ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 scale-95 opacity-0"}`}
+        className={`flex max-h-[78vh] w-[560px] max-w-[94vw] flex-col overflow-hidden rounded-lg border border-[#d4c5a8] bg-[#faf6ec] shadow-2xl transition-all duration-200 ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 scale-95 opacity-0"}`}
       >
         {/* 头部 */}
         <div className="flex shrink-0 items-center justify-between border-b border-[#e0d5c0] bg-[#f5f0e6] px-4 py-2.5">
           <div className="flex items-center gap-2">
-            <span className="rounded-sm bg-[#d4943a]/15 px-1.5 py-px text-[10px] font-medium text-[#b07a2a]">多空情绪</span>
-            <span className="text-[13px] font-semibold text-[#6b5b3e]">标的明细</span>
+            <span className="rounded-sm bg-[#d4943a]/15 px-1.5 py-px text-[10px] font-medium text-[#b07a2a]">连板梯队</span>
+            <span className="text-[13px] font-semibold text-[#6b5b3e]">梯队明细</span>
+            {ladder.date && <span className="text-[11px] text-[#a8987e]" style={TNUM}>{ladder.date}</span>}
           </div>
           <button
             type="button"
@@ -268,57 +297,67 @@ function BullBearModal({ open, onClose, samples, bullish, bearish }: {
             ✕
           </button>
         </div>
-        {/* 统计概览 */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-[#e0d5c0] px-4 py-2">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-[#b8533a]" />
-            <span className="text-[11px] text-[#8b7a5e]">多方</span>
-            <span className="text-[13px] font-bold text-[#b8533a]" style={TNUM}>{bullish}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-[#4a6b3f]" />
-            <span className="text-[11px] text-[#8b7a5e]">空方</span>
-            <span className="text-[13px] font-bold text-[#4a6b3f]" style={TNUM}>{bearish}</span>
-          </div>
-          <span className="ml-auto text-[11px] text-[#a8987e]" style={TNUM}>共 {total || bullish + bearish} 只</span>
-        </div>
-        {/* 标的列表 */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
-          {total === 0 && bullList.length + bearList.length === 0 ? (
-            <div className="flex h-24 items-center justify-center text-[12px] text-[#a8987e]">暂无标的明细</div>
-          ) : (
-            <div className="flex flex-col">
-              {/* 多方 */}
-              {bullList.length > 0 && (
-                <div className="mb-1 px-2 pt-1 text-[10px] font-medium text-[#b8533a]">多方 · {bullList.length}</div>
-              )}
-              {bullList.map(s => (
-                <div key={s.code} className="flex items-center gap-2 rounded px-2 py-1 text-[12px] hover:bg-[#f1ebdd]">
-                  <span className="w-8 shrink-0 rounded-sm bg-[#b8533a]/10 text-center text-[9px] leading-4 text-[#b8533a]">多</span>
-                  <span className="min-w-0 flex-1 truncate text-[#6b5b3e]">{s.name}</span>
-                  <span className="shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{s.code}</span>
-                  <span className={`w-14 shrink-0 text-right font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
-                    {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
-                  </span>
-                </div>
-              ))}
-              {/* 空方 */}
-              {bearList.length > 0 && (
-                <div className="mb-1 mt-2 px-2 pt-1 text-[10px] font-medium text-[#4a6b3f]">空方 · {bearList.length}</div>
-              )}
-              {bearList.map(s => (
-                <div key={s.code} className="flex items-center gap-2 rounded px-2 py-1 text-[12px] hover:bg-[#f1ebdd]">
-                  <span className="w-8 shrink-0 rounded-sm bg-[#4a6b3f]/10 text-center text-[9px] leading-4 text-[#4a6b3f]">空</span>
-                  <span className="min-w-0 flex-1 truncate text-[#6b5b3e]">{s.name}</span>
-                  <span className="shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{s.code}</span>
-                  <span className={`w-14 shrink-0 text-right font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
-                    {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
-                  </span>
+
+        {hasData ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            {/* 梯队结构 */}
+            <div className="flex items-stretch justify-between gap-2">
+              {[
+                { label: "一板", v: ladder.firstBoard, color: COLORS.red },
+                { label: "二板", v: ladder.secondBoard, color: COLORS.orange },
+                { label: "三板", v: ladder.thirdBoard, color: COLORS.beige },
+                { label: "高度板", v: ladder.highBoard, color: COLORS.green },
+              ].map((b) => (
+                <div key={b.label} className="flex-1 rounded border border-[#e0d5c0] bg-[#f5f0e6]/50 py-2 text-center">
+                  <div className="text-[26px] font-bold" style={{ color: b.color, fontVariantNumeric: "tabular-nums" }}>{b.v}</div>
+                  <div className="text-[11px] text-[#a8987e]">{b.label}</div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
+
+            {/* 连板率 / 破板率 */}
+            <div className="mt-2 flex items-center justify-around rounded border border-[#e0d5c0] bg-[#f5f0e6]/50 py-2">
+              <div className="text-center">
+                <div className="text-[18px] font-bold text-[#b8533a]" style={TNUM}>{ladder.ladderRate.toFixed(1)}%</div>
+                <div className="text-[11px] text-[#a8987e]">连板率</div>
+              </div>
+              <div className="w-px self-stretch bg-[#e0d5c0]" />
+              <div className="text-center">
+                <div className="text-[18px] font-bold text-[#d4943a]" style={TNUM}>{ladder.brokenRate.toFixed(1)}%</div>
+                <div className="text-[11px] text-[#a8987e]">今日涨停破板率</div>
+              </div>
+            </div>
+
+            {/* 昨日梯队表现 */}
+            <div className="mt-2 flex items-center justify-around rounded border border-[#e0d5c0] bg-[#f5f0e6]/50 py-2">
+              {perfItems.map((p, i) => (
+                <Fragment key={p.label}>
+                  {i > 0 && <div className="w-px self-stretch bg-[#e0d5c0]" />}
+                  <div className="text-center">
+                    <div className={`text-[16px] font-bold ${clsChg(p.v)}`} style={TNUM}>{p.v >= 0 ? "+" : ""}{p.v.toFixed(2)}%</div>
+                    <div className="text-[11px] text-[#a8987e]">{p.label}</div>
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+
+            {/* 市场评价 */}
+            {ladder.comment && (
+              <div className="mt-2 flex items-center gap-2 rounded border border-[#d4943a]/30 bg-[#d4943a]/10 px-3 py-1.5">
+                <span className="text-[11px] text-[#b07a2a]">市场评价</span>
+                <span className="text-[12px] font-medium text-[#6b5b3e]">{ladder.comment}</span>
+              </div>
+            )}
+
+            {/* 趋势图 */}
+            <div className="mt-3 border-t border-[#e0d5c0] pt-2">
+              <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">近{ladder.trend.length || 0}日梯队趋势</div>
+              <LadderTrendChart trend={ladder.trend} />
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-32 items-center justify-center text-[12px] text-[#a8987e]">暂无连板梯队数据</div>
+        )}
       </div>
     </div>
   );
@@ -669,7 +708,7 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
         ) : (
           <ScrollSentinel>
             {(() => {
-              const { mood, sentiment: si, riseFall } = effective;
+              const { mood, sentiment: si, ladder: ladderData, riseFall } = effective;
               return (
                 <>
                   <div className="flex gap-2">
@@ -682,9 +721,9 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
                         <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
                       </div>
 
-                      {/* 第二行: 多空情绪 + 量能分析 + 涨停表现 */}
+                      {/* 第二行: 连板梯队 + 量能分析 + 涨停表现 */}
                       <div className="flex shrink-0 gap-2">
-                        <BullBearCard bullish={si.bullishCount} bearish={si.bearishCount} net={si.netBullish} total={si.totalStockCount} samples={si.stockSamples} />
+                        <LadderCard ladder={ladderData} />
                         <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
                         <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
                       </div>

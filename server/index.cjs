@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, getDbMetrics, DB_PATH } = require("./stock-db.cjs");
+const { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, DB_PATH } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -1483,7 +1483,8 @@ function msFallbackPayload() {
     dataSuccess: false, fromCache: true,
     error: "市场情绪数据不可用(实时获取失败且无本地快照), 返回空结构以免影响页面",
     mood: { upCount: 0, downCount: 0, limitUp: 0, limitDown: 0, turnover: 0, prevTurnover: 0, ratio: 1, marketColor: 0, totalCount: 0, upRatio: 0, downRatio: 0, turnoverChange: 0, volLevel: "" },
-    sentiment: { plateId: "", bullishCount: 0, bearishCount: 0, totalStockCount: 0, netBullish: 0, sentimentScore: 0, sentimentLevel: "", sentimentDesc: "", stockSamples: [] },
+    sentiment: { sentimentScore: 0, sentimentLevel: "", sentimentDesc: "" },
+    ladder: { date: "", firstBoard: 0, secondBoard: 0, thirdBoard: 0, highBoard: 0, ladderRate: 0, brokenRate: 0, yestLimitUpPerf: 0, yestLadderPerf: 0, yestBrokenPerf: 0, comment: "", trend: [] },
     riseFall: { limitUpCount: 0, limitDownCount: 0, blownLimitUpCount: 0, brokenLimitUpCount: 0, blownLimitUpRate: 0, yesterdayLimitUpPerf: 0, yesterdayBrokenPerf: 0, date: "", trendData: [] },
   };
 }
@@ -1495,6 +1496,93 @@ function msFallbackPayload() {
 const MS_RISE_FALL_TTL = 5 * 60 * 1000; // 5 分钟
 // 实时炸板(ladder/broken): 日度聚合关闭盘中, 需按较短 TTL 轮询才能随涨停/炸板变化
 const MS_BROKEN_TTL = 20 * 1000; // 20 秒
+
+/* ---------------- 连板梯队(limit-up-ladder): 取代原 sentiment-indicator 多空模块 ----------------
+ * 上游 /api/market/limit-up-ladder 为"日度历史+实时"数据: 每次调用仅返回指定 date 的 1 条记录,
+ * 且当日盘中 data 常为空(完整梯队需待当日收盘后产出, 与 rise-fall 同口径)。
+ * 设计: 端点按交易日持久化到 SQLite ladder_trend 表(趋势图数据), 汇总卡展示最新可用日期;
+ *       历史日仅在首次/过期时回源, 之后走 DB, 避免对慢速上游的高频拉取。 */
+const MS_LADDER_TTL = 5 * 60 * 1000; // 日度数据低频, 5min 缓存
+const LADDER_BACKFILL_DAYS = 12;      // 趋势图回填最近交易日数
+const LADDER_CONCURRENCY = 3;         // 回源并发上限, 控制慢速上游压力
+
+/** 最近 n 个交易日(跳过周末), 返回按日期倒序 */
+function lastTradingDays(n) {
+  const days = [];
+  const d = new Date();
+  while (days.length < n) {
+    const w = d.getDay();
+    if (w !== 0 && w !== 6) days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+    d.setDate(d.getDate() - 1);
+  }
+  return days;
+}
+
+/** 拉取单日连板梯队记录, 无数据返回 null */
+async function fetchLadderDay(date, { timeout = 15000 } = {}) {
+  const j = await kplFetch("/api/market/limit-up-ladder", { date }, timeout);
+  const d = Array.isArray(j?.data) ? j.data : [];
+  return d && d.length ? d[0] : null;
+}
+
+/** 上游原始字段 -> 归一化记录(供 DB 落库与前端) */
+function toLadderRow(raw) {
+  if (!raw) return null;
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  return {
+    date: String(raw["日期"] || ""),
+    firstBoard: Math.round(num(raw["一板"])),
+    secondBoard: Math.round(num(raw["二板"])),
+    thirdBoard: Math.round(num(raw["三板"])),
+    highBoard: Math.round(num(raw["高度板"])),
+    ladderRate: num(raw["连板率(%)"]),
+    blownRate: num(raw["今日涨停破板率(%)"]),
+    yestLimitUpPerf: num(raw["昨日涨停今表现(%)"]),
+    yestLadderPerf: num(raw["昨日连板今表现(%)"]),
+    yestBrokenPerf: num(raw["昨日破板今表现(%)"]),
+    comment: String(raw["市场评价"] || ""),
+  };
+}
+
+/** 有限并发批量回源(控制对慢速上游的压力) */
+async function mapLimitConcurrent(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let idx = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const i = idx++;
+      if (i >= items.length) return;
+      try { results[i] = await fn(items[i]); } catch { results[i] = null; }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** 构建连板梯队: 回填最近若干交易日到 DB, 返回最新可用汇总 + 趋势 */
+async function buildLadder() {
+  const days = lastTradingDays(LADDER_BACKFILL_DAYS);
+  const existing = getLadderTrend();
+  const byDate = new Map(existing.map((r) => [r.date, r]));
+  const now = Date.now();
+  // 仅回源 DB 缺失或已过期的日期(稳态下只有当日, 其余走 DB)
+  const missing = days.filter((d) => {
+    const e = byDate.get(d);
+    return !e || now - (e.updatedAt || 0) > MS_LADDER_TTL;
+  });
+  if (missing.length) {
+    const fresh = await mapLimitConcurrent(missing, LADDER_CONCURRENCY, (date) => fetchLadderDay(date));
+    const rows = fresh.filter(Boolean).map(toLadderRow).filter((r) => r.date);
+    if (rows.length) upsertLadderTrends(rows);
+  }
+  const all = getLadderTrend(); // 全量(升序)
+  const nonEmpty = all.filter((r) => r.firstBoard != null);
+  const latest = nonEmpty[nonEmpty.length - 1];
+  return {
+    current: latest ? toLadderRow({ "日期": latest.date, "一板": latest.firstBoard, "二板": latest.secondBoard, "三板": latest.thirdBoard, "高度板": latest.highBoard, "连板率(%)": latest.ladderRate, "今日涨停破板率(%)": latest.blownRate, "昨日涨停今表现(%)": latest.yestLimitUpPerf, "昨日连板今表现(%)": latest.yestLadderPerf, "昨日破板今表现(%)": latest.yestBrokenPerf, "市场评价": latest.comment }) : null,
+    trend: all.slice(-LADDER_BACKFILL_DAYS).reverse(),
+  };
+}
 // 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。15:00 后停止轮询并定格数据, 次日 08:59 自动恢复。
 // 返回 { active, state, label } state = "polling" | "stopped"
 function marketSentimentPollState(now = new Date()) {
@@ -1535,15 +1623,16 @@ async function handleMarketSentimentV2() {
   try {
     // 使用 allSettled 防止单个API失败拖垮整体; rise-fall 走 5min 缓存降低调用频率
     // 实时炸板(ladder/broken)走 20s 缓存, 与 rise-fall 日度值解耦, 保证盘中随涨停/炸板变化
+    // 连板梯队(limit-up-ladder)走 buildLadder: 内部按日持久化到 DB, 历史日走 DB 不再回源
     const results = await Promise.allSettled([
       kplFetch("/api/market/mood"),
-      kplFetch("/api/market/sentiment-indicator"),
+      buildLadder(),
       cached("kpl-rise-fall", MS_RISE_FALL_TTL, () => kplFetch("/api/market/rise-fall")),
       cached(`kpl-ladder-broken:${dashToday()}`, MS_BROKEN_TTL, () => kplFetch("/api/ladder/broken", { date: dashToday() }, 15000)),
     ]);
 
     const mood = results[0].status === "fulfilled" ? results[0].value : null;
-    const sentimentInd = results[1].status === "fulfilled" ? results[1].value : null;
+    const ladder = results[1].status === "fulfilled" ? results[1].value : { current: null, trend: [] };
     const riseFall = results[2].status === "fulfilled" ? results[2].value : null;
     const broken = results[3].status === "fulfilled" ? results[3].value : null;
 
@@ -1585,59 +1674,6 @@ async function handleMarketSentimentV2() {
     else if (turnoverChange >= -20) volLevel = "温和缩量";
     else volLevel = "缩量";
 
-    // --- sentiment-indicator ---
-    const bullishCodes = sentimentInd?.bullish_codes || [];
-    const bearishCodes = sentimentInd?.bearish_codes || [];
-    const allStocks = sentimentInd?.all_stocks || [];
-    let bullishCount = bullishCodes.length;
-    let bearishCount = bearishCodes.length;
-    const totalStockCount = allStocks.length;
-    // bullishCodes/bearishCodes 集合, 用于给 all_stocks 打多空标签
-    const bullSet = new Set(bullishCodes);
-    const bearSet = new Set(bearishCodes);
-    let stockSamples = [];
-
-    // 若bullish/bearish为空, 或需要价格/涨跌幅展示: 通过all_stocks实时查询涨跌分布
-    // 无论哪种情况都尽量构建带多空标记(side)的标的明细, 供前端"多空情绪"弹窗展示
-    if (allStocks.length > 0) {
-      const sample = allStocks.slice(0, 40);
-      const sinaCodes = sample.map(c => c.startsWith("6") ? `sh${c}` : `sz${c}`);
-      try {
-        const text = await fetchTextAny(`https://hq.sinajs.cn/list=${sinaCodes.join(",")}`, {
-          referer: "https://finance.sina.com.cn/", gbk: true, timeout: 5000,
-        });
-        const re = /hq_str_(\w+)="([^"]*)"/g;
-        let m;
-        while ((m = re.exec(text))) {
-          const f = m[2].split(",");
-          if (f.length >= 4 && f[0]) {
-            const prev = parseFloat(f[2]);
-            const cur = parseFloat(f[3]);
-            if (isFinite(prev) && isFinite(cur)) {
-              const code = m[1].slice(2); // 去掉sh/sz前缀
-              const change = prev ? (cur - prev) / prev * 100 : 0;
-              // 多空判定: 优先用上游 bullish/bearish 集合, 否则按当日涨跌
-              let side;
-              if (bullSet.has(code)) side = "bull";
-              else if (bearSet.has(code)) side = "bear";
-              else side = cur > prev ? "bull" : cur < prev ? "bear" : "flat";
-              if (side === "bull") bullishCount++;
-              else if (side === "bear") bearishCount++;
-              stockSamples.push({
-                code,
-                name: f[0],
-                price: cur,
-                change: change.toFixed(2),
-                side, // bull=多方 / bear=空方
-              });
-            }
-          }
-        }
-      } catch (e) {
-        console.error("[sentiment] stock quote fetch failed:", e.message);
-      }
-    }
-
     // --- rise-fall ---
     const rf = riseFall || {};
     const rawData = Array.isArray(rf?.raw_data) ? rf.raw_data : [];
@@ -1669,11 +1705,21 @@ async function handleMarketSentimentV2() {
         volLevel,
       },
       sentiment: {
-        plateId: sentimentInd?.plate_id || "",
-        bullishCount, bearishCount, totalStockCount,
-        netBullish: bullishCount - bearishCount,
         sentimentScore, sentimentLevel, sentimentDesc,
-        stockSamples, // 成分股列表
+      },
+      ladder: {
+        date: ladder?.current?.date || "",
+        firstBoard: ladder?.current?.firstBoard ?? 0,
+        secondBoard: ladder?.current?.secondBoard ?? 0,
+        thirdBoard: ladder?.current?.thirdBoard ?? 0,
+        highBoard: ladder?.current?.highBoard ?? 0,
+        ladderRate: ladder?.current?.ladderRate ?? 0,
+        brokenRate: ladder?.current?.blownRate ?? 0,
+        yestLimitUpPerf: ladder?.current?.yestLimitUpPerf ?? 0,
+        yestLadderPerf: ladder?.current?.yestLadderPerf ?? 0,
+        yestBrokenPerf: ladder?.current?.yestBrokenPerf ?? 0,
+        comment: ladder?.current?.comment || "",
+        trend: ladder?.trend || [],
       },
       riseFall: {
         limitUpCount: rf?.limit_up_count ?? 0,
