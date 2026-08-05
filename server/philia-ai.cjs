@@ -24,6 +24,8 @@ const {
 /* ---------------- 常量 ---------------- */
 const ROOT = path.join(__dirname, "..");
 const SKILL_DIR = path.join(ROOT, "youzi-qijie-jinghua");
+// 次要客观数据方法论来源(龙头情绪复盘): 仅吸收其客观数据信息, 优先级低于 youzi-qijie-jinghua
+const LUOTOU_SKILL_PATH = path.join(ROOT, ".trae", "skills", "luotou-qingxu-sipan", "SKILL.md");
 const OR_BASE = "https://openrouter.ai/api/v1";
 const DS_BASE = "https://api.deepseek.com";
 
@@ -252,6 +254,50 @@ function loadSkills() {
     });
   }
   return skills;
+}
+
+/* ---------------- 客观数据过滤(龙头情绪复盘技能) ----------------
+ * 仅从 luotou-qingxu-sipan/SKILL.md 中提取「客观数据方法论」:
+ * 数据来源 URL、采集完整性要求、数据提取要点、来源标注规范。
+ * 完全排除任何主观观点、情绪倾向、结论性/指导性研判等非事实性杂质内容。
+ * 该内容在 Prompt 中作为「次要参考」注入, 优先级严格低于 youzi-qijie-jinghua。
+ */
+// 仅保留以下客观数据章节(以 `## ` 二级标题识别), 其余(分析维度/输出原则等主观研判)一律剔除
+const LUOTOU_KEEP_HEADERS = [
+  "一、数据来源",
+  "一·补、数据采集完整性要求",
+  "一·补2、数据提取要点",
+];
+// 主观/情绪/结论性词汇(命中即整行过滤)
+const LUOTOU_SUBJECTIVE_RE =
+  /(主观看好|情绪面|心理层面|资金情绪正盛|予以追捧|谨慎对待|不宜追高|逢高减磅|切勿|大胆|果断|坚决|重仓|满仓|强烈看|后市可期|值得期待|抄底|逃顶|恐慌|贪婪|狂热|杀跌|诱多|诱空|我判断|我倾向|我认为|我觉得|方可进入)/;
+
+/** 读取并严格过滤「龙头情绪复盘」技能的客观数据部分 */
+function loadLuotouObjectiveData() {
+  if (!fs.existsSync(LUOTOU_SKILL_PATH)) return "";
+  const md = fs.readFileSync(LUOTOU_SKILL_PATH, "utf-8");
+  const sections = md.split(/^##\s+/m);
+  const kept = [];
+  for (const sec of sections) {
+    const firstLine = sec.split("\n")[0].trim();
+    if (!LUOTOU_KEEP_HEADERS.some((h) => firstLine.includes(h))) continue;
+    const body = sec.split("\n").slice(1).join("\n");
+    kept.push(`## ${firstLine}\n${body}`);
+  }
+  // 二次清洗: 逐行剔除主观/情绪/结论性语句, 仅保留客观事实与数据
+  const cleaned = kept
+    .join("\n")
+    .split("\n")
+    .filter((l) => {
+      const t = l.trim();
+      if (!t) return true;
+      if (LUOTOU_SUBJECTIVE_RE.test(t)) return false;
+      return true;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned;
 }
 
 /* ---------------- 模型列表 / Key 校验(OpenRouter) ---------------- */
@@ -535,6 +581,11 @@ function buildPrompt(ctx, skills) {
   } else {
     user += `\n\n(未指定技能, 请以通用市场分析视角研判。)`;
   }
+  // 注入「客观数据方法论」(次要参考, 优先级低于上方 youzi-qijie-jinghua 游资交易思维)
+  const luotou = loadLuotouObjectiveData();
+  if (luotou) {
+    user += `\n\n【客观数据方法论 · 次要参考·仅数据】以下为数据采集与来源标注的客观规则, 优先级低于上述「游资交易思维」, 仅用于确保数据来源可追溯、结构化完整, 禁止据此输出任何主观研判或情绪化结论:\n${luotou}`;
+  }
   return { system: sys, user };
 }
 
@@ -756,6 +807,11 @@ function buildMarketPrompt(ctx, skills) {
     user += `\n\n请结合以下「游资交易思维」进行研判(融入相应视角):\n${skillText}`;
   } else {
     user += `\n\n(未指定技能, 请以通用游资视角研判。)`;
+  }
+  // 注入「客观数据方法论」(次要参考, 优先级低于上方 youzi-qijie-jinghua 游资交易思维)
+  const luotou = loadLuotouObjectiveData();
+  if (luotou) {
+    user += `\n\n【客观数据方法论 · 次要参考·仅数据】以下为数据采集与来源标注的客观规则, 优先级低于上述「游资交易思维」, 仅用于确保数据来源可追溯、结构化完整, 禁止据此输出任何主观研判或情绪化结论:\n${luotou}`;
   }
   return { system: sys, user };
 }
