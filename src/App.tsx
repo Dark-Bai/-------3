@@ -4,12 +4,12 @@ import { TickerTape, type TapeItem } from "@/components/dash/TickerTape";
 import { DashboardHeader } from "@/components/dash/DashboardHeader";
 import { DashboardLayout, type PanelRowDef } from "@/components/dash/DashboardLayout";
 import { IndexPanel } from "@/components/dash/IndexPanel";
-import { CommodityTreasuryPanel } from "@/components/dash/CommodityTreasuryPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
 import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
 import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
+import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
 import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
 import { MonitorWindow } from "@/components/dash/MonitorWindow";
@@ -51,34 +51,28 @@ function Tape() {
   return <TickerTape items={items} />;
 }
 
-/** 透明占位: 用于在行内对齐上下行面板, 不渲染任何内容/边框 */
-function Spacer() {
-  return <div className="h-full" />;
-}
-
 const PANEL_ROWS: PanelRowDef[] = [
   {
     defaultH: 0.30,
     panels: [
-      { id: "index", component: IndexPanel, defaultW: 0.2222, mobileH: "h-[560px]" },
-      { id: "commodityTreasury", component: CommodityTreasuryPanel, defaultW: 0.4889, mobileH: "h-[560px]" },
-      { id: "news", component: NewsPanel, defaultW: 0.2889, mobileH: "h-[560px]" },
+      { id: "index", component: IndexPanel, defaultW: 0.2222, mobileH: "h-[280px]", colStart: 1 },
+      // 中央大型整体模块: 移除「商品·美债」后, philia 跨第一、二行(rowSpan=2)向上延展占据其中央位置
+      { id: "philia", component: PhiliaPanel, defaultW: 0.4889, mobileH: "h-[560px]", colStart: 2, rowSpan: 2 },
+      { id: "news", component: NewsPanel, defaultW: 0.2889, mobileH: "h-[280px]", colStart: 3 },
     ],
   },
   {
     defaultH: 0.34,
     panels: [
-      // 第二行与第一行对齐: 板块资金流向↔A股关键指数(0.2222), 市场板块实时热点↔快讯(0.2889), 中间留白对应商品·美债
-      { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]" },
-      { id: "spacer", component: Spacer, defaultW: 0.4889, mobileH: "h-[340px]" },
-      { id: "sector", component: SectorPanel, defaultW: 0.2889, mobileH: "h-[340px]" },
+      { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]", colStart: 1 },
+      { id: "sector", component: SectorPanel, defaultW: 0.2889, mobileH: "h-[340px]", colStart: 3 },
     ],
   },
   {
     defaultH: 0.36,
     panels: [
-      { id: "watchlist", component: WatchlistPanel, defaultW: 0.2222, mobileH: "h-[400px]" },
-      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 0.7778, mobileH: "h-[560px]" },
+      { id: "watchlist", component: WatchlistPanel, defaultW: 0.2222, mobileH: "h-[400px]", colStart: 1 },
+      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 0.7778, mobileH: "h-[560px]", colStart: 2, colSpan: 2 },
     ],
   },
 ];
