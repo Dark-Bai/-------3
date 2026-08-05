@@ -16,6 +16,8 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
       title="PHILIA"
       icon="◈"
       accent="#d4943a"
+      defaultWidth={1152}
+      defaultHeight={768}
       right={
         <div className="ml-auto flex items-center gap-1.5">
           <LeaderPoolChip />

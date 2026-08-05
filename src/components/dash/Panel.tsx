@@ -17,6 +17,9 @@ interface PanelProps extends PanelZoomProps {
   className?: string;
   bodyClassName?: string;
   accent?: string;
+  /** 弹出悬浮窗默认尺寸(默认 960x640) */
+  defaultWidth?: number;
+  defaultHeight?: number;
 }
 
 /** 驾驶舱面板容器 — 复古报刊专栏风格 */
@@ -31,6 +34,8 @@ export function Panel({
   panelId,
   isZoomed = false,
   onToggleZoom,
+  defaultWidth,
+  defaultHeight,
 }: PanelProps) {
   const tvOverlay = isTv && isZoomed;
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
@@ -111,6 +116,8 @@ export function Panel({
           icon={icon}
           accent={accent}
           onClose={handleToggleZoom}
+          defaultWidth={defaultWidth}
+          defaultHeight={defaultHeight}
         >
           {children}
         </FloatingWindow>
