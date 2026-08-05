@@ -172,19 +172,28 @@ export const QuoteRow = memo(function QuoteRow({
         {/* 第一行: 成交额 / 现价 */}
         {amount ? <Stat label="额" value={amount} /> : <div />}
         <Stat label="价" value={p != null ? fmtPrice(p) : "—"} />
-        {/* 末列: 删除按钮, 跨2行 */}
+        {/* 末列: 删除按钮, 跨2行(用 span 避免外层 button 嵌套 button 的非法 DOM) */}
         {onRemove && (
           <div className="row-span-2 self-center">
-            <button
+            <span
+              role="button"
+              tabIndex={0}
               onClick={(e) => {
                 e.stopPropagation();
                 onRemove();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRemove();
+                }
               }}
               className="text-[10px] leading-none text-[#a8987e] opacity-0 transition-opacity hover:text-[#b8533a] group-hover:opacity-100"
               title="移除"
             >
               ×
-            </button>
+            </span>
           </div>
         )}
 

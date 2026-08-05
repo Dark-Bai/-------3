@@ -1002,6 +1002,12 @@ export interface PhiliaMarketLeaderCore {
     ladder: number;
     seal: string;
     note: string;
+    /** 所参考 skill 思路名称(如 炒股养家·赚钱效应) */
+    skill?: string;
+    /** 对应战法编号 */
+    tactic?: string;
+    /** 建议仓位百分比(0-100), 无则缺省 */
+    position?: number | null;
   }[];
 }
 
@@ -1010,6 +1016,8 @@ export interface PhiliaMarketSentimentCycle {
   stage: string;
   indicators: string;
   analysis: string;
+  /** 整体操作建议(依据 skill 语气风格) */
+  suggestion?: string;
 }
 
 /** 今日机会 */
@@ -1018,6 +1026,12 @@ export interface PhiliaMarketOpportunity {
   sector: string;
   analysis: string;
   opportunity: string;
+  /** 所参考 skill 思路名称 */
+  skill?: string;
+  /** 对应战法编号 */
+  tactic?: string;
+  /** 建议仓位百分比(0-100), 无则缺省 */
+  position?: number | null;
 }
 
 /** 今日风险 */
@@ -1026,6 +1040,10 @@ export interface PhiliaMarketRisk {
   scope: string;
   description: string;
   mitigation: string;
+  /** 所参考 skill 思路名称 */
+  skill?: string;
+  /** 对应战法编号 */
+  tactic?: string;
 }
 
 /** 龙头情绪复盘结果(4 模块) */

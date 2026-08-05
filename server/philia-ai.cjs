@@ -784,16 +784,19 @@ function buildMarketPrompt(ctx, skills) {
   "leaderCore": {
     "title": "今日总龙头一句话概括",
     "summary": "龙头梯队结构、市场共识与带动性的详细分析",
-    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评" } ]
+    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位百分比数字(0-100) } ]
   },
-  "sentimentCycle": { "stage": "冰点/回暖/高潮/退潮阶段", "indicators": "涨停家数/连板/炸板率等关键情绪指标", "analysis": "情绪周期阶段研判" },
-  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "analysis": "机会逻辑", "opportunity": "可操作机会点" } ],
-  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "description": "风险描述", "mitigation": "应对建议" } ]
+  "sentimentCycle": { "stage": "冰点/回暖/高潮/退潮阶段", "indicators": "涨停家数/连板/炸板率等关键情绪指标", "analysis": "情绪周期阶段研判", "suggestion": "整体操作建议(如 谨慎乐观建议控制仓位/市场情绪低迷建议观望为主)" },
+  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位百分比数字(0-100) } ],
+  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ]
 }
 要求:
 - leaderCore.leaders 3-5 只(今日龙头核心), ladder 为数字。
 - opportunities 至少 3 个, risks 至少 3 个。
 - sentimentCycle.stage 必须明确给出情绪周期阶段。
+- skill 必须引用下方「游资交易思维」中的具体思路名称, tactic 给出该思路下对应战法编号。
+- position 必须依据下方技能中的仓位规则并结合当前情绪阶段合理给出(参考: 冰点20-30、回暖60-80、高潮30-50、退潮0-10), 无把握可省略。
+- sentimentCycle.suggestion 必须严格采用该技能的语气风格, 基于当前情绪阶段给出明确操作方向指引。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
 - 当前仅作研究参考, 不构成投资建议。`;
   let user = `以下是当前市场数据白皮书:\n${contextToText(ctx)}`;
@@ -822,38 +825,53 @@ function normalizeMarketResult(raw) {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0;
   };
+  const str = (v) => (v === undefined || v === null ? "" : String(v));
+  const pos = (v) => {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : null;
+  };
   const lc = raw?.leaderCore || {};
   const leaderCore = {
-    title: String(lc.title || ""),
-    summary: String(lc.summary || ""),
+    title: str(lc.title),
+    summary: str(lc.summary),
     leaders: (Array.isArray(lc.leaders) ? lc.leaders : []).slice(0, 6).map((x) => ({
-      name: String(x.name || ""),
-      code: String(x.code || ""),
-      board: String(x.board || ""),
+      name: str(x.name),
+      code: str(x.code),
+      board: str(x.board),
       ladder: num(x.ladder, 0, 99),
-      seal: String(x.seal || ""),
-      note: String(x.note || ""),
+      seal: str(x.seal),
+      note: str(x.note),
+      skill: str(x.skill),
+      tactic: str(x.tactic),
+      position: pos(x.position),
     })),
   };
   const sc = raw?.sentimentCycle || {};
   const sentimentCycle = {
-    stage: String(sc.stage || "未知"),
-    indicators: String(sc.indicators || ""),
-    analysis: String(sc.analysis || ""),
+    stage: str(sc.stage) || "未知",
+    indicators: str(sc.indicators),
+    analysis: str(sc.analysis),
+    suggestion: str(sc.suggestion),
   };
   const opportunities = (Array.isArray(raw?.opportunities) ? raw.opportunities : []).slice(0, 6)
     .map((o) => ({
-      type: String(o.type || "题材"),
-      sector: String(o.sector || ""),
-      analysis: String(o.analysis || ""),
-      opportunity: String(o.opportunity || ""),
+      type: str(o.type) || "题材",
+      sector: str(o.sector),
+      analysis: str(o.analysis),
+      opportunity: str(o.opportunity),
+      skill: str(o.skill),
+      tactic: str(o.tactic),
+      position: pos(o.position),
     }));
   const risks = (Array.isArray(raw?.risks) ? raw.risks : []).slice(0, 6)
     .map((r) => ({
       level: ["高", "中", "低"].includes(r.level) ? r.level : "中",
-      scope: String(r.scope || ""),
-      description: String(r.description || ""),
-      mitigation: String(r.mitigation || ""),
+      scope: str(r.scope),
+      description: str(r.description),
+      mitigation: str(r.mitigation),
+      skill: str(r.skill),
+      tactic: str(r.tactic),
     }));
   return { leaderCore, sentimentCycle, opportunities, risks };
 }

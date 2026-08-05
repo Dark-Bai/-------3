@@ -55,7 +55,7 @@ function Tape() {
 
 const PANEL_ROWS: PanelRowDef[] = [
   {
-    defaultH: 0.30,
+    defaultH: 0.34,
     panels: [
       { id: "index", component: IndexPanel, defaultW: 0.2222, mobileH: "h-[280px]", colStart: 1 },
       // 中央大型整体模块: 移除「商品·美债」后, philia 跨第一、二行(rowSpan=2)向上延展占据其中央位置
@@ -64,14 +64,14 @@ const PANEL_ROWS: PanelRowDef[] = [
     ],
   },
   {
-    defaultH: 0.34,
+    defaultH: 0.38,
     panels: [
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]", colStart: 1 },
       { id: "sector", component: SectorPanel, defaultW: 0.2889, mobileH: "h-[340px]", colStart: 3 },
     ],
   },
   {
-    defaultH: 0.36,
+    defaultH: 0.28,
     panels: [
       { id: "watchlist", component: WatchlistPanel, defaultW: 0.2222, mobileH: "h-[400px]", colStart: 1 },
       { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 0.7778, mobileH: "h-[560px]", colStart: 2, colSpan: 2 },
