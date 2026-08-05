@@ -25,6 +25,7 @@ export function usePolling<T>(
   const [error, setError] = useState<string | null>(null);
   const [updated, setUpdated] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false); // 在途刷新中(首次加载后仍为 true, 供刷新指示器)
   const fnRef = useRef(fn);
   const isEqualRef = useRef(isEqual);
   // 最新数据引用, 供 isEqual 比较(避免在 setState updater 里做副作用)
@@ -48,6 +49,7 @@ export function usePolling<T>(
     const run = async () => {
       if (inflight) return;
       inflight = true;
+      setRefreshing(true);
       try {
         const d = await fnRef.current();
         if (!dead) {
@@ -64,6 +66,7 @@ export function usePolling<T>(
       } finally {
         inflight = false;
         if (!dead) {
+          setRefreshing(false);
           setLoading(false);
           schedule();
         }
@@ -83,5 +86,5 @@ export function usePolling<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interval, ...deps, enabled]);
 
-  return { data, error, updated, loading };
+  return { data, error, updated, loading, refreshing };
 }

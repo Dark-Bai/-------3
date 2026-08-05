@@ -155,8 +155,8 @@ function FengWindCard({ wind, rank, open, onToggle }: { wind: FengWind; rank: nu
   );
 }
 
-/** 风口榜列表: 加载/错误/空态 + 可展开卡片 */
-export function FengWindList({ data, loading, error }: { data?: FengFrontData; loading: boolean; error: boolean }) {
+/** 风口榜列表: 加载/错误/空态 + 可展开卡片; refreshing 时叠加"刷新中"指示, 数据保持不闪空 */
+export function FengWindList({ data, loading, error, refreshing }: { data?: FengFrontData; loading: boolean; error: boolean; refreshing?: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const windList = data?.windList || [];
 
@@ -173,7 +173,10 @@ export function FengWindList({ data, loading, error }: { data?: FengFrontData; l
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-1 flex items-center justify-between px-0.5 text-[10px] text-[#a8987e]">
-        <span>{windList.length} 个风口</span>
+        <span className="flex items-center gap-1.5">
+          {refreshing && <RefreshingChip />}
+          <span>{windList.length} 个风口</span>
+        </span>
         {data && <span style={TNUM}>权重 {Object.values(data.weights).join("/")}</span>}
       </div>
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
@@ -188,5 +191,18 @@ export function FengWindList({ data, loading, error }: { data?: FengFrontData; l
         ))}
       </div>
     </div>
+  );
+}
+
+/** 刷新中指示器: 脉冲圆点 + 文案, 用户感知数据正在后台更新 */
+function RefreshingChip() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[#3a6ea5]">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#3a6ea5]/60" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#3a6ea5]" />
+      </span>
+      刷新中
+    </span>
   );
 }

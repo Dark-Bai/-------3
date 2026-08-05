@@ -8,7 +8,7 @@ import { useFengFront } from "@/lib/api";
 export function SectorPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
   const fengWeights = useFengWeights();
   // 携带当前权重到后端计算最终评分, 15s 轮询
-  const { data, loading, error } = useFengFront("", fengWeights.weights);
+  const { data, loading, error, refreshing } = useFengFront("", fengWeights.weights);
 
   return (
     <Panel
@@ -20,7 +20,7 @@ export function SectorPanel({ className = "", ...zoomProps }: { className?: stri
       right={<FengWeights {...fengWeights} />}
     >
       <div className="h-full min-h-0 p-1.5">
-        <FengWindList data={data ?? undefined} loading={loading} error={!!error} />
+        <FengWindList data={data ?? undefined} loading={loading} error={!!error} refreshing={refreshing} />
       </div>
     </Panel>
   );
