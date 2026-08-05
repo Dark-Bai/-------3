@@ -11,6 +11,9 @@ interface FloatingWindowProps {
   onClose: () => void;
   defaultWidth?: number;
   defaultHeight?: number;
+  /** 初始位置(默认居中); 屏幕分辨率变化时会自适应夹取到视口内 */
+  defaultX?: number;
+  defaultY?: number;
 }
 
 let globalZIndex = 1000;
@@ -23,8 +26,13 @@ export function FloatingWindow({
   onClose,
   defaultWidth = 960,
   defaultHeight = 640,
+  defaultX,
+  defaultY,
 }: FloatingWindowProps) {
-  const [pos, setPos] = useState({ x: (window.innerWidth - defaultWidth) / 2, y: 80 });
+  const [pos, setPos] = useState({
+    x: defaultX ?? (window.innerWidth - defaultWidth) / 2,
+    y: defaultY ?? 80,
+  });
   const [size, setSize] = useState({ w: Math.min(defaultWidth, window.innerWidth - 80), h: Math.min(defaultHeight, window.innerHeight - 120) });
   const [zIndex, setZIndex] = useState(() => ++globalZIndex);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -36,6 +44,31 @@ export function FloatingWindow({
   const resizing = useRef(false);
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, px: 0, py: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
+
+  // 最新位置/尺寸引用: 供 resize 自适应夹取使用(避免闭包陈旧值)
+  const posRef = useRef(pos);
+  const sizeRef = useRef(size);
+  useEffect(() => { posRef.current = pos; }, [pos]);
+  useEffect(() => { sizeRef.current = size; }, [size]);
+
+  // 屏幕分辨率变化时自适应: 缩回视口内并夹取尺寸, 避免窗口被裁切/相互越界
+  useEffect(() => {
+    const onResize = () => {
+      if (isMaximized) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const p = posRef.current;
+      const s = sizeRef.current;
+      const nw = Math.min(s.w, Math.max(320, vw - 40));
+      const nh = Math.min(s.h, Math.max(240, vh - 40));
+      const nx = Math.min(Math.max(0, p.x), Math.max(0, vw - nw));
+      const ny = Math.min(Math.max(0, p.y), Math.max(0, vh - nh));
+      setSize({ w: nw, h: nh });
+      setPos({ x: nx, y: ny });
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [isMaximized]);
 
   /** 点击窗口时提升到最前 */
   const bringToFront = useCallback(() => {
@@ -123,29 +156,19 @@ export function FloatingWindow({
     };
   }, []);
 
-  // 最小化状态：只显示标题栏
-  if (isMinimized) {
-    return createPortal(
-      <div
-        ref={windowRef}
-        className="fixed bottom-0 left-0 z-[9999]"
-        onClick={restore}
-      >
-        <div
-          className="flex cursor-pointer items-center gap-2 rounded-t border border-[#e0d5c0] border-b-[#d4943a] bg-[#faf6ee] px-3 py-1.5 shadow-newspaper-lg hover:bg-[#ede4d4] transition-colors"
-          style={{ borderBottomWidth: 2, minWidth: 160 }}
-        >
-          <span className="inline-block h-3 w-3 rounded-sm" style={{ background: accent }} />
-          {icon && <span className="text-[11px]" style={{ color: accent }}>{icon}</span>}
-          <span className="text-[12px] font-medium text-[#6b5b3e] truncate max-w-[120px]">{title}</span>
-          <span className="ml-2 text-[10px] text-[#a8987e]">— 点击恢复</span>
-        </div>
-      </div>,
-      document.body
-    );
-  }
+  // 窗口显示(首次挂载 / 从最小化恢复)时强制重排, 确保 flex 内容区正确出图,
+  // 避免小窗退出/切后台后再查看出现空白、需额外点击才显示的问题。
+  useEffect(() => {
+    if (isMinimized) return;
+    const raf = requestAnimationFrame(() => {
+      const el = windowRef.current;
+      if (el) void el.offsetHeight; // 强制浏览器重排/重绘
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isMinimized]);
 
   return createPortal(
+    <>
     <div
       ref={windowRef}
       className="fixed flex flex-col rounded-sm border border-[#d4943a]/50 bg-[#faf6ee] shadow-[0_8px_32px_rgba(0,0,0,0.12)]"
@@ -155,6 +178,9 @@ export function FloatingWindow({
         width: isMaximized ? "100vw" : size.w,
         height: isMaximized ? "100vh" : size.h,
         zIndex,
+        // 最小化时: 内容保持挂载(状态/滚动不丢失), 仅视觉隐藏, 避免重挂载导致空白
+        visibility: isMinimized ? "hidden" : "visible",
+        pointerEvents: isMinimized ? "none" : undefined,
       }}
       onClick={bringToFront}
       onMouseDown={bringToFront}
@@ -211,7 +237,25 @@ export function FloatingWindow({
           </svg>
         </div>
       )}
-    </div>,
+    </div>
+    {/* 最小化时: 底部任务栏, 点击恢复(内容保持挂载不动) */}
+    {isMinimized && (
+      <div
+        className="fixed bottom-0 left-0 z-[9999]"
+        onClick={restore}
+      >
+        <div
+          className="flex cursor-pointer items-center gap-2 rounded-t border border-[#e0d5c0] border-b-[#d4943a] bg-[#faf6ee] px-3 py-1.5 shadow-newspaper-lg hover:bg-[#ede4d4] transition-colors"
+          style={{ borderBottomWidth: 2, minWidth: 160 }}
+        >
+          <span className="inline-block h-3 w-3 rounded-sm" style={{ background: accent }} />
+          {icon && <span className="text-[11px]" style={{ color: accent }}>{icon}</span>}
+          <span className="text-[12px] font-medium text-[#6b5b3e] truncate max-w-[120px]">{title}</span>
+          <span className="ml-2 text-[10px] text-[#a8987e]">— 点击恢复</span>
+        </div>
+      </div>
+    )}
+  </>,
     document.body
   );
 }

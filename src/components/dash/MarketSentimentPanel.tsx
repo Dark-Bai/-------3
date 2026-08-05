@@ -434,15 +434,18 @@ function niceNum(range: number, round: boolean): number {
 }
 function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["trendData"] }) {
   if (!data || data.length < 2) return null;
-  const allReversed = [...data].reverse();
+  // 数据源 trendData 最新在前(降序): 直接取最近 N 天, 再反转为升序供图表自左向右(旧→新)绘制
+  const descending = [...data];
   // 最多查看半年内的交易日(以最新日期往前推6个月为截止线)
-  const latestDate = new Date(allReversed[0].date);
+  const latestDate = new Date(descending[0].date);
   const cutoff = new Date(latestDate);
   cutoff.setMonth(cutoff.getMonth() - 6);
-  const maxDays = allReversed.filter(d => new Date(d.date) >= cutoff).length;
-  const [viewDays, setViewDays] = useState<number>(Math.min(7, maxDays, allReversed.length));
-  const [daysInput, setDaysInput] = useState<string>(String(Math.min(7, maxDays, allReversed.length)));
-  const reversed = viewDays < allReversed.length ? allReversed.slice(0, viewDays) : allReversed;
+  const maxDays = descending.filter(d => new Date(d.date) >= cutoff).length;
+  const [viewDays, setViewDays] = useState<number>(Math.min(7, maxDays, descending.length));
+  const [daysInput, setDaysInput] = useState<string>(String(Math.min(7, maxDays, descending.length)));
+  // 最近的 viewDays 天(降序), 反转为升序(旧→新)用于绘图
+  const newestN = viewDays < descending.length ? descending.slice(0, viewDays) : descending;
+  const reversed = [...newestN].reverse();
   const maxVal = Math.max(...reversed.map(d => Math.max(d.limitUp, d.limitDown, d.blownUp)), 10);
   const minNonZero = Math.min(...reversed.map(d => [d.limitUp, d.limitDown, d.blownUp].filter(v => v > 0)).flat(), maxVal);
   const w = 600, h = 120, pad = { top: 10, bottom: 18, left: 28, right: 8 };

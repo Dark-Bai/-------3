@@ -8,12 +8,11 @@
  * 本次增强:
  *  - 「今日龙头核心」「今日情绪周期」缩放至 70%(字体/容器), 为「今日机会/今日风险」预留 ≥320px 空间
  *  - 每条主观信息旁标注 skill 来源(参考: 思路 - 战法N)
- *  - 具投资机会的标的标注建议仓位(建议仓位: X%)
+ *  - 具投资机会的标的标注建议仓位(固定四级分类: 小/中/大/满)
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
- *  - 点击「今日机会」「今日风险」弹出独立信息窗口(createPortal)
+ *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   Sparkles,
   Loader2,
@@ -23,18 +22,14 @@ import {
   TrendingUp,
   AlertTriangle,
   Maximize2,
-  X,
 } from "lucide-react";
 import { api, type PhiliaMarketAnalysis, type PhiliaDataSource } from "@/lib/api";
 import { usePhilia } from "./PhiliaContext";
+import { FloatingWindow } from "./FloatingWindow";
 import { ThinkingProcessButton } from "./ThinkingProcessButton";
 import { usePhiliaPolling } from "@/hooks/usePhiliaPolling";
 
 /* ---------- 设计参数(需求中的占位符取值) ---------- */
-const DETAIL_WIDTH = 560; // 弹窗宽度(px)
-const DETAIL_OPACITY = 0.96; // 弹窗背景透明度
-const DETAIL_RADIUS = 12; // 弹窗圆角
-const DETAIL_BORDER = "1px solid rgba(74,107,63,0.40)"; // 弹窗边框样式
 const SPACE_PX = 320; // 为「今日机会/今日风险」预留的最小显示空间(px)
 const ANNOTATION_COLOR = "#8b7a5e"; // 来源标注字体颜色
 const POSITION_COLOR = "#4a6b3f"; // 建议仓位字体颜色
@@ -42,6 +37,57 @@ const POSITION_BG = "#e8f2e8"; // 建议仓位背景色
 const SUGGESTION_COLOR = "#d4943a"; // 操作建议颜色
 const SUGGESTION_FONT = "font-newspaper-heading"; // 操作建议字体
 const SUGGESTION_SIZE = 14; // 操作建议字号(px)
+
+/** 金融标的蓝色标注色(最小字号文本中出现标的时高亮) */
+const TARGET_COLOR = "#1d4ed8";
+
+/** 建议仓位四级分类的配色(小/中/大/满) */
+const POS_LEVEL_STYLE: Record<string, { color: string; bg: string }> = {
+  小: { color: "#3f7d3f", bg: "#e6f2e6" },
+  中: { color: "#b8860b", bg: "#faf3d9" },
+  大: { color: "#d4943a", bg: "#f8ead0" },
+  满: { color: "#b8533a", bg: "#f7e3dc" },
+};
+
+/** 将任意仓位输入(四档文字 / 数字 / 百分数 / 历史旧数据)统一归一化为四级分类: 小/中/大/满 */
+function toPosLevel(v: unknown): string | null {
+  if (v === undefined || v === null || v === "") return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/满/.test(s)) return "满";
+  if (/大/.test(s)) return "大";
+  if (/中/.test(s)) return "中";
+  if (/小/.test(s)) return "小";
+  const n = Number(s.replace(/[%％]/g, ""));
+  if (Number.isFinite(n)) {
+    // 0-1 小数视为仓位占比(如 0.3=30%), 其余按 0-100 分档
+    const pct = n > 0 && n < 1 ? n * 100 : n;
+    if (pct <= 25) return "小";
+    if (pct <= 50) return "中";
+    if (pct <= 75) return "大";
+    return "满";
+  }
+  return null;
+}
+
+/** 将文本中的已知金融标的名称(如龙头个股)以蓝色高亮; 证券代码(600519/sh603618)保持原色 */
+function highlightTargets(text: string, names: string[] = []): ReactNode {
+  const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namePats = names
+    .map(esc)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  if (!namePats.length) return String(text ?? "");
+  const re = new RegExp(`(${namePats.join("|")})`, "gi");
+  const parts = String(text ?? "").split(re);
+  return parts.map((p, i) =>
+    i % 2 === 1 ? (
+      <span key={i} style={{ color: TARGET_COLOR, fontWeight: 600 }}>{p}</span>
+    ) : (
+      p
+    )
+  );
+}
 
 /** 情绪阶段 → 配色 */
 const STAGE_META: Record<string, { color: string; bg: string }> = {
@@ -65,92 +111,92 @@ const fmtTime = (ts: number) => {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
-/** 来源标注: 参考：思路名称 - 战法编号(字体为正文 80%) */
-function SourceTag({ skill, tactic, size = 9 }: { skill?: string; tactic?: string; size?: number }) {
-  if (!skill && !tactic) return null;
-  const text = `参考：${skill || "游资思路"}${tactic ? ` - 战法${tactic}` : ""}`;
+/** 来源标注: 具体章节/编号(字体为正文 80%) */
+function SourceTag({
+  sourceRef,
+  skill,
+  tactic,
+  size = 9,
+}: {
+  sourceRef?: string;
+  skill?: string;
+  tactic?: string;
+  size?: number;
+}) {
+  let text = "";
+  if (sourceRef) {
+    // 去掉文件名前缀, 仅保留「章节 · 模型」等精确条目
+    const ref = sourceRef.replace(/^youzi-qijie-jinghua\/SKILL\.md\s*·\s*/, "");
+    text = `来源：${ref}`;
+  } else if (skill || tactic) {
+    text = `来源：${skill || "游资思路"}${tactic ? ` - 战法${tactic}` : ""}`;
+  } else {
+    return null;
+  }
   return (
-    <span className="block truncate" style={{ color: ANNOTATION_COLOR, fontSize: size }}>
+    <span className="block truncate" title={text} style={{ color: ANNOTATION_COLOR, fontSize: size }}>
       {text}
     </span>
   );
 }
 
-/** 建议仓位标识: 建议仓位：X%(置于标的名称后方, 高亮色 + 底色) */
-function PositionChip({ position, size = 10 }: { position?: number | null; size?: number }) {
-  if (position === undefined || position === null) return null;
+/** 建议仓位标识: 固定四级分类(小/中/大/满), 置于标的名称后方, 按档配色凸显 */
+function PositionChip({ position, size = 10 }: { position?: string | number | null; size?: number }) {
+  const level = toPosLevel(position);
+  if (!level) return null;
+  const st = POS_LEVEL_STYLE[level] || { color: POSITION_COLOR, bg: POSITION_BG };
   return (
     <span
-      className="inline-block shrink-0 rounded px-1 py-px font-bold tabular-nums"
-      style={{ color: POSITION_COLOR, backgroundColor: POSITION_BG, fontSize: size }}
+      className="inline-block shrink-0 rounded px-1 py-px font-bold leading-tight"
+      style={{ color: st.color, backgroundColor: st.bg, fontSize: size }}
     >
-      建议仓位：{position}%
+      建议仓位：{level}
     </span>
   );
 }
 
-/** 独立信息窗口(createPortal): 宽度固定、高度随内容自适应、背景半透明、Newspaper 边框
- *  支持: 关闭按钮 / 点击遮罩 / ESC 关闭 */
-function DetailModal({
-  title,
-  icon,
-  accent,
-  count,
-  onClose,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  accent: string;
-  count: number;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="relative overflow-hidden shadow-2xl backdrop-blur-sm"
-        style={{
-          width: DETAIL_WIDTH,
-          maxWidth: "92vw",
-          backgroundColor: `rgba(250,246,238,${DETAIL_OPACITY})`,
-          border: DETAIL_BORDER,
-          borderRadius: DETAIL_RADIUS,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className="flex items-center gap-2 border-b border-[#d4c5a8]/70 px-3.5 py-2.5"
-          style={{ color: accent }}
-        >
-          {icon}
-          <span className="text-[16px] font-bold font-newspaper-heading">{title}</span>
-          <span className="text-[12px] text-[#a8987e]">{count} 条</span>
-          <button
-            type="button"
-            onClick={onClose}
-            title="关闭(Esc)"
-            className="ml-auto rounded p-1 text-[#8b7a5e] transition-colors hover:bg-[#4a6b3f]/10 hover:text-[#6b5b3e]"
-          >
-            <X size={16} />
-          </button>
+/** 机会明细列表(供面板预览与独立小窗复用) */
+function OpportunitiesBody({ opportunities, names }: { opportunities: PhiliaMarketAnalysis["result"]["opportunities"]; names?: string[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {(opportunities || []).map((o, i) => (
+        <div key={i} className="rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/70 px-2 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-1">
+            <span className="text-[14px] font-bold text-[#6b5b3e]">
+              {o.type} · {o.sector}
+            </span>
+            <PositionChip position={o.position} size={11} />
+          </div>
+          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(o.analysis, names)}</p>
+          {o.opportunity && <p className="mt-1 text-[12px] text-[#4a6b3f]">机会点：{highlightTargets(o.opportunity, names)}</p>}
+          <SourceTag sourceRef={o.sourceRef} skill={o.skill} tactic={o.tactic} size={10} />
         </div>
-        {/* 高度随内容自适应; 极端长内容时以 max-h + 滚动兜底 */}
-        <div className="max-h-[80vh] overflow-y-auto px-3.5 py-2.5">{children}</div>
-      </div>
-    </div>,
-    document.body
+      ))}
+    </div>
+  );
+}
+
+/** 风险明细列表(供面板预览与独立小窗复用) */
+function RisksBody({ risks, names }: { risks: PhiliaMarketAnalysis["result"]["risks"]; names?: string[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {(risks || []).map((rk, i) => (
+        <div key={i} className="rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/70 px-2 py-1.5">
+          <div className="flex items-center gap-1">
+            <span
+              className="rounded px-1 py-px text-[12px] font-bold text-white"
+              style={{ backgroundColor: RISK_COLOR[rk.level] || "#d4943a" }}
+            >
+              {rk.level}
+            </span>
+            <span className="text-[14px] font-bold text-[#6b5b3e]">{rk.scope || "风险"}</span>
+          </div>
+          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(rk.description, names)}</p>
+          {rk.mitigation && <p className="mt-1 text-[12px] text-[#4a6b3f]">应对：{highlightTargets(rk.mitigation, names)}</p>}
+          <SourceTag sourceRef={rk.sourceRef} skill={rk.skill} tactic={rk.tactic} size={10} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -160,7 +206,9 @@ export function MarketReviewSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showSrc, setShowSrc] = useState(false);
-  const [detail, setDetail] = useState<null | "opportunities" | "risks">(null);
+  // 「今日机会」「今日风险」独立小窗: 可同时开启
+  const [floats, setFloats] = useState<{ opportunities: boolean; risks: boolean }>({ opportunities: false, risks: false });
+  const toggleFloat = (k: "opportunities" | "risks") => setFloats((f) => ({ ...f, [k]: !f[k] }));
 
   const run = async (force = false) => {
     setLoading(true);
@@ -193,6 +241,10 @@ export function MarketReviewSection() {
 
   const r = analysis?.result;
   const sources: PhiliaDataSource[] = r?.sources || [];
+  // 蓝色高亮标的名称集合: 优先取后端汇总的 targets(龙头+机会+风险), 兼容旧数据回退到龙头名
+  const leaderNames = (r?.leaderCore?.leaders || []).map((l) => l.name).filter(Boolean);
+  const highlightNames = (r?.targets && r.targets.length ? r.targets : leaderNames);
+  const highlight = (text: string): ReactNode => highlightTargets(text, highlightNames);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5 p-2">
@@ -333,7 +385,7 @@ export function MarketReviewSection() {
                 <p className="mb-0.5 text-[12px] font-bold text-[#6b5b3e]">总龙头：{r.leaderCore.title}</p>
               )}
               {r.leaderCore.summary && (
-                <p className="mb-0.5 text-[11px] leading-snug text-[#8b7a5e]">{r.leaderCore.summary}</p>
+                <p className="mb-0.5 text-[11px] leading-snug text-[#8b7a5e]">{highlight(r.leaderCore.summary)}</p>
               )}
               <div className="flex flex-col gap-0.5">
                 {(r.leaderCore.leaders || []).map((l, i) => (
@@ -351,12 +403,12 @@ export function MarketReviewSection() {
                         <PositionChip position={l.position} size={10} />
                       </div>
                       <div className="truncate text-[10px] text-[#a8987e]">
-                        {l.code} · {l.board} · {l.seal}
+                        {highlight(`${l.code} · ${l.board} · ${l.seal}`)}
                       </div>
                       {/* 需求3: 来源标注 */}
-                      <SourceTag skill={l.skill} tactic={l.tactic} size={9} />
+                      <SourceTag sourceRef={l.sourceRef} skill={l.skill} tactic={l.tactic} size={9} />
                     </div>
-                    {l.note && <span className="max-w-[38%] shrink-0 truncate text-[10px] text-[#d4943a]">{l.note}</span>}
+                    {l.note && <span className="max-w-[38%] shrink-0 truncate text-[10px] text-[#d4943a]">{highlight(l.note)}</span>}
                   </div>
                 ))}
               </div>
@@ -378,10 +430,10 @@ export function MarketReviewSection() {
                 </span>
               </div>
               {r.sentimentCycle.indicators && (
-                <p className="mb-0.5 text-[11px] font-semibold text-[#8b7a5e]">{r.sentimentCycle.indicators}</p>
+                <p className="mb-0.5 text-[11px] font-semibold text-[#8b7a5e]">{highlight(r.sentimentCycle.indicators)}</p>
               )}
               {r.sentimentCycle.analysis && (
-                <p className="text-[11px] leading-snug text-[#6b5b3e]">{r.sentimentCycle.analysis}</p>
+                <p className="text-[11px] leading-snug text-[#6b5b3e]">{highlight(r.sentimentCycle.analysis)}</p>
               )}
               {/* 需求5: 整体操作建议(依据 skill 语气风格) */}
               {r.sentimentCycle.suggestion && (
@@ -390,7 +442,7 @@ export function MarketReviewSection() {
                     className={`${SUGGESTION_FONT} font-bold`}
                     style={{ color: SUGGESTION_COLOR, fontSize: SUGGESTION_SIZE }}
                   >
-                    操作建议：{r.sentimentCycle.suggestion}
+                    操作建议：{highlight(r.sentimentCycle.suggestion)}
                   </span>
                 </div>
               )}
@@ -406,8 +458,8 @@ export function MarketReviewSection() {
             <div className="flex min-h-0 flex-col rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 p-1.5">
               <button
                 type="button"
-                onClick={() => setDetail("opportunities")}
-                title="点击查看全部机会明细"
+                onClick={() => toggleFloat("opportunities")}
+                title="点击弹出「今日机会」独立小窗(可同时与今日风险/自选股并存)"
                 className="mb-1 flex w-full items-center gap-1 border-b border-[#c9b99a]/50 pb-1 text-left transition-colors hover:bg-[#faf6ee]/60"
                 style={{ color: "#b8533a" }}
               >
@@ -427,10 +479,10 @@ export function MarketReviewSection() {
                       {/* 需求4: 建议仓位 */}
                       <PositionChip position={o.position} size={10} />
                     </div>
-                    <p className="mt-0.5 text-[12px] leading-snug text-[#8b7a5e]">{o.analysis}</p>
-                    {o.opportunity && <p className="mt-0.5 text-[12px] text-[#4a6b3f]">机会点：{o.opportunity}</p>}
+                    <p className="mt-0.5 text-[12px] leading-snug text-[#8b7a5e]">{highlight(o.analysis)}</p>
+                    {o.opportunity && <p className="mt-0.5 text-[12px] text-[#4a6b3f]">机会点：{highlight(o.opportunity)}</p>}
                     {/* 需求3: 来源标注 */}
-                    <SourceTag skill={o.skill} tactic={o.tactic} size={10} />
+                    <SourceTag sourceRef={o.sourceRef} skill={o.skill} tactic={o.tactic} size={10} />
                   </div>
                 ))}
               </div>
@@ -440,8 +492,8 @@ export function MarketReviewSection() {
             <div className="flex min-h-0 flex-col rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 p-1.5">
               <button
                 type="button"
-                onClick={() => setDetail("risks")}
-                title="点击查看全部风险明细"
+                onClick={() => toggleFloat("risks")}
+                title="点击弹出「今日风险」独立小窗(可同时与今日机会/自选股并存)"
                 className="mb-1 flex w-full items-center gap-1 border-b border-[#c9b99a]/50 pb-1 text-left transition-colors hover:bg-[#faf6ee]/60"
                 style={{ color: "#b8533a" }}
               >
@@ -463,10 +515,10 @@ export function MarketReviewSection() {
                       </span>
                       <span className="truncate text-[13px] font-bold text-[#6b5b3e]">{rk.scope || "风险"}</span>
                     </div>
-                    <p className="mt-0.5 text-[12px] leading-snug text-[#8b7a5e]">{rk.description}</p>
-                    {rk.mitigation && <p className="mt-0.5 text-[12px] text-[#4a6b3f]">应对：{rk.mitigation}</p>}
+                    <p className="mt-0.5 text-[12px] leading-snug text-[#8b7a5e]">{highlight(rk.description)}</p>
+                    {rk.mitigation && <p className="mt-0.5 text-[12px] text-[#4a6b3f]">应对：{highlight(rk.mitigation)}</p>}
                     {/* 需求3: 来源标注 */}
-                    <SourceTag skill={rk.skill} tactic={rk.tactic} size={10} />
+                    <SourceTag sourceRef={rk.sourceRef} skill={rk.skill} tactic={rk.tactic} size={10} />
                   </div>
                 ))}
               </div>
@@ -475,59 +527,40 @@ export function MarketReviewSection() {
         </div>
       )}
 
-      {/* ===== 需求1: 独立信息窗口 ===== */}
-      {detail === "opportunities" && r && (
-        <DetailModal
+      {/* ===== 独立小窗: 今日机会 / 今日风险(可同时显示, 各自支持最小化/最大化/关闭) ===== */}
+      {floats.opportunities && r && (
+        <FloatingWindow
+          id="float-opportunities"
           title="今日机会"
-          icon={<TrendingUp size={18} />}
+          icon="▲"
           accent="#b8533a"
-          count={r.opportunities?.length || 0}
-          onClose={() => setDetail(null)}
+          onClose={() => toggleFloat("opportunities")}
+          defaultWidth={420}
+          defaultHeight={520}
+          defaultX={24}
+          defaultY={70}
         >
-          <div className="flex flex-col gap-1.5">
-            {(r.opportunities || []).map((o, i) => (
-              <div key={i} className="rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/70 px-2 py-1.5">
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span className="text-[14px] font-bold text-[#6b5b3e]">
-                    {o.type} · {o.sector}
-                  </span>
-                  <PositionChip position={o.position} size={11} />
-                </div>
-                <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{o.analysis}</p>
-                {o.opportunity && <p className="mt-1 text-[12px] text-[#4a6b3f]">机会点：{o.opportunity}</p>}
-                <SourceTag skill={o.skill} tactic={o.tactic} size={10} />
-              </div>
-            ))}
+          <div className="p-2.5">
+            <OpportunitiesBody opportunities={r.opportunities} names={highlightNames} />
           </div>
-        </DetailModal>
+        </FloatingWindow>
       )}
-      {detail === "risks" && r && (
-        <DetailModal
+      {floats.risks && r && (
+        <FloatingWindow
+          id="float-risks"
           title="今日风险"
-          icon={<AlertTriangle size={18} />}
+          icon="⚠"
           accent="#b8533a"
-          count={r.risks?.length || 0}
-          onClose={() => setDetail(null)}
+          onClose={() => toggleFloat("risks")}
+          defaultWidth={420}
+          defaultHeight={480}
+          defaultX={Math.max(24, window.innerWidth - 460)}
+          defaultY={70}
         >
-          <div className="flex flex-col gap-1.5">
-            {(r.risks || []).map((rk, i) => (
-              <div key={i} className="rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/70 px-2 py-1.5">
-                <div className="flex items-center gap-1">
-                  <span
-                    className="rounded px-1 py-px text-[12px] font-bold text-white"
-                    style={{ backgroundColor: RISK_COLOR[rk.level] || "#d4943a" }}
-                  >
-                    {rk.level}
-                  </span>
-                  <span className="text-[14px] font-bold text-[#6b5b3e]">{rk.scope || "风险"}</span>
-                </div>
-                <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{rk.description}</p>
-                {rk.mitigation && <p className="mt-1 text-[12px] text-[#4a6b3f]">应对：{rk.mitigation}</p>}
-                <SourceTag skill={rk.skill} tactic={rk.tactic} size={10} />
-              </div>
-            ))}
+          <div className="p-2.5">
+            <RisksBody risks={r.risks} names={highlightNames} />
           </div>
-        </DetailModal>
+        </FloatingWindow>
       )}
     </div>
   );

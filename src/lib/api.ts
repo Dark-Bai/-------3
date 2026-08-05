@@ -1006,8 +1006,10 @@ export interface PhiliaMarketLeaderCore {
     skill?: string;
     /** 对应战法编号 */
     tactic?: string;
-    /** 建议仓位百分比(0-100), 无则缺省 */
-    position?: number | null;
+    /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+    position?: string;
+    /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
+    sourceRef?: string;
   }[];
 }
 
@@ -1024,26 +1026,34 @@ export interface PhiliaMarketSentimentCycle {
 export interface PhiliaMarketOpportunity {
   type: string;
   sector: string;
+  /** 涉及的具体标的名(用于蓝色高亮标注) */
+  targets?: string[];
   analysis: string;
   opportunity: string;
   /** 所参考 skill 思路名称 */
   skill?: string;
   /** 对应战法编号 */
   tactic?: string;
-  /** 建议仓位百分比(0-100), 无则缺省 */
-  position?: number | null;
+  /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+  position?: string;
+  /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
+  sourceRef?: string;
 }
 
 /** 今日风险 */
 export interface PhiliaMarketRisk {
   level: string;
   scope: string;
+  /** 涉及的具体标的名(用于蓝色高亮标注) */
+  targets?: string[];
   description: string;
   mitigation: string;
   /** 所参考 skill 思路名称 */
   skill?: string;
   /** 对应战法编号 */
   tactic?: string;
+  /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
+  sourceRef?: string;
 }
 
 /** 龙头情绪复盘结果(4 模块) */
@@ -1052,6 +1062,8 @@ export interface PhiliaMarketAnalysisResult {
   sentimentCycle: PhiliaMarketSentimentCycle;
   opportunities: PhiliaMarketOpportunity[];
   risks: PhiliaMarketRisk[];
+  /** 汇总的全部标的名称(龙头 + 机会 + 风险), 用于蓝色高亮标注 */
+  targets?: string[];
   /** AI 生成内容所参考的数据源列表(含获取时间) */
   sources?: PhiliaDataSource[];
 }

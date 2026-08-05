@@ -256,6 +256,75 @@ function loadSkills() {
   return skills;
 }
 
+/* ---------------- 观点来源解析 ----------------
+ * 将 LLM 输出的 skill/tactic 解析为 SKILL.md 中的精确条目,
+ * 使每条主观观点可追溯至「文件名 + 具体章节编号 + 模型/条目编号」。
+ */
+const SKILL_FILE_LABEL = "youzi-qijie-jinghua/SKILL.md";
+
+/** 解析 SKILL.md, 建立「游资小节 → 模型条目」的章节索引 */
+function buildSkillIndex() {
+  const file = path.join(SKILL_DIR, "SKILL.md");
+  if (!fs.existsSync(file)) return [];
+  const lines = fs.readFileSync(file, "utf-8").split("\n");
+  const index = [];
+  let part = ""; // 一级标题(第X部分 · 名称)
+  for (const raw of lines) {
+    const line = raw.trim();
+    const h1 = /^# (.+)$/.exec(line);
+    const h2 = /^## (.+)$/.exec(line);
+    if (h1) { part = h1[1]; continue; }
+    if (h2) {
+      const head = h2[1];
+      const no = /^[一二三四五六七八九十]+、/.exec(head)?.[0] || "";
+      const nameBase = head.replace(no, "").split("·")[0].trim();
+      index.push({ part, head, no, name: nameBase, models: [] });
+      continue;
+    }
+    // 模型条目: **模型1：标题**
+    if (index.length) {
+      const m = /^\*\*模型(\d+)[:：](.+?)(?:\*\*|$)/.exec(line);
+      if (m) index[index.length - 1].models.push({ no: m[1], title: m[2].trim() });
+    }
+  }
+  return index;
+}
+
+let _skillIndex = null;
+function getSkillIndex() {
+  if (!_skillIndex) _skillIndex = buildSkillIndex();
+  return _skillIndex;
+}
+
+/** 解析技能引用 → 精确来源标注(含文件名 + 章节编号 + 模型编号) */
+function resolveSkillSource(skill, tactic) {
+  const s = String(skill || "").trim();
+  const t = String(tactic || "").trim();
+  if (!s && !t) return "";
+  const idx = getSkillIndex();
+  // 1) 用 skill 中的游资名匹配小节
+  let sec = null;
+  for (const it of idx) {
+    if (it.name && s.includes(it.name)) { sec = it; break; }
+  }
+  // 2) 用 tactic 中的编号匹配模型(如 "模型1" / "1")
+  let model = null;
+  if (sec) {
+    const mn = /(?:模型)?(\d+)/.exec(t);
+    if (mn) model = sec.models.find((mm) => String(mm.no) === mn[1]) || null;
+  }
+  const parts = [];
+  if (sec) {
+    parts.push(`${sec.part} ${sec.head}`);
+    if (model) parts.push(`模型${model.no} ${model.title}`);
+  }
+  if (parts.length) return `${SKILL_FILE_LABEL} · ${parts.join(" · ")}`;
+  // 回退: 仅给出文件名 + 原始引用
+  const tNo = t.replace(/^模型/, "");
+  const raw = [s, t ? `模型${tNo}` : ""].filter(Boolean).join(" · ");
+  return raw ? `${SKILL_FILE_LABEL} · ${raw}` : SKILL_FILE_LABEL;
+}
+
 /* ---------------- 客观数据过滤(龙头情绪复盘技能) ----------------
  * 仅从 luotou-qingxu-sipan/SKILL.md 中提取「客观数据方法论」:
  * 数据来源 URL、采集完整性要求、数据提取要点、来源标注规范。
@@ -632,10 +701,38 @@ async function callLLM(apiKey, model, prompt) {
   }
   if (!content) throw Object.assign(new Error("LLM 未返回内容"), { status: 502 });
   try {
-    return JSON.parse(content);
+    return parseJsonStrict(content);
   } catch {
+    // 容错: 剥离 markdown 围栏/前后缀/截断尾巴, 重试一次
+    const repaired = repairJson(content);
+    if (repaired !== null) return repaired;
     throw Object.assign(new Error("LLM 返回非合法 JSON"), { status: 502 });
   }
+}
+
+/** 严格解析 LLM 返回的 JSON */
+function parseJsonStrict(content) {
+  return JSON.parse(content);
+}
+
+/** 尽力修复 LLM 返回的 JSON: 去围栏/取首个对象范围/截断补齐缺失的收尾 } */
+function repairJson(content) {
+  const s = String(content).trim();
+  const tries = [];
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) tries.push(fenced[1]);
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) tries.push(s.slice(start, end + 1));
+  tries.push(s);
+  for (let t of tries) {
+    t = t.trim();
+    if (!t) continue;
+    for (const attempt of [t, `${t}}`, `${t}]}`]) {
+      try { return JSON.parse(attempt); } catch { /* 继续尝试 */ }
+    }
+  }
+  return null;
 }
 
 /** 结构化结果校验与规范化(容错 + 权重归一化) */
@@ -784,18 +881,19 @@ function buildMarketPrompt(ctx, skills) {
   "leaderCore": {
     "title": "今日总龙头一句话概括",
     "summary": "龙头梯队结构、市场共识与带动性的详细分析",
-    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位百分比数字(0-100) } ]
+    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ]
   },
   "sentimentCycle": { "stage": "冰点/回暖/高潮/退潮阶段", "indicators": "涨停家数/连板/炸板率等关键情绪指标", "analysis": "情绪周期阶段研判", "suggestion": "整体操作建议(如 谨慎乐观建议控制仓位/市场情绪低迷建议观望为主)" },
-  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位百分比数字(0-100) } ],
-  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ]
+  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "targets": ["涉及的具体标的名, 如 翔鹭钨业"], "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ],
+  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "targets": ["涉及的具体标的名"], "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ]
 }
 要求:
 - leaderCore.leaders 3-5 只(今日龙头核心), ladder 为数字。
 - opportunities 至少 3 个, risks 至少 3 个。
+- 每个 opportunity / risk 的 targets 必须列出该条涉及的全部具体标的名(股票公司名, 不含代码), 与 description/analysis 中提到的标的一一对应。
 - sentimentCycle.stage 必须明确给出情绪周期阶段。
 - skill 必须引用下方「游资交易思维」中的具体思路名称, tactic 给出该思路下对应战法编号。
-- position 必须依据下方技能中的仓位规则并结合当前情绪阶段合理给出(参考: 冰点20-30、回暖60-80、高潮30-50、退潮0-10), 无把握可省略。
+- position 必须严格输出四档分类之一「小/中/大/满」(不得输出数字或百分比), 依据下方技能中的仓位规则并结合当前情绪阶段给出(参考: 冰点→小、回暖→大、高潮→中、退潮→小), 切实把握/无把握时输出「小」。
 - sentimentCycle.suggestion 必须严格采用该技能的语气风格, 基于当前情绪阶段给出明确操作方向指引。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
 - 当前仅作研究参考, 不构成投资建议。`;
@@ -826,10 +924,27 @@ function normalizeMarketResult(raw) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0;
   };
   const str = (v) => (v === undefined || v === null ? "" : String(v));
+  const arr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+  // 仓位建议标准化: 固定四级分类「小/中/大/满」, 消除随机性波动。
+  // 兼容历史数字/百分数(按分档映射), 最终统一为四档之一。
   const pos = (v) => {
     if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : null;
+    const s = String(v).trim();
+    if (!s) return null;
+    if (/满/.test(s)) return "满";
+    if (/大/.test(s)) return "大";
+    if (/中/.test(s)) return "中";
+    if (/小/.test(s)) return "小";
+    const n = Number(s.replace(/[%％]/g, ""));
+    if (Number.isFinite(n)) {
+      // 0-1 小数视为仓位占比(如 0.3=30%), 其余按 0-100 分档
+      const pct = n > 0 && n < 1 ? n * 100 : n;
+      if (pct <= 25) return "小";
+      if (pct <= 50) return "中";
+      if (pct <= 75) return "大";
+      return "满";
+    }
+    return null;
   };
   const lc = raw?.leaderCore || {};
   const leaderCore = {
@@ -845,6 +960,7 @@ function normalizeMarketResult(raw) {
       skill: str(x.skill),
       tactic: str(x.tactic),
       position: pos(x.position),
+      sourceRef: resolveSkillSource(str(x.skill), str(x.tactic)),
     })),
   };
   const sc = raw?.sentimentCycle || {};
@@ -858,22 +974,32 @@ function normalizeMarketResult(raw) {
     .map((o) => ({
       type: str(o.type) || "题材",
       sector: str(o.sector),
+      targets: arr(o.targets),
       analysis: str(o.analysis),
       opportunity: str(o.opportunity),
       skill: str(o.skill),
       tactic: str(o.tactic),
       position: pos(o.position),
+      sourceRef: resolveSkillSource(str(o.skill), str(o.tactic)),
     }));
   const risks = (Array.isArray(raw?.risks) ? raw.risks : []).slice(0, 6)
     .map((r) => ({
       level: ["高", "中", "低"].includes(r.level) ? r.level : "中",
       scope: str(r.scope),
+      targets: arr(r.targets),
       description: str(r.description),
       mitigation: str(r.mitigation),
       skill: str(r.skill),
       tactic: str(r.tactic),
+      sourceRef: resolveSkillSource(str(r.skill), str(r.tactic)),
     }));
-  return { leaderCore, sentimentCycle, opportunities, risks };
+  // 汇总全部标的名称(龙头 + 机会 + 风险), 供前端蓝色高亮标注
+  const targets = [...new Set(
+    [...(Array.isArray(lc.leaders) ? lc.leaders : []).map((x) => str(x.name)),
+     ...opportunities.flatMap((o) => o.targets),
+     ...risks.flatMap((r) => r.targets)].filter(Boolean)
+  )];
+  return { leaderCore, sentimentCycle, opportunities, risks, targets };
 }
 
 /** 龙头情绪复盘(4 模块): 复用 LLM 管线与降频缓存 */
