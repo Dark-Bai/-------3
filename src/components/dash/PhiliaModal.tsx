@@ -1,19 +1,18 @@
 /**
- * Philia AI 综合分析 - 配置模态窗口
+ * Philia AI 分析配置模态窗口
  *
  * 输入项:
  *  - API Key(强制, sk-or- 格式校验 + 实时校验)
  *  - AI 模型下拉(默认 deepseek-v4-flash 正式版)
  *  - 技能多选(读取 youzi-qijie-jinghua 目录)
  * 操作:
- *  - 开始分析: 保存配置并触发综合分析
- *  - 仅保存设置: 只保存配置, 不触发分析
+ *  - 保存配置: 加密存储后关闭; 分析由主面板「启动 AI 综合分析」按钮触发
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Sparkles, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { usePhilia } from "./PhiliaContext";
-import { api, type PhiliaModel } from "@/lib/api";
+import { api, type PhiliaModel, type PhiliaConfig } from "@/lib/api";
 
 /** 后端模型接口未就绪/空时的兜底模型列表(含 deepseek-v4-flash 正式版) */
 const DEFAULT_MODELS: PhiliaModel[] = [
@@ -30,7 +29,7 @@ function keyFormatValid(key: string): boolean {
 }
 
 export function PhiliaModal() {
-  const { config, skills, skillsLoaded, models, openModal, closeModal, saveSettings, runAnalysis } = usePhilia();
+  const { config, skills, skillsLoaded, models, closeModal, saveSettings } = usePhilia();
 
   /* 表单状态 */
   const [key, setKey] = useState("");
@@ -41,8 +40,12 @@ export function PhiliaModal() {
   const [keyValidated, setKeyValidated] = useState<"valid" | "invalid" | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   /* 提交状态 */
-  const [submitting, setSubmitting] = useState<"saving" | "analyzing" | null>(null);
+  const [submitting, setSubmitting] = useState<boolean | "saving">(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /* 保存成功反馈(保存成功后短暂展示再关闭) */
+  const [saved, setSaved] = useState(false);
+  /* 防止 config 引用变化(后台刷新)时重置用户正在编辑的表单 */
+  const initializedRef = useRef<PhiliaConfig | null>(null);
 
   /* 合并模型列表: 后端优先, 空则用兜底 */
   const modelOptions = useMemo(() => {
@@ -50,17 +53,21 @@ export function PhiliaModal() {
     return DEFAULT_MODELS;
   }, [models]);
 
-  /* 打开时回填已有配置 */
+  /* 弹窗打开(挂载): 从已保存配置回填表单。
+   * 仅当 config 首次就绪时初始化一次, 之后 config 引用变化不再重置用户编辑中的选择,
+   * 从而保证「技能选择」等表单状态在重新进入页面时正确保留为已保存值。 */
   useEffect(() => {
-    if (!openModal) return;
+    if (!config || config === initializedRef.current) return;
+    initializedRef.current = config;
     setModel(config?.model || DEFAULT_MODELS.find((m) => m.default)?.id || modelOptions[0]?.id || "");
     setSelectedSkills(config?.skills ? [...config.skills] : []);
     setKey("");
     setKeyValidated(null);
     setKeyError(null);
     setSubmitError(null);
+    setSaved(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openModal, config]);
+  }, [config]);
 
   /* ESC 关闭 */
   useEffect(() => {
@@ -101,32 +108,7 @@ export function PhiliaModal() {
     }
   }
 
-  /** 开始分析: 保存配置并触发分析 */
-  async function handleAnalyze() {
-    if (needKey && !key.trim()) {
-      setKeyError("请先填写 API Key");
-      setKeyValidated("invalid");
-      return;
-    }
-    if (needKey && !keyFormatValid(key.trim())) {
-      setKeyError("API Key 格式不正确");
-      setKeyValidated("invalid");
-      return;
-    }
-    setSubmitError(null);
-    setSubmitting("analyzing");
-    try {
-      await saveSettings({ key: key.trim() || undefined, model, skills: selectedSkills });
-      await runAnalysis(model, selectedSkills, false);
-      closeModal();
-    } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "分析失败，请重试");
-    } finally {
-      setSubmitting(null);
-    }
-  }
-
-  /** 仅保存设置 */
+  /** 保存配置(含 key 时一并加密存储), 成功后展示反馈再关闭 */
   async function handleSave() {
     if (needKey && !key.trim()) {
       setKeyError("请先填写 API Key");
@@ -135,13 +117,16 @@ export function PhiliaModal() {
     }
     setSubmitError(null);
     setSubmitting("saving");
+    setSaved(false);
     try {
       await saveSettings({ key: key.trim() || undefined, model, skills: selectedSkills });
-      closeModal();
+      setSaved(true);
+      setSubmitting(false);
+      // 短暂展示成功反馈后自动关闭
+      setTimeout(closeModal, 700);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "保存失败");
-    } finally {
-      setSubmitting(null);
+      setSubmitting(false);
     }
   }
 
@@ -159,9 +144,9 @@ export function PhiliaModal() {
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[#e0d5c0] bg-gradient-to-r from-[#f5f0e6] via-[#faf6ee] to-[#f5f0e6] px-4">
           <Sparkles size={15} className="text-[#d4943a]" />
           <h2 className="text-[14px] font-bold tracking-wide text-[#6b5b3e] font-newspaper-heading">
-            PHILIA · 游资视角综合分析
+            PHILIA · 分析配置
           </h2>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-1.5">
             <button
               type="button"
               onClick={closeModal}
@@ -302,40 +287,40 @@ export function PhiliaModal() {
               {submitError}
             </div>
           )}
+
+          {saved && (
+            <div className="flex items-center gap-1.5 rounded border border-[#4a6b3f]/40 bg-[#4a6b3f]/10 px-3 py-2 text-[12px] font-medium text-[#4a6b3f]">
+              <CheckCircle2 size={14} /> 配置已保存成功
+            </div>
+          )}
         </div>
 
         {/* 底部操作 */}
         <footer className="flex shrink-0 items-center gap-2 border-t border-[#e0d5c0] bg-[#f5f0e6]/60 px-4 py-3">
           <button
             type="button"
-            disabled={!!submitting}
+            disabled={!!submitting || saved}
             onClick={handleSave}
-            className="rounded border border-[#e0d5c0] bg-[#ede4d4] px-3 py-1.5 text-[12px] font-medium text-[#8b7a5e] transition-colors hover:border-[#d4943a]/60 hover:text-[#6b5b3e] disabled:opacity-50"
+            title="保存当前配置：将所选技能与模型持久化保存到本机，供「启动 AI 综合分析」使用"
+            className="flex items-center gap-1.5 rounded border border-[#4a6b3f]/60 bg-[#4a6b3f] px-5 py-2 text-[13px] font-bold text-[#faf6ee] shadow-sm transition-colors hover:bg-[#3d5a35] hover:shadow disabled:opacity-50"
           >
-            {submitting === "saving" ? (
-              <span className="flex items-center gap-1.5">
+            {submitting ? (
+              <>
                 <Loader2 size={13} className="animate-spin" /> 保存中
-              </span>
-            ) : (
-              "仅保存设置"
-            )}
-          </button>
-          <button
-            type="button"
-            disabled={!!submitting}
-            onClick={handleAnalyze}
-            className="flex items-center gap-1.5 rounded bg-[#4a6b3f] px-4 py-1.5 text-[12px] font-medium text-[#f5f0e6] transition-colors hover:bg-[#3d5a35] disabled:opacity-50"
-          >
-            {submitting === "analyzing" ? (
+              </>
+            ) : saved ? (
               <>
-                <Loader2 size={13} className="animate-spin" /> 分析中
+                <CheckCircle2 size={13} /> 已保存
               </>
             ) : (
               <>
-                <Sparkles size={13} /> 开始分析
+                <CheckCircle2 size={13} /> 保存配置
               </>
             )}
           </button>
+          <span className="ml-auto text-[10px] text-[#a8987e]">
+            保存后请前往主面板点击「启动 AI 综合分析」
+          </span>
         </footer>
       </div>
     </div>,

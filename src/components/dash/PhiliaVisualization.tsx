@@ -231,7 +231,7 @@ export function PhiliaVisualization({ result, date }: { result: PhiliaAnalysisRe
   }, []);
 
   const aiMeta = `DeepSeek AI · ${fmtDate(date) || "—"}`;
-  const sentMeta = `KPL 开盘啦 · ${fmtDate(sentDate) || "—"}`;
+  const sentMeta = `东方财富网页数据 · ${fmtDate(sentDate) || "—"}`;
 
   return (
     <div className="grid h-full min-h-0 grid-cols-3 gap-1.5 p-2">

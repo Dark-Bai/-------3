@@ -577,11 +577,11 @@ export const api = {
     /** 可用模型列表(OpenRouter models 过滤) */
     models: () => get<PhiliaModel[]>(`/api/philia/models`),
     /** 读取配置(不含明文 key) */
-    getConfig: () => get<PhiliaConfig>(`/api/philia/config`),
-    /** 保存配置(含 key, 后端加密存储) */
-    saveConfig: (cfg: PhiliaSaveConfig) => post<PhiliaConfig>(`/api/philia/config`, cfg),
+    getConfig: () => get<PhiliaConfig>(`/api/philia/key`),
+    /** 保存配置(含 key 时后端先校验再加密存储) */
+    saveConfig: (cfg: PhiliaSaveConfig) => post<PhiliaConfig>(`/api/philia/key`, cfg),
     /** 校验 API Key 有效性 */
-    validate: (key: string) => post<PhiliaValidateResult>(`/api/philia/validate`, { key }),
+    validate: (key: string) => post<PhiliaValidateResult>(`/api/philia/key`, { key, validateOnly: true }),
     /** 触发综合分析(降频缓存; force=1 绕过缓存); LLM 耗时长, 用独立长超时(180s) */
     analyze: (cfg: PhiliaAnalyzeReq) => post<PhiliaAnalysis>(`/api/philia/analyze`, cfg, 180000),
     /** 历史分析列表 */
@@ -596,6 +596,9 @@ export const api = {
     },
     /** 龙头池与龙头股数据源一致性深度校验 */
     validateLeaderPool: () => get<PhiliaLeaderValidateReport>(`/api/philia/leader-pool/validate`),
+    /** 龙头情绪复盘(4 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险; force=true 强制重算; LLM 耗时长用独立长超时 */
+    marketAnalyze: (cfg: { model?: string; skills?: string[]; force?: boolean }) =>
+      post<PhiliaMarketAnalysis>(`/api/philia/market-analyze`, cfg, 180000),
   },
 };
 
@@ -848,6 +851,24 @@ export interface PhiliaDataSource {
   fetchedAt: string;
 }
 
+/** 思考过程中的单一步骤(资源加载 / 工具调用), 仅含脱敏摘要, 不含敏感信息 */
+export interface PhiliaTraceStep {
+  id: number;
+  /** agent: 整体流程 | resource: 加载的资源 | tool: 调用的工具/函数 */
+  type: "agent" | "resource" | "tool";
+  name: string;
+  /** ok | failed */
+  status: "ok" | "failed";
+  /** 开始时间戳(ms) */
+  startedAt: number;
+  /** 执行耗时(ms) */
+  durationMs: number;
+  /** 脱敏后的参数摘要 */
+  params?: Record<string, unknown>;
+  /** 简短结果/说明 */
+  summary?: string;
+}
+
 /* ---------------- 核心标的参考池(市场实时热点 → 龙头股) ---------------- */
 /** 参考池中的单只龙头股 */
 export interface PhiliaLeaderStock {
@@ -956,6 +977,8 @@ export interface PhiliaAnalysis {
   updatedAt: number;
   /** 是否命中降频缓存(本次未重新计费) */
   fromCache?: boolean;
+  /** 本次分析的思考过程(资源加载/工具调用步骤), 仅本次实时返回, 不入历史 */
+  trace?: PhiliaTraceStep[];
 }
 
 /** 分析请求 */
@@ -964,6 +987,69 @@ export interface PhiliaAnalyzeReq {
   skills: string[];
   /** 强制绕过缓存 */
   force?: boolean;
+}
+
+/* ---------------- 龙头情绪复盘(4 模块) ---------------- */
+
+/** 今日龙头核心 */
+export interface PhiliaMarketLeaderCore {
+  title: string;
+  summary: string;
+  leaders: {
+    name: string;
+    code: string;
+    board: string;
+    ladder: number;
+    seal: string;
+    note: string;
+  }[];
+}
+
+/** 今日情绪周期 */
+export interface PhiliaMarketSentimentCycle {
+  stage: string;
+  indicators: string;
+  analysis: string;
+}
+
+/** 今日机会 */
+export interface PhiliaMarketOpportunity {
+  type: string;
+  sector: string;
+  analysis: string;
+  opportunity: string;
+}
+
+/** 今日风险 */
+export interface PhiliaMarketRisk {
+  level: string;
+  scope: string;
+  description: string;
+  mitigation: string;
+}
+
+/** 龙头情绪复盘结果(4 模块) */
+export interface PhiliaMarketAnalysisResult {
+  leaderCore: PhiliaMarketLeaderCore;
+  sentimentCycle: PhiliaMarketSentimentCycle;
+  opportunities: PhiliaMarketOpportunity[];
+  risks: PhiliaMarketRisk[];
+  /** AI 生成内容所参考的数据源列表(含获取时间) */
+  sources?: PhiliaDataSource[];
+}
+
+/** 龙头情绪复盘记录 */
+export interface PhiliaMarketAnalysis {
+  cacheKey: string;
+  date: string;
+  model: string;
+  skillsHash: string;
+  result: PhiliaMarketAnalysisResult;
+  createdAt: number;
+  updatedAt: number;
+  fromCache?: boolean;
+  /** 本次分析的思考过程(资源加载/工具调用步骤), 仅本次实时返回, 不入历史 */
+  trace?: PhiliaTraceStep[];
 }
 /* ---------------- 风口聚合数据结构 ---------------- */
 export interface FengWindDims {

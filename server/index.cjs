@@ -2586,16 +2586,23 @@ const routes = {
   "/api/philia/leader-pool": async (q) => getLeaderPool(q.get("force") === "1", parseLeaderWeights(q.get("weights"))),
   // 龙头池与龙头股数据源一致性校验(强制取最新数据源全量比对, 供巡检/手动验证)
   "/api/philia/leader-pool/validate": async () => validateLeaderPoolEndpoint(),
-  "/api/philia/skills": async () => philia.loadSkills(),
-  "/api/philia/models": async (q) => philia.listModels(process.env.OPENROUTER_API_KEY || ""),
-  "/api/philia/config": async (q, body) => {
-    // GET(无 body)返回配置; POST(有 body)保存配置
+  // 龙头情绪复盘(4 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险; force=1 强制重算
+  "/api/philia/market-analyze": async (q, body) => philia.analyzeMarket({ model: body?.model, skills: body?.skills, force: !!body?.force }),
+  // 最小 key 接口: GET 读配置(不含明文 key); POST 带 key 先校验再保存, validateOnly=1 仅校验不保存
+  "/api/philia/key": async (q, body) => {
     if (body === undefined) return philia.getConfig();
-    return philia.saveConfig({ key: body?.key, model: body?.model, skills: body?.skills });
+    const key = typeof body?.key === "string" ? body.key.trim() : "";
+    const validateOnly = !!body?.validateOnly;
+    if (key) {
+      const v = await philia.validateKey(key);
+      if (!v.valid) {
+        if (validateOnly) return { valid: false, error: v.error || "Key 无效" };
+        throw Object.assign(new Error(v.error || "Key 无效"), { status: 400 });
+      }
+      if (validateOnly) return { valid: true, label: v.label || null };
+    }
+    return philia.saveConfig({ key: key || undefined, model: body?.model, skills: body?.skills });
   },
-  "/api/philia/validate": async (q, body) => philia.validateKey(String(body?.key || "").trim()),
-  "/api/philia/analyze": async (q, body) => philia.analyze({ model: body?.model, skills: body?.skills, force: !!body?.force }),
-  "/api/philia/history": async () => philia.history(20),
 };
 
 const MIME = {
@@ -2637,9 +2644,8 @@ const STATIC_HEADERS = {
 const PROTECTED_ROUTES = new Set([
   "/api/openrouter-usage",
   // PHILIA AI: 涉及私有密钥与 LLM 调用, 仅允许同源访问
-  "/api/philia/config",
-  "/api/philia/validate",
-  "/api/philia/analyze",
+  "/api/philia/market-analyze",
+  "/api/philia/key",
 ]);
 
 // 环回地址互认: 开发期 vite 代理(:3000→:3001)跨端口转发, Origin/Host 端口必然不同, 视为同源
