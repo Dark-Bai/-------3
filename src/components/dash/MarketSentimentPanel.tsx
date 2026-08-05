@@ -449,6 +449,19 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
 }
 
 /* ========== 主面板: 市场情绪 (独立) ========== */
+/** 刷新中指示器: 脉冲圆点 + 文案, 用户感知数据正在后台更新 */
+function RefreshingChip() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[#3a6ea5]">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#3a6ea5]/60" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#3a6ea5]" />
+      </span>
+      刷新中
+    </span>
+  );
+}
+
 export function MarketSentimentPanel({ className = "", ...zoomProps }: { className?: string } & PanelZoomProps) {
   // 轮询时段: 每日 08:59-15:00; 每 30s 校准一次, 收盘后停发、次日开盘自动恢复
   const [inWindow, setInWindow] = useState(() => inPollWindow());
@@ -458,13 +471,20 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
   }, []);
 
   // 轮询: 时段内每 15s 拉取; 收盘后 enabled=false → 完全停发, 保留当前数据(定格)
-  const { data: sentData, loading } = usePolling(
+  const { data: sentData, loading, refreshing } = usePolling(
     () => api.pluginMarketSentiment(),
     inWindow ? 15000 : 0,
     [],
     undefined,
     inWindow
   );
+
+  // 粘性数据: 新响应 dataSuccess=false(上游失败聚合为空)时沿用上一次成功数据, 杜绝刷新闪空
+  const [sticky, setSticky] = useState<PluginMarketSentimentData | null>(null);
+  useEffect(() => {
+    if (sentData?.dataSuccess) setSticky(sentData);
+  }, [sentData]);
+  const live = sentData?.dataSuccess ? sentData : sticky;
 
   // 收盘停止期间: 单次拉取后端持久化的定格快照(不轮询), 保证刷新/重开页面也能展示定格数据
   const [frozen, setFrozen] = useState<PluginMarketSentimentData | null>(null);
@@ -475,7 +495,7 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
     return () => { cancelled = true; };
   }, [inWindow]);
 
-  const effective = sentData ?? frozen;
+  const effective = live ?? frozen;
   // 状态: 已停止 / 数据加载中 / 轮询中
   const stateKey = !inWindow ? "stopped" : (loading && !effective ? "loading" : "polling");
   const stateLabel = stateKey === "stopped" ? "已停止" : stateKey === "loading" ? "数据加载中" : "轮询中";
@@ -505,6 +525,7 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: stateColor }} />
               <span style={{ color: stateColor }}>{stateLabel}</span>
             </span>
+            {refreshing && effective?.dataSuccess && <RefreshingChip />}
             {stateKey === "stopped" && <span className="text-[10px] text-[#a8987e]">(数据定格)</span>}
             <span className="text-[#d4c5a8]">|</span>
             <span>更新: {updateTime}</span>

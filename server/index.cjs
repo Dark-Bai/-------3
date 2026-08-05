@@ -326,6 +326,48 @@ async function handleQuotes(codes) {
 }
 
 /* ---------------- 腾讯分钟线(指数/个股 日内走势) ---------------- */
+/* ---------------- A股个股分时: 主备健康切换(KPL主 / 腾讯备) ----------------
+ * 不再"KPL优先、失败才回退", 而是维护每只股票的当前主源并轮流使用:
+ *  - 主源连续失败 N 次 → 切换为备源(本轮回退备源取数, 保证有数据)
+ *  - 备源连续成功 M 次 → 探测一次主源, 恢复则切回主源
+ * 返回带 source 字段标记实际数据源, 便于前端透传与定位
+ */
+const MINUTE_SWITCH_THRESHOLD = 2; // 连续失败次数达到即切换主备
+const MINUTE_RECOVER_PROBE = 5;    // 备源连续成功达到该次数后探测一次主源
+const minuteSrcState = new Map();  // code -> { primary, fail, okOnBackup }
+
+function minuteState(code) {
+  let s = minuteSrcState.get(code);
+  if (!s) { s = { primary: "kpl", fail: 0, okOnBackup: 0 }; minuteSrcState.set(code, s); }
+  return s;
+}
+
+/** KPL 个股分时; 成功返回 {code,prec,points}, 失败/空返回 null */
+async function kplMinuteFetch(code) {
+  const stockCode = code.replace(/^s[hz]/, "");
+  const kplData = await kplFetch("/api/v2/stock/intraday", { code: stockCode });
+  const trend = kplData?.trend;
+  if (trend && Array.isArray(trend) && trend.length) {
+    const prec = parseFloat(kplData.preclose_px) || 0;
+    const pts = trend.filter(p => String(p[0]).includes(":")).map(p => ({ t: p[0], p: parseFloat(p[1]) }));
+    return { code, prec, points: pts };
+  }
+  return null;
+}
+
+/** 腾讯 A股个股分时; 成功返回 {code,prec,points}, 失败/空返回 null */
+async function tencentMinuteFetch(code) {
+  const url = `https://ifzq.gtimg.cn/appstock/app/minute/query?code=${encodeURIComponent(code)}`;
+  const text = await fetchText(url);
+  const json = JSON.parse(text);
+  const d = json?.data?.[code];
+  const arr = d?.data?.data || [];
+  if (!arr.length) return null;
+  const prec = num(d?.data?.prec || d?.qt?.[code]?.[4] || 0);
+  const pts = arr.map((s) => { const p = s.split(" "); return { t: p[0], p: num(p[1]) }; });
+  return { code, prec, points: pts };
+}
+
 async function handleMinute(code) {
   // 归一化代码: 裸 6 位 A股代码(如板块榜/涨停数据给的 600519)补上 sh/sz/bj 前缀,
   // 否则分时取数会跳过 KPL 路径、落回腾讯且带错格式(腾讯需要 sh600519), 导致分时图加载失败
@@ -370,21 +412,45 @@ async function handleMinute(code) {
       return { code, prec: 0, points: [] };
     }
   }
-  // A股个股优先从开盘啦 KPL 获取分时数据
+  // A股个股分时: 主备健康切换(KPL主 / 腾讯备), 轮流使用保证数据平滑与容错
   if (/^s[hz]\d{6}$/.test(code) && !code.startsWith("sh000") && !code.startsWith("sz399")) {
-    try {
-      const stockCode = code.replace(/^s[hz]/, "");
-      const kplData = await kplFetch("/api/v2/stock/intraday", { code: stockCode });
-      const trend = kplData?.trend;
-      if (trend && Array.isArray(trend) && trend.length) {
-        const prec = parseFloat(kplData.preclose_px) || 0;
-        const pts = trend.filter(p => String(p[0]).includes(":")).map(p => ({ t: p[0], p: parseFloat(p[1]) }));
-        return { code, prec, points: pts };
-      }
-    } catch (e) {
-      console.error(`[kpl-minute] ${code} error:`, e?.message || e);
+    const st = minuteState(code);
+    if (st.primary === "kpl") {
+      // 主源 = KPL
+      try {
+        const k = await kplMinuteFetch(code);
+        if (k) { st.fail = 0; return { ...k, source: "kpl" }; }
+      } catch (e) { console.error(`[kpl-minute] ${code} error:`, e?.message || e); }
+      // 主源失败(返回null或抛异常均落到此): 累计失败, 达到阈值切换为备源
+      st.fail++;
+      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "tencent"; st.fail = 0; st.okOnBackup = 0; console.log(`[minute-src] ${code} -> tencent (kpl x${MINUTE_SWITCH_THRESHOLD} fail)`); }
+      // 本轮回退腾讯, 保证有数据
+      try { return { ...(await tencentMinuteFetch(code) || { code, prec: 0, points: [] }), source: "tencent" }; }
+      catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "tencent" }; }
+    } else {
+      // 主源 = 腾讯(备源)
+      try {
+        const t = await tencentMinuteFetch(code);
+        if (t && t.points.length) {
+          st.fail = 0; st.okOnBackup++;
+          // 备源连续成功若干次后, 探测一次主源(KPL)以判断是否恢复, 恢复则切回
+          if (st.okOnBackup >= MINUTE_RECOVER_PROBE) {
+            st.okOnBackup = 0;
+            try {
+              const k = await kplMinuteFetch(code);
+              if (k) { st.primary = "kpl"; console.log(`[minute-src] ${code} -> kpl (recovered)`); return { ...k, source: "kpl" }; }
+            } catch (e) { console.error(`[kpl-minute] ${code} recover probe error:`, e?.message || e); }
+          }
+          return { ...t, source: "tencent" };
+        }
+      } catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); }
+      // 备源失败: 累计失败, 达到阈值切回主源
+      st.fail++;
+      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "kpl"; st.fail = 0; console.log(`[minute-src] ${code} -> kpl (tencent x${MINUTE_SWITCH_THRESHOLD} fail)`); }
+      // 本轮回退 KPL
+      try { return { ...(await kplMinuteFetch(code) || { code, prec: 0, points: [] }), source: "kpl" }; }
+      catch (e) { console.error(`[kpl-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "kpl" }; }
     }
-    // KPL 失败/空数据，回退到腾讯
   }
   const url = code.startsWith("us")
     ? `https://web.ifzq.gtimg.cn/appstock/app/usMinute/query?code=${encodeURIComponent(code)}`
@@ -1786,9 +1852,10 @@ function fengWeightedScore(dims, w) {
 
 // 聚合各 kpl 接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
 async function handleFengFrontBase(date) {
-  // 6 个上游各自限时 3s: 慢/挂起的接口独立超时, 由 allSettled 捕获为 rejected → 该字段返回空/兜底,
-  // 不再因最慢接口拖累整体(此前最坏 10-15s, 超前端 8s 超时被误判为调取失败)
-  const FENG_UPSTREAM_TTL = 3000;
+  // 6 个上游各自限时 8s(与 kplFetch 内部 8s 超时一致): kpl.liuhepc.cn 实测单接口 4.4-6.7s,
+  // 此前 3s 限时导致 6 个上游全部超时 → windList 恒为空(风口/龙头股无法加载)。
+  // 各上游仍并行(Promise.allSettled), 慢接口独立超时不阻塞其他字段; 外层的 15s 缓存保证刷新时秒回。
+  const FENG_UPSTREAM_TTL = 8000;
   const results = await Promise.allSettled([
     withTimeout(kplFetch("/api/ladder/realtime-boards"), FENG_UPSTREAM_TTL, "realtime-boards"),
     withTimeout(kplFetch("/api/ladder/sector", date ? { date } : {}), FENG_UPSTREAM_TTL, "sector"),
@@ -1858,7 +1925,6 @@ async function handleFengFrontBase(date) {
         news: [],
         leaders: [],
         ladders: {},
-        _maxSeal: 0,
       });
     }
     return windMap.get(name);
@@ -1871,18 +1937,13 @@ async function handleFengFrontBase(date) {
     if (!name) continue;
     const w = getWind(name);
     w.limitUpCount++;
-    const seal = s.seal_amount || 0;
-    if (seal > w._maxSeal) {
-      w._maxSeal = seal;
-      w.leaders.unshift({
-        code: s.stock_code,
-        name: s.stock_name,
-        price: s.limit_up_price,
-        pct: s.change_pct,
-        seal,
-      });
-      if (w.leaders.length > 3) w.leaders.length = 3;
-    }
+    w.leaders.push({
+      code: s.stock_code,
+      name: s.stock_name,
+      price: s.limit_up_price,
+      pct: s.change_pct,
+      seal: s.seal_amount || 0,
+    });
   }
 
   // 板块连板: 实时连板梯队(权威连板来源, 含真实 consecutive_days ≥ 2)
@@ -1953,6 +2014,9 @@ async function handleFengFrontBase(date) {
       w.maxConsecutive = 1;
       w.ladders[1] = w.limitUpCount;
     }
+    // 龙头股: 按封单金额降序取前 5(此前仅收集"递增加压子序列"会漏掉封单较小的涨停股)
+    w.leaders.sort((a, b) => (b.seal || 0) - (a.seal || 0));
+    if (w.leaders.length > 5) w.leaders.length = 5;
   }
 
   // 各维度最大原始值(用于归一化到 0-100)

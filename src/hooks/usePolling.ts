@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // 模块级 visibilitychange 单监听器: 所有 usePolling 实例共享,
 // 避免每个实例各挂一个 document 监听(大屏数百行时监听器数量爆炸)
@@ -30,6 +30,8 @@ export function usePolling<T>(
   const isEqualRef = useRef(isEqual);
   // 最新数据引用, 供 isEqual 比较(避免在 setState updater 里做副作用)
   const dataRef = useRef<T | null>(null);
+  // 手动刷新触发器: 指向当前 effect 闭包内的 run, 供外部主动拉取
+  const runRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     fnRef.current = fn;
@@ -76,6 +78,7 @@ export function usePolling<T>(
       window.clearTimeout(timer);
       if (!document.hidden && !dead) void run();
     };
+    runRef.current = run;
     void run();
     visListeners.add(onVisibility);
     return () => {
@@ -86,5 +89,5 @@ export function usePolling<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interval, ...deps, enabled]);
 
-  return { data, error, updated, loading, refreshing };
+  return { data, error, updated, loading, refreshing, refresh: useCallback(() => runRef.current(), []) };
 }

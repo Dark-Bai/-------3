@@ -28,6 +28,38 @@ function fmtSeal(v?: number) {
   return `${(v / 1e8).toFixed(1)}亿`;
 }
 
+/** 复制文本到剪贴板(优先 navigator.clipboard, 失败回退 textarea 方案) */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 非安全上下文或权限被拒, 走回退 */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 复制股票代码, 成功后回调 onDone(用于显示"已复制"反馈) */
+function copyCode(code: string, onDone: () => void) {
+  void copyText(code).then((ok) => {
+    if (ok) onDone();
+  });
+}
+
 /** 维度堆叠条: 5 段按 dims 比例分布 */
 function DimsBar({ dims }: { dims: FengWind["dims"] }) {
   const total = dims.limitUp + dims.ladder + dims.capital + dims.theme + dims.news || 1;
@@ -51,6 +83,7 @@ function DimsBar({ dims }: { dims: FengWind["dims"] }) {
 function FengWindCard({ wind, rank, open, onToggle }: { wind: FengWind; rank: number; open: boolean; onToggle: () => void }) {
   const { openStockDetail } = useStockDetail();
   const color = scoreColor(wind.score);
+  const [copied, setCopied] = useState<string | null>(null);
 
   return (
     <div className="overflow-hidden rounded border border-[#e0d5c0]/50 bg-[#faf6ee]">
@@ -87,20 +120,29 @@ function FengWindCard({ wind, rank, open, onToggle }: { wind: FengWind; rank: nu
           {wind.leaders.length ? (
             <div className="space-y-0.5">
               {wind.leaders.map((ld, i) => (
-                <button
-                  key={`${ld.code}-${i}`}
-                  type="button"
-                  onClick={() => openStockDetail(ld.code, ld.name)}
-                  className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[#ede4d4]"
-                >
-                  <span className="w-14 shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{ld.code}</span>
-                  <span className="min-w-0 flex-1 truncate text-[11px] text-[#4a3b28]">{ld.name}</span>
-                  <span className="shrink-0 text-[10px] text-[#8b7a5e]" style={TNUM}>{ld.price ? ld.price.toFixed(2) : "—"}</span>
-                  <span className="w-12 shrink-0 text-right text-[10px]" style={{ ...TNUM, color: pctColor(ld.pct) }}>
-                    {fmtPct(ld.pct)}
-                  </span>
-                  <span className="w-10 shrink-0 text-right text-[10px] text-[#8b7a5e]" style={TNUM}>{fmtSeal(ld.seal)}</span>
-                </button>
+                <div key={`${ld.code}-${i}`} className="group flex items-center gap-1 rounded px-1 py-0.5 hover:bg-[#ede4d4]">
+                  <button
+                    type="button"
+                    onClick={() => openStockDetail(ld.code, ld.name)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    <span className="w-14 shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{ld.code}</span>
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-[#4a3b28]">{ld.name}</span>
+                    <span className="shrink-0 text-[10px] text-[#8b7a5e]" style={TNUM}>{ld.price ? ld.price.toFixed(2) : "—"}</span>
+                    <span className="w-12 shrink-0 text-right text-[10px]" style={{ ...TNUM, color: pctColor(ld.pct) }}>
+                      {fmtPct(ld.pct)}
+                    </span>
+                    <span className="w-10 shrink-0 text-right text-[10px] text-[#8b7a5e]" style={TNUM}>{fmtSeal(ld.seal)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => copyCode(ld.code, () => setCopied(ld.code))}
+                    title="复制股票代码"
+                    className="shrink-0 rounded border border-[#d4943a]/40 px-1 text-[10px] text-[#d4943a] transition-colors hover:bg-[#d4943a]/10"
+                  >
+                    {copied === ld.code ? "已复制" : "复制"}
+                  </button>
+                </div>
               ))}
             </div>
           ) : (

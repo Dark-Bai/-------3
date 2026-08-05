@@ -210,6 +210,8 @@ export interface MinuteData {
   code: string;
   prec: number;
   points: { t: string; p: number }[];
+  /** 实际数据源: "kpl" | "tencent" | "sina"(美债等) */
+  source?: string;
 }
 
 /** 股票搜索(名称/拼音首字母→代码) */
@@ -733,16 +735,17 @@ export interface FengFrontData {
 /** 风口面板轮询: 15s 刷新, 携带当前权重去后端计算最终评分
  *  粘性数据: 新响应 windList 为空(上游超时/失败聚合为空)时沿用上一次非空数据, 杜绝刷新闪空 */
 export function useFengFront(date = "", weights: Record<FengDimKey, number>) {
-  const poll = usePolling(() => api.fengkFront(date, weights), 15000, [date, weights]);
+  const { data: pollData, loading, error, refreshing, refresh } = usePolling(() => api.fengkFront(date, weights), 15000, [date, weights]);
   const [sticky, setSticky] = useState<FengFrontData | null>(null);
   useEffect(() => {
-    if (poll.data?.windList?.length) setSticky(poll.data);
-  }, [poll.data]);
-  const hasData = !!poll.data?.windList?.length;
+    if (pollData?.windList?.length) setSticky(pollData);
+  }, [pollData]);
+  const hasData = !!pollData?.windList?.length;
   return {
-    data: hasData ? poll.data : sticky,
-    loading: poll.loading,
-    error: poll.error,
-    refreshing: poll.refreshing,
+    data: hasData ? pollData : sticky,
+    loading,
+    error,
+    refreshing,
+    refresh,
   };
 }
