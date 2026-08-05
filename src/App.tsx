@@ -6,8 +6,6 @@ import { DashboardLayout, type PanelRowDef } from "@/components/dash/DashboardLa
 import { IndexPanel } from "@/components/dash/IndexPanel";
 import { CommodityTreasuryPanel } from "@/components/dash/CommodityTreasuryPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
-import { MoneyFlowPanel } from "@/components/dash/MoneyFlowPanel";
-import { RankPanel } from "@/components/dash/RankPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
 import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
@@ -53,6 +51,11 @@ function Tape() {
   return <TickerTape items={items} />;
 }
 
+/** 透明占位: 用于在行内对齐上下行面板, 不渲染任何内容/边框 */
+function Spacer() {
+  return <div className="h-full" />;
+}
+
 const PANEL_ROWS: PanelRowDef[] = [
   {
     defaultH: 0.30,
@@ -65,10 +68,10 @@ const PANEL_ROWS: PanelRowDef[] = [
   {
     defaultH: 0.34,
     panels: [
+      // 第二行与第一行对齐: 板块资金流向↔A股关键指数(0.2222), 市场板块实时热点↔快讯(0.2889), 中间留白对应商品·美债
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]" },
-      { id: "moneyFlow", component: MoneyFlowPanel, defaultW: 0.2426, mobileH: "h-[340px]" },
-      { id: "rank", component: RankPanel, defaultW: 0.2426, mobileH: "h-[340px]" },
-      { id: "sector", component: SectorPanel, defaultW: 0.2926, mobileH: "h-[340px]" },
+      { id: "spacer", component: Spacer, defaultW: 0.4889, mobileH: "h-[340px]" },
+      { id: "sector", component: SectorPanel, defaultW: 0.2889, mobileH: "h-[340px]" },
     ],
   },
   {
