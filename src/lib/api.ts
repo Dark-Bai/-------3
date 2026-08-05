@@ -365,6 +365,35 @@ async function get<T>(path: string): Promise<T> {
   }
 }
 
+/** POST 请求(遵循同样的并发/重试机制; timeout 可覆盖默认 8s, 供长耗时任务如 LLM 分析使用) */
+async function post<T>(path: string, body?: unknown, timeout = REQ_TIMEOUT): Promise<T> {
+  await acquire();
+  try {
+    let r: Response;
+    try {
+      r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: timeoutSignal(timeout),
+      });
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw new Error("请求超时");
+      throw e;
+    }
+    const j = await r.json().catch(() => null);
+    if (r.status === 429) {
+      cooldownUntil = Date.now() + RETRY_429_WAIT;
+      throw new Error(j?.error || "rate limited");
+    }
+    if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+    if (!j?.ok) throw new Error(j?.error || "api error");
+    return j.data as T;
+  } finally {
+    release();
+  }
+}
+
 /* ---------- 浏览器直连腾讯(兜底) ---------- */
 
 function parseTencent(text: string): Record<string, Quote> {
@@ -541,6 +570,33 @@ export const api = {
    *   data.endpoints.forEach(e => console.log(e.path, e.avg + "ms", e.successRate + "%"));
    */
   monitor: () => get<MonitorData>(`/api/monitor`),
+  /* ---------- PHILIA AI 综合分析 ---------- */
+  philia: {
+    /** 技能列表(读取 youzi-qijie-jinghua 目录) */
+    skills: () => get<PhiliaSkill[]>(`/api/philia/skills`),
+    /** 可用模型列表(OpenRouter models 过滤) */
+    models: () => get<PhiliaModel[]>(`/api/philia/models`),
+    /** 读取配置(不含明文 key) */
+    getConfig: () => get<PhiliaConfig>(`/api/philia/config`),
+    /** 保存配置(含 key, 后端加密存储) */
+    saveConfig: (cfg: PhiliaSaveConfig) => post<PhiliaConfig>(`/api/philia/config`, cfg),
+    /** 校验 API Key 有效性 */
+    validate: (key: string) => post<PhiliaValidateResult>(`/api/philia/validate`, { key }),
+    /** 触发综合分析(降频缓存; force=1 绕过缓存); LLM 耗时长, 用独立长超时(180s) */
+    analyze: (cfg: PhiliaAnalyzeReq) => post<PhiliaAnalysis>(`/api/philia/analyze`, cfg, 180000),
+    /** 历史分析列表 */
+    history: () => get<PhiliaAnalysis[]>(`/api/philia/history`),
+    /** 核心标的参考池(市场实时热点 → 龙头股); force=true 强制重建; weights=打分权重(逗号分隔 4 值) */
+    leaderPool: (force = false, weights?: string) => {
+      const qs = new URLSearchParams();
+      if (force) qs.set("force", "1");
+      if (weights) qs.set("weights", weights);
+      const s = qs.toString();
+      return get<PhiliaLeaderPool>(`/api/philia/leader-pool${s ? `?${s}` : ""}`);
+    },
+    /** 龙头池与龙头股数据源一致性深度校验 */
+    validateLeaderPool: () => get<PhiliaLeaderValidateReport>(`/api/philia/leader-pool/validate`),
+  },
 };
 
 /**
@@ -715,6 +771,200 @@ export function useOpenRouterUsage() {
   return usePolling(() => api.openRouterUsage(), 3600000);
 }
 
+/* ---------------- PHILIA AI 综合分析数据结构 ---------------- */
+
+/** 技能(读取 youzi-qijie-jinghua 目录的 SKILL.md) */
+export interface PhiliaSkill {
+  name: string;
+  description: string;
+  /** 技能标题(文件/章节名) */
+  slug: string;
+}
+
+/** 可选模型(OpenRouter) */
+export interface PhiliaModel {
+  id: string;
+  name: string;
+  /** 是否默认选中 */
+  default?: boolean;
+  /** 是否 deepseek-v4-flash 正式版 */
+  isDeepSeekV4?: boolean;
+}
+
+/** 前端配置(不含明文 key, 由后端掩码返回) */
+export interface PhiliaConfig {
+  hasKey: boolean;
+  /** key 掩码, 如 sk-or-****abcd */
+  keyMask?: string | null;
+  model: string;
+  skills: string[];
+}
+
+/** 保存配置请求(含明文 key, 仅发送到后端加密存储) */
+export interface PhiliaSaveConfig {
+  key?: string;
+  model: string;
+  skills: string[];
+}
+
+/** Key 校验结果 */
+export interface PhiliaValidateResult {
+  valid: boolean;
+  label?: string | null;
+  error?: string | null;
+}
+
+/** 单条投资机会 */
+export interface PhiliaOpportunity {
+  type: string;
+  sector: string;
+  analysis: string;
+  expectedReturn: string;
+  weight: number;
+}
+
+/** 单条风险 */
+export interface PhiliaRisk {
+  level: "高" | "中" | "低";
+  scope: string;
+  description: string;
+  mitigation: string;
+  weight: number;
+}
+
+/** 核心标的 */
+export interface PhiliaStock {
+  name: string;
+  code: string;
+  reason: string;
+  target: string;
+  weight: number;
+}
+
+/** AI 分析所参考的数据源及其获取时间(分钟级) */
+export interface PhiliaDataSource {
+  name: string;
+  /** 获取时间, 格式 YYYY-MM-DD HH:MM */
+  fetchedAt: string;
+}
+
+/* ---------------- 核心标的参考池(市场实时热点 → 龙头股) ---------------- */
+/** 参考池中的单只龙头股 */
+export interface PhiliaLeaderStock {
+  code: string;
+  name: string;
+  price: number;
+  pct: number;
+  /** 封单金额(元) */
+  seal: number;
+  /** 封单占流通市值比例(%, 打分用维度) */
+  sealRatio?: number;
+  /** 所属板块 */
+  board: string;
+  /** 该板块涨停家数 */
+  boardLimitUp: number;
+  /** 该板块最大连板高度 */
+  ladder: number;
+  /** 该板块资金流入 */
+  capital: number;
+  /** 流通市值(亿) */
+  floatMarketCap: number;
+  /** 总市值(亿) */
+  totalMarketCap: number;
+  /** 成交额(万元,A股) */
+  amount: number;
+  /** 换手率(%) */
+  turnover: number;
+  /** 量化评分 0-100(封单优先) */
+  score: number;
+  /** 打分权重 */
+  weights?: { seal: number; boardLimitUp: number; ladder: number; capital: number };
+}
+/** 龙头股变动条目(新增/维持) */
+export interface PhiliaLeaderChangeItem {
+  code: string;
+  name: string;
+  board: string;
+  score: number;
+}
+/** 龙头股参考池 */
+export interface PhiliaLeaderPool {
+  date: string;
+  /** 更新时间戳(毫秒) */
+  updatedAt: number;
+  /** 参考池(按评分降序, 上限 30) */
+  pool: PhiliaLeaderStock[];
+  poolSize: number;
+  /** 变动追踪: 新增/移除/维持 */
+  change: { added: PhiliaLeaderChangeItem[]; removed: string[]; kept: PhiliaLeaderChangeItem[] };
+  /** 打分权重、过滤门槛与数据源追溯说明 */
+  meta: {
+    weights: { seal: number; boardLimitUp: number; ladder: number; capital: number };
+    filters: { totalMarketCapMax: number; excludePrefixes?: string[] };
+    /** 数据源标签(展示用) */
+    sourceLabel?: string;
+    /** 龙头股数据源各上游可用状态(与 fengk-front 一致) */
+    source?: { boards?: boolean; ydPlate?: boolean; theme?: boolean; news?: boolean; fengBest?: boolean };
+    /** 龙头股数据源构建时间戳(毫秒) */
+    baseUpdatedAt?: number;
+  };
+  /** 定期一致性校验: 龙头池与龙头股数据源逐条比对结果 */
+  validation?: {
+    consistent: boolean;
+    checkedAt: number;
+    poolSize: number;
+    sourceSectors: number;
+    mismatches: { code: string; name: string; field: string; poolVal: unknown; baseVal: unknown }[];
+  };
+}
+
+/** 龙头池一致性深度校验结果 */
+export interface PhiliaLeaderValidateReport {
+  date: string;
+  checkedAt: number;
+  report: {
+    consistent: boolean;
+    checkedAt: number;
+    poolSize: number;
+    sourceSectors: number;
+    mismatches: { code: string; name: string; field: string; poolVal: unknown; baseVal: unknown }[];
+  };
+  source?: { boards?: boolean; ydPlate?: boolean; theme?: boolean; news?: boolean; fengBest?: boolean };
+  baseUpdatedAt?: number;
+  pool: PhiliaLeaderStock[];
+  note: string;
+}
+
+/** 结构化分析结果 */
+export interface PhiliaAnalysisResult {
+  sentiment: { score: number; level: string; comment: string };
+  opportunities: PhiliaOpportunity[];
+  risks: PhiliaRisk[];
+  stocks: PhiliaStock[];
+  /** AI 生成内容所参考的数据源列表(含获取时间) */
+  sources?: PhiliaDataSource[];
+}
+
+/** 分析记录(含缓存键/时间) */
+export interface PhiliaAnalysis {
+  cacheKey: string;
+  date: string;
+  model: string;
+  skillsHash: string;
+  result: PhiliaAnalysisResult;
+  createdAt: number;
+  updatedAt: number;
+  /** 是否命中降频缓存(本次未重新计费) */
+  fromCache?: boolean;
+}
+
+/** 分析请求 */
+export interface PhiliaAnalyzeReq {
+  model: string;
+  skills: string[];
+  /** 强制绕过缓存 */
+  force?: boolean;
+}
 /* ---------------- 风口聚合数据结构 ---------------- */
 export interface FengWindDims {
   limitUp: number;

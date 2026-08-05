@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { ArrowLeft, Activity, Github, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeft, Activity, Github, Maximize2, Minimize2, Sparkles, Loader2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useClock } from "@/hooks/useClock";
 import { isTv } from "@/lib/tv";
@@ -33,6 +33,10 @@ export function DashboardHeader({
   onToggleMonitor,
   monitorActive = false,
   monitorAlert = false,
+  onTogglePhilia,
+  philiaActive = false,
+  philiaAlert = false,
+  philiaAnalyzing = false,
 }: {
   title: string;
   subtitle: string;
@@ -49,6 +53,10 @@ export function DashboardHeader({
   onToggleMonitor?: () => void;
   monitorActive?: boolean;
   monitorAlert?: boolean;
+  onTogglePhilia?: () => void;
+  philiaActive?: boolean;
+  philiaAlert?: boolean;
+  philiaAnalyzing?: boolean;
 }) {
   const now = useClock(isTv ? 60000 : 1000);
   const hh = String(now.getHours()).padStart(2, "0");
@@ -107,6 +115,24 @@ export function DashboardHeader({
           >
             <Github size={12} />
           </a>
+        )}
+        {onTogglePhilia && (
+          <button
+            onClick={onTogglePhilia}
+            title={philiaActive ? "PHILIA AI 综合分析" : "PHILIA AI 综合分析（未配置 Key）"}
+            className={`relative flex h-[22px] w-[22px] items-center justify-center rounded border transition-colors ${
+              philiaAnalyzing
+                ? "border-[#d4943a]/60 bg-[#d4943a]/10 text-[#d4943a]"
+                : philiaActive
+                ? "border-[#4a6b3f]/60 bg-[#4a6b3f]/10 text-[#4a6b3f]"
+                : "border-[#e0d5c0] bg-[#ede4d4] text-[#8b7a5e] hover:border-[#d4943a]/60 hover:text-[#d4943a]"
+            }`}
+          >
+            {philiaAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+            {philiaAlert && !philiaActive && !philiaAnalyzing && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#d4943a]" />
+            )}
+          </button>
         )}
         {onToggleMonitor && (
           <button

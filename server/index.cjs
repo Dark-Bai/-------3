@@ -10,6 +10,7 @@ const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
 const { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, DB_PATH } = require("./stock-db.cjs");
+const philia = require("./philia-ai.cjs");
 
 // 加载 .env
 try {
@@ -186,6 +187,8 @@ function parseTencentLine(line) {
     turnover: num(f[38]),
     pe: num(f[39]),
     amplitude: num(f[43]),
+    floatMarketCap: num(f[44]), // 流通市值(亿,A股)
+    totalMarketCap: num(f[45]), // 总市值(亿,A股)
   };
 }
 
@@ -1966,6 +1969,14 @@ function fengWeightedScore(dims, w) {
   return Math.round(s / sum);
 }
 
+/** 龙头股数据源(市场板块实时热点)共享缓存访问器:
+ *  风口面板(fengk-front)与龙头池(leader-pool)共用同一 15s 缓存条目,
+ *  确保两者始终基于完全相同的数据源快照, 不会因各自独立拉取上游而出现偏差。
+ *  date 为 "" 时与 fengk-front 缺省一致(不计日期的实时口径)。 */
+function getFengFrontBase(date) {
+  return cached(`fengk-front:${date}`, 15000, () => handleFengFrontBase(date));
+}
+
 // 聚合各 kpl 接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
 async function handleFengFrontBase(date) {
   // 6 个上游各自限时 8s(与 kplFetch 内部 8s 超时一致): kpl.liuhepc.cn 实测单接口 4.4-6.7s,
@@ -2164,6 +2175,7 @@ async function handleFengFrontBase(date) {
 
   return {
     date: date || (ydRes.status === "fulfilled" ? ydRes.value?.plate || "" : ""),
+    updatedAt: Date.now(), // 龙头股数据源构建时间戳(供追溯)
     source: {
       boards: boardsRes.status === "fulfilled" && boardList.length > 0,
       ydPlate: ydRes.status === "fulfilled",
@@ -2174,6 +2186,266 @@ async function handleFengFrontBase(date) {
     windList: enriched.slice(0, 30),
   };
 }
+/* ------------------------------------------------------------- */
+
+/* ---------------- 核心标的参考池(市场实时热点 → 龙头股) ----------------
+ * 数据源: 市场板块实时热点(fengk-front 聚合的 KPL 涨停/连板/板块资金) +
+ *        腾讯行情(qt.gtimg.cn, 补齐流通市值/总市值/成交额)。
+ * 龙头股筛选标准(封单占流通市值优先, 全部可量化):
+ *   - 封单占流通市值 sealRatio 权重 40%  (市场认可度/承接强度, 小盘封单占比高更强势)
+ *   - 板块涨停家数 boardLimitUp 权重 25% (板块影响力)
+ *   - 连板高度 ladder       权重 20%  (龙头地位/市场认可)
+ *   - 板块资金流入 capital   权重 15%  (板块影响力/资金合力)
+ *   sealRatio = 封单金额 / 流通市值(×100%)
+ *   score = 0.40*sealN + 0.25*boardN + 0.20*ladderN + 0.15*capitalN (各维度在池内归一化到 0-100)
+ * 过滤门槛:
+ *   - 仅保留有效 A股(腾讯行情可取, 流通市值 > 0)
+ *   - 剔除超大市值(totalMarketCap > 1000 亿): 题材龙头通常为中小盘, 巨型权重难以连板
+ * 动态更新: 每 15s 自动重算(复用 fengk-front 缓存), 手动刷新可强制重建; 变动追踪见 getLeaderPool。
+ * ------------------------------------------------------------- */
+const LEAD_POOL_TTL = 15000;
+const LEAD_POOL_MAX = 30;            // 参考池容量上限
+const LEAD_MEGA_CAP = 1000;          // 总市值上限(亿), 防止巨型权重混入龙头池
+// 剔除板基础: 科创板(688)与创业板(300)不在龙头池范围内
+const LEAD_EXCLUDE_PREFIXES = ["688", "300"];
+const LEAD_WEIGHTS = { seal: 0.4, boardLimitUp: 0.25, ladder: 0.2, capital: 0.15 };
+const LEAD_DIM_ORDER = ["seal", "boardLimitUp", "ladder", "capital"];
+
+/** 解析龙头池打分权重(逗号分隔 4 个非负值, 顺序 seal,boardLimitUp,ladder,capital):
+ *  支持小数(0.4)或百分比(40)输入, 解析后归一化到和为 1; 非法/缺省回退默认 LEAD_WEIGHTS。 */
+function parseLeaderWeights(raw) {
+  const out = { ...LEAD_WEIGHTS };
+  if (!raw) return out;
+  const parts = String(raw).split(",").map((x) => Number(x.trim()));
+  if (parts.length !== 4) return out;
+  for (let i = 0; i < 4; i++) {
+    const v = parts[i];
+    if (Number.isFinite(v)) out[LEAD_DIM_ORDER[i]] = Math.max(0, v);
+  }
+  const sum = out.seal + out.boardLimitUp + out.ladder + out.capital;
+  if (sum > 0) {
+    out.seal /= sum;
+    out.boardLimitUp /= sum;
+    out.ladder /= sum;
+    out.capital /= sum;
+  }
+  return out;
+}
+
+/** 裸 6 位 A股代码 → 腾讯风格前缀(sh/sz/bj); 已带前缀则原样返回 */
+function prefixedCode(code) {
+  const c = String(code || "").trim().toLowerCase();
+  if (/^\d{6}$/.test(c)) {
+    const d = c[0];
+    if (d === "6" || d === "9") return `sh${c}`;
+    if (d === "0" || d === "2" || d === "3") return `sz${c}`;
+    if (d === "4" || d === "8") return `bj${c}`;
+  }
+  return c;
+}
+
+// 龙头股池变动追踪状态(跨刷新保留, 用于标注 新增/移除/维持)
+let lastLeaderCodeSet = new Set();
+
+/** 数据校验: 将龙头池逐条与龙头股数据源(windList.leaders)比对, 发现任何偏差即标记不一致。
+ *  校验维度与打分所用字段完全对齐: 代码存在性 / 封单 seal / 所属板块 board /
+ *  板块涨停家数 boardLimitUp / 连板高度 ladder。返回一致性报告供追溯。 */
+function validateLeaderConsistency(pool, base) {
+  const checkedAt = Date.now();
+  const leaderByCode = new Map();
+  for (const w of (base.windList || [])) {
+    for (const L of (w.leaders || [])) {
+      if (!L.code) continue;
+      const prev = leaderByCode.get(L.code);
+      // 与 buildLeaderPool 去重口径一致: 同股跨板块时保留板块涨停家数最大者
+      if (!prev || (prev.boardLimitUp || 0) < (w.limitUpCount || 0)) {
+        leaderByCode.set(L.code, {
+          seal: L.seal || 0,
+          board: w.name,
+          boardLimitUp: w.limitUpCount || 0,
+          ladder: w.maxConsecutive || 0,
+        });
+      }
+    }
+  }
+  const mismatches = [];
+  for (const c of pool) {
+    const baseRec = leaderByCode.get(c.code);
+    if (!baseRec) {
+      mismatches.push({ code: c.code, name: c.name, field: "present", poolVal: "在池", baseVal: "数据源缺失" });
+      continue;
+    }
+    if (Math.abs((baseRec.seal || 0) - (c.seal || 0)) > 1)
+      mismatches.push({ code: c.code, name: c.name, field: "seal", poolVal: c.seal, baseVal: baseRec.seal });
+    if ((baseRec.board || "") !== (c.board || ""))
+      mismatches.push({ code: c.code, name: c.name, field: "board", poolVal: c.board, baseVal: baseRec.board });
+    if ((baseRec.boardLimitUp || 0) !== (c.boardLimitUp || 0))
+      mismatches.push({ code: c.code, name: c.name, field: "boardLimitUp", poolVal: c.boardLimitUp, baseVal: baseRec.boardLimitUp });
+    if ((baseRec.ladder || 0) !== (c.ladder || 0))
+      mismatches.push({ code: c.code, name: c.name, field: "ladder", poolVal: c.ladder, baseVal: baseRec.ladder });
+  }
+  return {
+    consistent: mismatches.length === 0,
+    checkedAt,
+    poolSize: pool.length,
+    sourceSectors: (base.windList || []).length,
+    mismatches,
+  };
+}
+
+/* 从市场板块实时热点提取龙头股, 量化打分并补齐市值/成交额, 形成核心标的参考池。
+ * weights 为打分权重(可手动传入, 已归一化), 缺省用默认 LEAD_WEIGHTS。 */
+async function buildLeaderPool(weights) {
+  const w = weights || LEAD_WEIGHTS;
+  const date = dashToday();
+  // 与风口面板(fengk-front)共用同一 15s 缓存快照, 保证龙头池与龙头股数据源无偏差
+  const base = await getFengFrontBase(date);
+  const windList = base.windList || [];
+
+  // 1) 扁平化收集各板块龙头(每板块按封单前5, 已由 handleFengFrontBase 排序裁剪)
+  const collectors = [];
+  for (const w of windList) {
+    for (const L of (w.leaders || [])) {
+      if (!L.code) continue;
+      collectors.push({
+        code: L.code,
+        name: L.name,
+        price: L.price,
+        pct: L.pct,
+        seal: L.seal || 0,
+        board: w.name,
+        boardLimitUp: w.limitUpCount || 0,
+        ladder: w.maxConsecutive || 0,
+        capital: w.capital || 0,
+      });
+    }
+  }
+
+  // 空池(上游全部失败/无涨停): 返回空参考池, 不污染变动追踪
+  if (!collectors.length) {
+    return {
+      date,
+      updatedAt: Date.now(),
+      pool: [],
+      poolSize: 0,
+      change: { added: [], removed: [...lastLeaderCodeSet], kept: [] },
+      meta: {
+        weights: w,
+        filters: { totalMarketCapMax: LEAD_MEGA_CAP, excludePrefixes: LEAD_EXCLUDE_PREFIXES },
+        sourceLabel: "市场板块实时热点(fengk-front) + 腾讯行情",
+        source: base.source || {},
+        baseUpdatedAt: base.updatedAt || 0,
+      },
+      validation: { consistent: true, checkedAt: Date.now(), poolSize: 0, sourceSectors: 0, mismatches: [] },
+    };
+  }
+
+  // 2) 按代码去重: 同股跨板块时保留板块影响力(涨停家数)最大者
+  const byCode = new Map();
+  for (const c of collectors) {
+    const prev = byCode.get(c.code);
+    if (!prev || c.boardLimitUp > prev.boardLimitUp) byCode.set(c.code, c);
+  }
+  const uniq = [...byCode.values()];
+
+  // 3) 腾讯行情补齐 流通市值/总市值/成交额(handleQuotes 内部按代码 1.5s 缓存)
+  const quotes = await handleQuotes(uniq.map((c) => prefixedCode(c.code)).join(","));
+  for (const c of uniq) {
+    const q = quotes[prefixedCode(c.code)] || quotes[String(c.code).trim().toLowerCase()];
+    if (!q) continue;
+    c.floatMarketCap = q.floatMarketCap || 0; // 亿
+    c.totalMarketCap = q.totalMarketCap || 0; // 亿
+    c.amount = q.amount || 0;                 // 万元(A股)
+    c.turnover = q.turnover || 0;             // 换手率(%)
+  }
+
+  // 4) 过滤门槛: 有效 A股(流通市值>0) 且 非超大市值 且 不在剔除板(688 科创板 / 300 创业板)
+  const isExcludedBoard = (code) => LEAD_EXCLUDE_PREFIXES.some((p) => String(code || "").startsWith(p));
+  let pool = uniq.filter((c) => c.floatMarketCap > 0 && c.totalMarketCap <= LEAD_MEGA_CAP && !isExcludedBoard(c.code));
+
+  // 5) 量化打分(各维度池内归一化): 封单占流通市值优先
+  //    封单维度采用"封单金额 / 流通市值"比例, 归一化后更公平地反映承接强度(小盘封单占比高 → 更强势)
+  const maxSealRatio = Math.max(0, ...pool.map((c) => (c.floatMarketCap > 0 ? (c.seal / (c.floatMarketCap * 1e8)) * 100 : 0)));
+  const maxBoard = Math.max(1, ...pool.map((c) => c.boardLimitUp));
+  const maxLadder = Math.max(1, ...pool.map((c) => c.ladder));
+  const maxCapital = Math.max(1, ...pool.map((c) => c.capital));
+  for (const c of pool) {
+    // 封单占流通市值百分比(%, 供展示与追溯)
+    c.sealRatio = c.floatMarketCap > 0 ? +(c.seal / (c.floatMarketCap * 1e8)) * 100 : 0;
+    const sealS = maxSealRatio > 0 ? (c.sealRatio / maxSealRatio) * 100 : 0;
+    const boardS = maxBoard ? (c.boardLimitUp / maxBoard) * 100 : 0;
+    const ladderS = maxLadder ? (c.ladder / maxLadder) * 100 : 0;
+    const capitalS = maxCapital ? (c.capital / maxCapital) * 100 : 0;
+    c.score = Math.round(w.seal * sealS + w.boardLimitUp * boardS + w.ladder * ladderS + w.capital * capitalS);
+    c.weights = w;
+  }
+  pool.sort((a, b) => b.score - a.score);
+  pool = pool.slice(0, LEAD_POOL_MAX);
+
+  // 6) 变动追踪: 与上次对比, 标注 新增/移除/维持
+  const next = new Set(pool.map((c) => c.code));
+  const change = { added: [], removed: [], kept: [] };
+  for (const c of pool) {
+    if (lastLeaderCodeSet.has(c.code)) change.kept.push({ code: c.code, name: c.name, board: c.board, score: c.score });
+    else change.added.push({ code: c.code, name: c.name, board: c.board, score: c.score });
+  }
+  for (const code of lastLeaderCodeSet) {
+    if (!next.has(code)) change.removed.push(code);
+  }
+  lastLeaderCodeSet = next;
+
+  return {
+    date,
+    updatedAt: Date.now(),
+    pool,
+    poolSize: pool.length,
+    change,
+    meta: {
+      weights: w,
+      filters: { totalMarketCapMax: LEAD_MEGA_CAP, excludePrefixes: LEAD_EXCLUDE_PREFIXES },
+      sourceLabel: "市场板块实时热点(fengk-front) + 腾讯行情",
+      source: base.source || {},        // 龙头股数据源各上游可用状态(可追溯)
+      baseUpdatedAt: base.updatedAt || 0, // 龙头股数据源构建时间戳
+    },
+    validation: validateLeaderConsistency(pool, base), // 定期校验: 每次刷新与数据源比对
+  };
+}
+
+/** 获取龙头股参考池(15s 缓存; force=true 强制重建; weights 参与缓存 key, 不同权重组合各自独立) */
+async function getLeaderPool(force = false, weights) {
+  const w = weights || LEAD_WEIGHTS;
+  const key = `philia-leader-pool:${w.seal},${w.boardLimitUp},${w.ladder},${w.capital}`;
+  if (force) {
+    // 强制重建: 清除全部权重组合的龙头池缓存
+    for (const k of cache.keys()) if (k.startsWith("philia-leader-pool:")) cache.delete(k);
+    // 同步清除共享的龙头股数据源缓存, 使龙头池与风口面板基于同一份最新快照重建
+    for (const k of cache.keys()) if (k.startsWith("fengk-front:")) cache.delete(k);
+  }
+  return cached(key, LEAD_POOL_TTL, () => buildLeaderPool(w));
+}
+
+/** 龙头池与龙头股数据源一致性深度校验(供巡检/手动验证):
+ *  强制重建龙头股数据源, 与本机当前龙头池做全量比对, 返回差异报告。 */
+async function validateLeaderPoolEndpoint() {
+  const date = dashToday();
+  for (const k of cache.keys()) if (k.startsWith("fengk-front:")) cache.delete(k); // 强制取最新数据源
+  const base = await getFengFrontBase(date);
+  // 复用 buildLeaderPool 的打分与过滤逻辑, 基于最新数据源重新推导"应然池"
+  const pool = await cached(`philia-leader-pool`, LEAD_POOL_TTL, buildLeaderPool);
+  const report = validateLeaderConsistency(pool.pool || [], base);
+  return {
+    date,
+    checkedAt: Date.now(),
+    report,
+    source: base.source || {},
+    baseUpdatedAt: base.updatedAt || 0,
+    pool: pool.pool || [],
+    note: report.consistent
+      ? "龙头池与龙头股数据源完全一致, 无偏差"
+      : `发现 ${report.mismatches.length} 处偏差, 详见 mismatches`,
+  };
+}
+
 /* ------------------------------------------------------------- */
 
 /* ---------------- 主机路由表 ---------------- */
@@ -2279,11 +2551,30 @@ const routes = {
   "/api/fengk-front": async (q) => {
     const date = q.get("date") || "";
     const weights = parseFengWeights(q.get("weights") || "");
-    const base = await cached(`fengk-front:${date}`, 15000, () => handleFengFrontBase(date));
+    const base = await getFengFrontBase(date); // 与龙头池共用同一缓存快照
     const windList = (base.windList || []).map((w) => ({ ...w, score: fengWeightedScore(w.dims, weights) }));
     windList.sort((a, b) => b.score - a.score);
     return { ...base, weights, windList };
   },
+  /* --------------------------------------------------------------------------
+   * PHILIA AI 综合分析(@/api/philia/*)
+   * 技能/模型读取 + Key 校验 + 配置加密读写 + LLM 分析(降频缓存) + 历史
+   * 注意: 涉及 LLM 调用与私有密钥, 均加入 PROTECTED_ROUTES(仅同源)并单独限流。
+   * ------------------------------------------------------------------------ */
+  // 核心标的参考池(市场实时热点 → 龙头股): 15s 自动刷新, force=1 强制重建, weights=权重
+  "/api/philia/leader-pool": async (q) => getLeaderPool(q.get("force") === "1", parseLeaderWeights(q.get("weights"))),
+  // 龙头池与龙头股数据源一致性校验(强制取最新数据源全量比对, 供巡检/手动验证)
+  "/api/philia/leader-pool/validate": async () => validateLeaderPoolEndpoint(),
+  "/api/philia/skills": async () => philia.loadSkills(),
+  "/api/philia/models": async (q) => philia.listModels(process.env.OPENROUTER_API_KEY || ""),
+  "/api/philia/config": async (q, body) => {
+    // GET(无 body)返回配置; POST(有 body)保存配置
+    if (body === undefined) return philia.getConfig();
+    return philia.saveConfig({ key: body?.key, model: body?.model, skills: body?.skills });
+  },
+  "/api/philia/validate": async (q, body) => philia.validateKey(String(body?.key || "").trim()),
+  "/api/philia/analyze": async (q, body) => philia.analyze({ model: body?.model, skills: body?.skills, force: !!body?.force }),
+  "/api/philia/history": async () => philia.history(20),
 };
 
 const MIME = {
@@ -2322,7 +2613,13 @@ const STATIC_HEADERS = {
 };
 
 /* ---------------- 同源校验与 CORS(经 CF Tunnel 公网可达, 默认不授权任何跨源浏览器读取) ---------------- */
-const PROTECTED_ROUTES = new Set(["/api/openrouter-usage"]);
+const PROTECTED_ROUTES = new Set([
+  "/api/openrouter-usage",
+  // PHILIA AI: 涉及私有密钥与 LLM 调用, 仅允许同源访问
+  "/api/philia/config",
+  "/api/philia/validate",
+  "/api/philia/analyze",
+]);
 
 // 环回地址互认: 开发期 vite 代理(:3000→:3001)跨端口转发, Origin/Host 端口必然不同, 视为同源
 const isLoopbackHost = (h) => /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])(:\d+)?$/.test(h);
@@ -2380,6 +2677,7 @@ function makeLimiter(windowMs, max) {
 
 const apiLimiter = makeLimiter(60 * 1000, 240); // 公开 /api: 每 IP 每分钟 240 次(单大屏客户端实测约 100+)
 const protectedLimiter = makeLimiter(60 * 1000, 20); // 私有 key 端点: 每 IP 每分钟 20 次, 防脚本刷配额
+const philiaLimiter = makeLimiter(60 * 1000, 5); // PHILIA 分析: 每 IP 每分钟 5 次(LLM 计费, 严控滥用)
 
 // 读取 POST body, 超过 limit 字节即停止累积({ tooBig: true }), 防止无限读入
 function readBodyWithLimit(req, limit) {
@@ -2511,7 +2809,8 @@ const server = http.createServer(async (req, res) => {
     if (routes[u.pathname]) {
       const cors = corsHeadersFor(req);
       // 按 IP 限流(先于缓存命中判断, 防唯一 key 旋转造成的上游请求放大)
-      const allowed = (PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter)(clientIp(req));
+      const limiter = u.pathname === "/api/philia/analyze" ? philiaLimiter : (PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter);
+      const allowed = limiter(clientIp(req));
       if (!allowed) {
         send(res, 429, { ok: false, error: "too many requests" }, cors);
         return;
@@ -2600,6 +2899,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[market-cockpit] listening on :${PORT}`);
+  // 注入龙头股参考池提供者, 供 PHILIA 分析上下文使用(避免循环依赖: philia-ai 不 require index)
+  if (typeof philia.setLeaderPoolGetter === "function") philia.setLeaderPoolGetter(getLeaderPool);
   scheduleDailyBoardsRefresh(); // 每日行业/概念批量刷新(启动后立即检查一次, 之后每小时)
   scheduleMsDaily(); // 市场情绪收盘定格(15:00后保存离线快照, 每30s检查)
 });

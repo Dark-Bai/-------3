@@ -13,6 +13,8 @@ import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
 import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
 import { MonitorWindow } from "@/components/dash/MonitorWindow";
+import { PhiliaProvider, usePhilia } from "@/components/dash/PhiliaContext";
+import { PhiliaModal } from "@/components/dash/PhiliaModal";
 import AiDashboard from "./AiDashboard";
 import FinDashboard from "./FinDashboard";
 import { useSharedPolling } from "@/hooks/useSharedPolling";
@@ -80,6 +82,7 @@ const PANEL_ROWS: PanelRowDef[] = [
 function Dashboard() {
   const { isFullscreen, toggle } = useFullscreen();
   const [showMonitor, setShowMonitor] = useState(false);
+  const { config, configLoaded, analyzing, modalOpen, openModal } = usePhilia();
   // 轻量监控数据: 用于头部告警红点(慢接口/报错时点亮), 30s 轮询
   const { data: monitorData } = useSharedPolling("monitor", () => api.monitor(), 30000);
   const monitorAlert = useMemo(() => {
@@ -104,10 +107,15 @@ function Dashboard() {
         onToggleMonitor={() => setShowMonitor((v) => !v)}
         monitorActive={showMonitor}
         monitorAlert={monitorAlert}
+        onTogglePhilia={openModal}
+        philiaActive={!!config?.hasKey}
+        philiaAlert={configLoaded && !config?.hasKey}
+        philiaAnalyzing={analyzing}
       />
       <Tape />
       <DashboardLayout rows={PANEL_ROWS} />
       {showMonitor && <MonitorWindow onClose={() => setShowMonitor(false)} />}
+      {modalOpen && <PhiliaModal />}
     </div>
   );
 }
@@ -129,12 +137,14 @@ function StockDetailWindows() {
   );
 }
 
-/** 主面板 + 个股详情 Provider */
+/** 主面板 + 个股详情 Provider + Philia Provider */
 function DashboardApp() {
   return (
     <StockDetailProvider>
-      <Dashboard />
-      <StockDetailWindows />
+      <PhiliaProvider>
+        <Dashboard />
+        <StockDetailWindows />
+      </PhiliaProvider>
     </StockDetailProvider>
   );
 }

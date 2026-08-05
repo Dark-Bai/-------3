@@ -91,6 +91,28 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT
   );
+
+  -- PHILIA AI: 加密存储的用户 API Key 与配置(单行, id 恒为 1)
+  CREATE TABLE IF NOT EXISTS ai_key (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    provider  TEXT,                 -- 'openrouter'
+    enc_key   TEXT,                 -- AES-256-GCM 密文(base64)
+    enc_iv    TEXT,                 -- 初始化向量 + authTag(JSON base64)
+    model     TEXT,                 -- 上次选择的模型
+    skills    TEXT,                 -- 上次选择的技能(JSON 数组)
+    updated_at INTEGER
+  );
+
+  -- PHILIA AI: 分析结果(降频缓存, 以 cache_key 为主键去重)
+  CREATE TABLE IF NOT EXISTS ai_analysis (
+    cache_key   TEXT PRIMARY KEY,   -- sha256(日期+模型+技能哈希)
+    date        TEXT,               -- 交易日 YYYY-MM-DD
+    model       TEXT,
+    skills_hash TEXT,
+    result      TEXT,               -- 结构化 JSON
+    created_at  INTEGER,
+    updated_at  INTEGER
+  );
 `);
 
 /* 索引结构优化: 针对常用查询条件建索引, 避免全表扫描。
@@ -127,6 +149,9 @@ const READ_SQL = {
   getTrends: `SELECT date, limit_up AS limitUp, limit_down AS limitDown, broken_up AS brokenUp, blown_up AS blownUp, blown_rate AS blownRate FROM market_trend ORDER BY date ASC`,
   trendCount: `SELECT COUNT(*) AS c FROM market_trend`,
   getLadderTrend: `SELECT date, first_board AS firstBoard, second_board AS secondBoard, third_board AS thirdBoard, high_board AS highBoard, ladder_rate AS ladderRate, blown_rate AS blownRate, yest_limitup_perf AS yestLimitUpPerf, yest_ladder_perf AS yestLadderPerf, yest_broken_perf AS yestBrokenPerf, comment, updated_at AS updatedAt FROM ladder_trend ORDER BY date ASC`,
+  getAiKey: `SELECT provider, enc_key AS encKey, enc_iv AS encIv, model, skills, updated_at AS updatedAt FROM ai_key WHERE id = 1`,
+  getAiAnalysis: `SELECT date, model, skills_hash AS skillsHash, result, created_at AS createdAt, updated_at AS updatedAt FROM ai_analysis WHERE cache_key = ?`,
+  listAiAnalyses: `SELECT cache_key AS cacheKey, date, model, skills_hash AS skillsHash, result, created_at AS createdAt, updated_at AS updatedAt FROM ai_analysis ORDER BY updated_at DESC LIMIT ?`,
 };
 // 每条只读连接各编译一份读语句(轮询时按当前连接取用)
 const readStmt = dbRead.map((c) => {
@@ -180,6 +205,27 @@ const stmt = {
       blown_up   = excluded.blown_up,
       blown_rate = excluded.blown_rate,
       updated_at = excluded.updated_at
+  `),
+  upsertAiKey: db.prepare(`
+    INSERT INTO ai_key (id, provider, enc_key, enc_iv, model, skills, updated_at)
+    VALUES (1,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET
+      provider  = excluded.provider,
+      enc_key   = excluded.enc_key,
+      enc_iv    = excluded.enc_iv,
+      model     = excluded.model,
+      skills    = excluded.skills,
+      updated_at = excluded.updated_at
+  `),
+  upsertAiAnalysis: db.prepare(`
+    INSERT INTO ai_analysis (cache_key, date, model, skills_hash, result, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      date        = excluded.date,
+      model       = excluded.model,
+      skills_hash = excluded.skills_hash,
+      result      = excluded.result,
+      updated_at  = excluded.updated_at
   `),
 };
 
@@ -452,4 +498,66 @@ function getDbMetrics() {
   return { ...dbMetrics, reads: dbMetrics.reads, writes: dbMetrics.writes };
 }
 
-module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, DB_PATH };
+/* ---------------- PHILIA AI: 配置与结果存取 ---------------- */
+
+/** 读取 PHILIA AI 配置(含加密 key 密文); 未配置返回 null */
+function getAiKey() {
+  const row = nextReadStmt().getAiKey.get();
+  if (!row) return null;
+  return {
+    provider: row.provider,
+    encKey: row.encKey,
+    encIv: row.encIv,
+    model: row.model,
+    skills: u(row.skills) || [],
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** 写入 PHILIA AI 配置(单行 id=1) */
+function upsertAiKey({ provider, encKey, encIv, model, skills }) {
+  return dbTimed("upsertAiKey", true, () =>
+    stmt.upsertAiKey.run(provider, encKey, encIv, model ?? null, skills && skills.length ? j(skills) : null, Date.now())
+  );
+}
+
+/** 读取某次分析结果(按 cache_key); 不存在返回 null */
+function getAiAnalysis(cacheKey) {
+  const row = nextReadStmt().getAiAnalysis.get(cacheKey);
+  if (!row) return null;
+  return {
+    cacheKey,
+    date: row.date,
+    model: row.model,
+    skillsHash: row.skillsHash,
+    result: u(row.result),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** 写入/更新某次分析结果(UPSERT, 降频缓存去重) */
+function upsertAiAnalysis({ cacheKey, date, model, skillsHash, result }) {
+  const now = Date.now();
+  return dbTimed("upsertAiAnalysis", true, () =>
+    stmt.upsertAiAnalysis.run(cacheKey, date ?? null, model, skillsHash, result ? j(result) : null, now, now)
+  );
+}
+
+/** 最近 N 条分析记录(按更新时间倒序) */
+function listAiAnalyses(limit = 20) {
+  return dbTimed("listAiAnalyses", false, () => {
+    const rows = nextReadStmt().listAiAnalyses.all(limit);
+    return rows.map((r) => ({
+      cacheKey: r.cacheKey,
+      date: r.date,
+      model: r.model,
+      skillsHash: r.skillsHash,
+      result: u(r.result),
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  });
+}
+
+module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, getAiKey, upsertAiKey, getAiAnalysis, upsertAiAnalysis, listAiAnalyses, DB_PATH };
