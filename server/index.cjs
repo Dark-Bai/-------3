@@ -1592,11 +1592,15 @@ async function handleMarketSentimentV2() {
     let bullishCount = bullishCodes.length;
     let bearishCount = bearishCodes.length;
     const totalStockCount = allStocks.length;
+    // bullishCodes/bearishCodes 集合, 用于给 all_stocks 打多空标签
+    const bullSet = new Set(bullishCodes);
+    const bearSet = new Set(bearishCodes);
     let stockSamples = [];
 
-    // 若bullish/bearish为空，通过all_stocks实时查询涨跌分布
-    if (bullishCount === 0 && bearishCount === 0 && allStocks.length > 0) {
-      const sample = allStocks.slice(0, 20);
+    // 若bullish/bearish为空, 或需要价格/涨跌幅展示: 通过all_stocks实时查询涨跌分布
+    // 无论哪种情况都尽量构建带多空标记(side)的标的明细, 供前端"多空情绪"弹窗展示
+    if (allStocks.length > 0) {
+      const sample = allStocks.slice(0, 40);
       const sinaCodes = sample.map(c => c.startsWith("6") ? `sh${c}` : `sz${c}`);
       try {
         const text = await fetchTextAny(`https://hq.sinajs.cn/list=${sinaCodes.join(",")}`, {
@@ -1610,13 +1614,21 @@ async function handleMarketSentimentV2() {
             const prev = parseFloat(f[2]);
             const cur = parseFloat(f[3]);
             if (isFinite(prev) && isFinite(cur)) {
-              if (cur > prev) bullishCount++;
-              else if (cur < prev) bearishCount++;
+              const code = m[1].slice(2); // 去掉sh/sz前缀
+              const change = prev ? (cur - prev) / prev * 100 : 0;
+              // 多空判定: 优先用上游 bullish/bearish 集合, 否则按当日涨跌
+              let side;
+              if (bullSet.has(code)) side = "bull";
+              else if (bearSet.has(code)) side = "bear";
+              else side = cur > prev ? "bull" : cur < prev ? "bear" : "flat";
+              if (side === "bull") bullishCount++;
+              else if (side === "bear") bearishCount++;
               stockSamples.push({
-                code: m[1].slice(2), // 去掉sh/sz前缀
+                code,
                 name: f[0],
                 price: cur,
-                change: ((cur - prev) / prev * 100).toFixed(2),
+                change: change.toFixed(2),
+                side, // bull=多方 / bear=空方
               });
             }
           }

@@ -137,15 +137,21 @@ function LimitUpDownCard({ limitUp, limitDown, blownUp, blownRate }: { limitUp: 
 /* ========== 卡片4: 多空情绪 ========== */
 function BullBearCard({ bullish, bearish, net, total, samples }: {
   bullish: number; bearish: number; net: number; total: number;
-  samples?: { code: string; name: string; price: number; change: string }[];
+  samples?: { code: string; name: string; price: number; change: string; side?: "bull" | "bear" | "flat" }[];
 }) {
   const hasApiData = bullish + bearish + total > 0;
   const hasSamples = samples && samples.length > 0;
   const totalRatio = hasApiData && total > 0 ? (bullish / total * 100) : 50;
   const safeNet = Number.isFinite(net) ? net : bullish - bearish;
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 flex items-center justify-between">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex w-full cursor-pointer items-center justify-between"
+        title="点击查看多空明细"
+      >
         <span className="text-[11px] font-semibold text-[#8b7a5e]">多空情绪</span>
         {hasApiData && (
           <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${safeNet >= 0 ? "bg-[#b8533a]/15 text-[#b8533a]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]"}`}>
@@ -157,7 +163,7 @@ function BullBearCard({ bullish, bearish, net, total, samples }: {
             实时 {bullish}/{bearish}
           </span>
         )}
-      </div>
+      </button>
       {hasApiData ? (
         <>
           <div className="flex items-center gap-3 py-1">
@@ -190,6 +196,130 @@ function BullBearCard({ bullish, bearish, net, total, samples }: {
       ) : (
         <div className="flex flex-1 items-center justify-center text-[12px] text-[#a8987e]">暂无数据</div>
       )}
+      <BullBearModal
+        open={open}
+        onClose={() => setOpen(false)}
+        samples={samples}
+        bullish={hasApiData ? bullish : samples?.filter(s => s.side !== "bear").length || 0}
+        bearish={hasApiData ? bearish : samples?.filter(s => s.side === "bear").length || 0}
+      />
+    </div>
+  );
+}
+
+/* ========== 多空情绪明细模态小窗 ========== */
+function BullBearModal({ open, onClose, samples, bullish, bearish }: {
+  open: boolean;
+  onClose: () => void;
+  samples?: { code: string; name: string; price: number; change: string; side?: "bull" | "bear" | "flat" }[];
+  bullish: number;
+  bearish: number;
+}) {
+  // 平滑过渡: 卸载前先置 visible=false 播放退场动画, 动画结束后再真正卸载
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // 渲染前先判断是否显示(管理进入/退场动画)
+  const [visible, setVisible] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      const t = requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)));
+      return () => cancelAnimationFrame(t);
+    }
+    setVisible(false);
+    const t = setTimeout(() => setMounted(false), 220);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  if (!mounted) return null;
+
+  const bullList = (samples || []).filter(s => s.side !== "bear");
+  const bearList = (samples || []).filter(s => s.side === "bear");
+  const total = (samples || []).length;
+
+  return (
+    <div
+      className={`fixed inset-0 z-[100] flex items-center justify-center transition-opacity duration-200 ${visible ? "opacity-100" : "opacity-0"}`}
+      style={{ background: "rgba(43,38,28,0.45)" }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`flex max-h-[70vh] w-[420px] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[#d4c5a8] bg-[#faf6ec] shadow-2xl transition-all duration-200 ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 scale-95 opacity-0"}`}
+      >
+        {/* 头部 */}
+        <div className="flex shrink-0 items-center justify-between border-b border-[#e0d5c0] bg-[#f5f0e6] px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="rounded-sm bg-[#d4943a]/15 px-1.5 py-px text-[10px] font-medium text-[#b07a2a]">多空情绪</span>
+            <span className="text-[13px] font-semibold text-[#6b5b3e]">标的明细</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 items-center justify-center rounded text-[#a8987e] transition-colors hover:bg-[#e0d5c0] hover:text-[#6b5b3e]"
+            title="关闭"
+          >
+            ✕
+          </button>
+        </div>
+        {/* 统计概览 */}
+        <div className="flex shrink-0 items-center gap-3 border-b border-[#e0d5c0] px-4 py-2">
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-[#b8533a]" />
+            <span className="text-[11px] text-[#8b7a5e]">多方</span>
+            <span className="text-[13px] font-bold text-[#b8533a]" style={TNUM}>{bullish}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-[#4a6b3f]" />
+            <span className="text-[11px] text-[#8b7a5e]">空方</span>
+            <span className="text-[13px] font-bold text-[#4a6b3f]" style={TNUM}>{bearish}</span>
+          </div>
+          <span className="ml-auto text-[11px] text-[#a8987e]" style={TNUM}>共 {total || bullish + bearish} 只</span>
+        </div>
+        {/* 标的列表 */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+          {total === 0 && bullList.length + bearList.length === 0 ? (
+            <div className="flex h-24 items-center justify-center text-[12px] text-[#a8987e]">暂无标的明细</div>
+          ) : (
+            <div className="flex flex-col">
+              {/* 多方 */}
+              {bullList.length > 0 && (
+                <div className="mb-1 px-2 pt-1 text-[10px] font-medium text-[#b8533a]">多方 · {bullList.length}</div>
+              )}
+              {bullList.map(s => (
+                <div key={s.code} className="flex items-center gap-2 rounded px-2 py-1 text-[12px] hover:bg-[#f1ebdd]">
+                  <span className="w-8 shrink-0 rounded-sm bg-[#b8533a]/10 text-center text-[9px] leading-4 text-[#b8533a]">多</span>
+                  <span className="min-w-0 flex-1 truncate text-[#6b5b3e]">{s.name}</span>
+                  <span className="shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{s.code}</span>
+                  <span className={`w-14 shrink-0 text-right font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
+                    {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
+                  </span>
+                </div>
+              ))}
+              {/* 空方 */}
+              {bearList.length > 0 && (
+                <div className="mb-1 mt-2 px-2 pt-1 text-[10px] font-medium text-[#4a6b3f]">空方 · {bearList.length}</div>
+              )}
+              {bearList.map(s => (
+                <div key={s.code} className="flex items-center gap-2 rounded px-2 py-1 text-[12px] hover:bg-[#f1ebdd]">
+                  <span className="w-8 shrink-0 rounded-sm bg-[#4a6b3f]/10 text-center text-[9px] leading-4 text-[#4a6b3f]">空</span>
+                  <span className="min-w-0 flex-1 truncate text-[#6b5b3e]">{s.name}</span>
+                  <span className="shrink-0 text-[10px] text-[#a8987e]" style={TNUM}>{s.code}</span>
+                  <span className={`w-14 shrink-0 text-right font-medium ${parseFloat(s.change) >= 0 ? "text-[#b8533a]" : "text-[#4a6b3f]"}`} style={TNUM}>
+                    {parseFloat(s.change) >= 0 ? "+" : ""}{s.change}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

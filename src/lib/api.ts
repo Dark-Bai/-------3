@@ -664,8 +664,8 @@ export interface MarketSentimentIndData {
   sentimentScore: number;
   sentimentLevel: string;
   sentimentDesc: string;
-  /** 成分股快照(当bullish/bearish为空时，从新浪实时拉取) */
-  stockSamples?: { code: string; name: string; price: number; change: string }[];
+  /** 成分股快照, 含多空标记(side): 供"多空情绪"弹窗展示 */
+  stockSamples?: { code: string; name: string; price: number; change: string; side: "bull" | "bear" | "flat" }[];
 }
 export interface MarketRiseFallTrend {
   date: string;
