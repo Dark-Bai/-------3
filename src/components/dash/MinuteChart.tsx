@@ -5,6 +5,8 @@ interface MinuteChartProps {
   points: { t: string; p: number }[];
   prec: number;
   height: number;
+  /** X 轴时间映射: A股交易时段(默认) / 24h(港美股等连续交易) */
+  session?: "ashare" | "h24";
 }
 
 /** 名义视口宽度(与容器宽度按比例对应, 坐标轴标签用百分比定位) */
@@ -33,7 +35,7 @@ function niceStep(target: number): number {
 }
 
 /** 分时走势图: 时间/百分比坐标轴 + 鼠标悬停数据悬浮框 */
-export function MinuteChart({ points, prec, height }: MinuteChartProps) {
+export function MinuteChart({ points, prec, height, session = "ashare" }: MinuteChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef(0);
   const pendingRef = useRef<{ i: number; leftPct: number } | null>(null);
@@ -46,13 +48,47 @@ export function MinuteChart({ points, prec, height }: MinuteChartProps) {
     if (!points || points.length < 2 || !prec) {
       return { xs: [] as number[], pts: points, min: 0, max: 0, color: "#64748b", xTicks: [] as { label: string; x: number }[], yTicks: [] as { label: number; y: number }[] };
     }
-    // 交易时间 → 归一化进度(0~240)
-    const es = points.map((d) => {
-      const m = toMinute(d.t);
-      let e = m - OPEN;
-      if (m >= LUNCH_E) e -= LUNCH_E - LUNCH_S;
-      return Math.max(0, Math.min(e, SESSION));
-    });
+    // 交易时间 → 归一化进度
+    let es: number[];
+    let xTicks: { label: string; x: number }[];
+    if (session === "h24") {
+      // 24h 连续交易(港美股): 相邻间隔超阈值视为休市段并压缩, 兼容跨午夜
+      const GAP_MIN = 5;
+      const tl = [0];
+      for (let i = 1; i < points.length; i++) {
+        let d = toMinute(points[i].t) - toMinute(points[i - 1].t);
+        if (d < -720) d += 1440; // 跨午夜
+        if (d < 0 || d > GAP_MIN) d = 1; // 休市段压缩为 1 分钟
+        tl.push(tl[i - 1] + d);
+      }
+      const span = Math.max(tl[tl.length - 1], 1);
+      es = tl.map((v) => Math.max(0, Math.min(v / span, 1)) * SESSION);
+      // 横轴刻度: 取首尾加中间若干实际时间点
+      const n = points.length;
+      const idx = [0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1];
+      xTicks = idx.map((i) => ({ label: String(points[i].t).slice(-4), x: LEFT + (es[i] / SESSION) * plotW }));
+      // 去重相邻相同标签
+      xTicks = xTicks.filter((t, i, a) => i === 0 || t.label !== a[i - 1].label);
+    } else {
+      // A股交易时段: 09:30-11:30, 13:00-15:00, 共240分钟
+      es = points.map((d) => {
+        const m = toMinute(d.t);
+        let e = m - OPEN;
+        if (m >= LUNCH_E) e -= LUNCH_E - LUNCH_S;
+        return Math.max(0, Math.min(e, SESSION));
+      });
+      xTicks = [
+        { label: "09:30", e: 0 },
+        { label: "10:30", e: 60 },
+        { label: "11:30", e: 120 },
+        { label: "14:00", e: 180 },
+        { label: "15:00", e: 240 },
+      ].map((t) => ({ label: t.label, x: LEFT + (t.e / SESSION) * plotW }));
+    }
+    // 时间解析失败(如未知格式)时退化为按序号均匀分布
+    if (es.some((x) => !Number.isFinite(x))) {
+      es = points.map((_, i) => (i / (points.length - 1)) * SESSION);
+    }
     const prices = points.map((d) => d.p);
     let min = Math.min(...prices, prec);
     let max = Math.max(...prices, prec);
@@ -63,15 +99,6 @@ export function MinuteChart({ points, prec, height }: MinuteChartProps) {
 
     const xs = es.map((e) => LEFT + (e / SESSION) * plotW);
     const color = hexChg(prices[prices.length - 1] - prec);
-
-    // 横轴时间刻度(交易时段每 60 分钟一点, 均匀分布)
-    const xTicks = [
-      { label: "09:30", e: 0 },
-      { label: "10:30", e: 60 },
-      { label: "11:30", e: 120 },
-      { label: "14:00", e: 180 },
-      { label: "15:00", e: 240 },
-    ].map((t) => ({ label: t.label, x: LEFT + (t.e / SESSION) * plotW }));
 
     // 纵轴涨跌幅刻度
     const pctMin = ((min - prec) / prec) * 100;
@@ -85,7 +112,7 @@ export function MinuteChart({ points, prec, height }: MinuteChartProps) {
     }
 
     return { xs, pts: points, min, max, color, xTicks, yTicks };
-  }, [points, prec, height, plotW, plotH]);
+  }, [points, prec, height, plotW, plotH, session]);
 
   const yOf = (price: number) => TOP + (1 - (price - data.min) / (data.max - data.min)) * plotH;
   const y0 = yOf(prec); // 昨收 0% 线

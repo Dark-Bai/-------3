@@ -497,6 +497,9 @@ export const api = {
     withFallback(() => get<Record<string, Quote>>(`/api/quotes?codes=${codes.join(",")}`), () => directQuotes(codes)),
   minute: (code: string) =>
     withFallback(() => get<MinuteData>(`/api/minute?code=${code}`), () => directMinute(code)),
+  /** 批量分时(指数面板一次请求拉取全部指数, 减少 HTTP 往返, 后端按代码独立缓存) */
+  minutes: (codes: string[]) =>
+    get<Record<string, MinuteData>>(`/api/minutes?codes=${codes.join(",")}`),
   boards: (type: "01" | "02", dir: 0 | 1 = 0, n = 30) =>
     withFallback(() => get<Board[]>(`/api/boards?type=${type}&dir=${dir}&n=${n}`), () => directBoards(type, dir, n)),
   boardStocks: (code: string, n = 12) => get<BoardStock[]>(`/api/board-stocks?code=${encodeURIComponent(code)}&n=${n}`),
@@ -579,7 +582,7 @@ export interface MonitorData {
   /** 各接口性能指标数组(按调用次数降序) */
   endpoints: MonitorEndpoint[];
   /** SQLite 本地库状态: stocks=个股缓存条数, trends=趋势记录条数, dbPath=库文件路径 */
-  db: { stocks: number; trends: number; dbPath: string };
+  db: { stocks: number; trends: number; dbPath: string; metrics?: { reads: number; writes: number; readMs: number; writeMs: number; errors: number; lastMs: number; lastOp: string } };
   /** 内存缓存状态: entries=内存缓存条目数 */
   cache: { entries: number };
 }

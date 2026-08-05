@@ -9,7 +9,7 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
-const { getStock, upsertStock, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, DB_PATH } = require("./stock-db.cjs");
+const { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, getDbMetrics, DB_PATH } = require("./stock-db.cjs");
 
 // 加载 .env
 try {
@@ -73,7 +73,7 @@ async function fetchTextAny(url, { referer, gbk = false, timeout = 8000 } = {}) 
 const KPL_BASE = "https://kpl.liuhepc.cn";
 const KPL_API_KEY = process.env.KPL_API_KEY || "kpl-4ed522163bf8dad3aeb1d9613791661eb62ed88ed6e82067";
 
-async function kplFetch(path, params = {}) {
+async function kplFetch(path, params = {}, timeout = 8000) {
   const url = new URL(path, KPL_BASE);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -82,7 +82,7 @@ async function kplFetch(path, params = {}) {
   try {
     const resp = await fetch(url.toString(), {
       headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeout),
     });
     const json = await resp.json();
     return json;
@@ -91,7 +91,7 @@ async function kplFetch(path, params = {}) {
     try {
       const text = await curlText(url.toString(), {
         referer: "https://kpl.liuhepc.cn/",
-        timeout: 8000,
+        timeout,
         encoding: "utf-8",
       });
       return JSON.parse(text);
@@ -108,6 +108,12 @@ function todayStr() {
   if (day === 0) d.setDate(d.getDate() - 2);
   else if (day === 6) d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 交易日(跳过周末)的 YYYY-MM-DD, 供按 date 查询的接口(ladder/broken 等)复用 */
+function dashToday() {
+  const s = todayStr();
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
 }
 
 function send(res, code, obj, extra = {}) {
@@ -127,6 +133,17 @@ function send(res, code, obj, extra = {}) {
 const num = (v) => {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : 0;
+};
+
+/* 报价合理性校验(数据源优先级判定环节的"准入闸门"):
+ * 任一家上游偶发返回垃圾(价格为 0/负/NaN、涨跌幅离谱)时, 拒绝该条数据,
+ * 使其在缓存层不落地、不下发前端, 从而让优先级链自动落到下一可靠源。
+ * 阈值取极宽松值, 只拦"明显不可能"的数据, 不误伤合法行情。 */
+const saneQuote = (q) => {
+  if (!q) return false;
+  if (!Number.isFinite(q.price) || q.price <= 0) return false;
+  if (Number.isFinite(q.pct) && Math.abs(q.pct) > 1000) return false;
+  return true;
 };
 
 /* ---------------- 腾讯行情 qt.gtimg.cn ---------------- */
@@ -194,7 +211,7 @@ async function handleQuotes(codes) {
     for (const text of texts) {
       for (const line of text.split(";")) {
         const q = parseTencentLine(line.trim());
-        if (q) {
+        if (q && saneQuote(q)) {
           out[q.symbol] = q;
           if (q.symbol !== "usVIX") cacheSet(`q:${q.symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL }); // usVIX 由新浪覆盖值接管
         }
@@ -234,8 +251,10 @@ async function handleQuotes(codes) {
               turnover: 0,
               time: kplData.date || "",
             };
-            out[symbol] = q;
-            cacheSet(`q:${symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+            if (saneQuote(q)) {
+              out[symbol] = q;
+              cacheSet(`q:${symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+            }
           }
         }
       }
@@ -300,7 +319,7 @@ async function handleQuotes(codes) {
           if (!isNaN(price) && !isNaN(prevClose)) {
             const change = price - prevClose;
             const pct = prevClose ? (change / prevClose) * 100 : 0;
-            out[code] = {
+            const q = {
               symbol: code,
               name: SINA_DAILY_NAMES[code],
               price,
@@ -314,12 +333,26 @@ async function handleQuotes(codes) {
               turnover: 0,
               time: latest.d,
             };
-            cacheSet(`q:${code}`, { ts: Date.now(), data: out[code], inflight: null, ttl: QUOTE_CACHE_TTL });
+            if (saneQuote(q)) {
+              out[code] = q;
+              cacheSet(`q:${code}`, { ts: Date.now(), data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+            }
           }
         }
       } catch (e) {
         console.error(`[sina-daily-index] ${code} fetch error:`, e?.message || e);
       }
+    }
+  }
+  // 金额校验机制: 非A股(hk*/us*)成交额口径非"万元"(腾讯对美股指数返回"点数×成交量"的伪值),
+  // 一律置 0(前端不展示); A股金额再做合理性钳制(非有限/负/天文数字视为异常置 0), 防止异常值外泄
+  for (const c of Object.keys(out)) {
+    const q = out[c];
+    if (!q) continue;
+    if (c.startsWith("hk") || c.startsWith("us")) {
+      q.amount = 0;
+    } else if (q.amount == null || !Number.isFinite(q.amount) || q.amount < 0 || q.amount > 1e10) {
+      q.amount = 0;
     }
   }
   return out;
@@ -380,7 +413,11 @@ async function handleMinute(code) {
   }
   // 美股指数(us*)只有 usMinute 接口返回全日序列, minute/query 只给最后一个点
   // usN225(日经225) 和 usKS11(韩国KOSPI) 从新浪全球指数分钟线获取
-  const SINA_INDEX_MAP = { usN225: "N225", usKS11: "KS11" };
+  const SINA_INDEX_MAP = { usn225: "N225", usks11: "KS11" };
+  // 国际(港股/美股)指数代码上游对大小写敏感: 小写(hkhsi/usixic)会返回空数据,
+  // 必须用规范大小写(hkHSI/hkHSTECH/usIXIC)才能取到完整分时序列
+  const INT_INDEX_CASE = { hkhsi: "hkHSI", hkhstech: "hkHSTECH", usixic: "usIXIC", usn225: "usN225", usks11: "usKS11" };
+  const urlCode = INT_INDEX_CASE[code] || code;
   if (SINA_INDEX_MAP[code]) {
     try {
       const symbol = SINA_INDEX_MAP[code];
@@ -452,20 +489,25 @@ async function handleMinute(code) {
       catch (e) { console.error(`[kpl-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "kpl" }; }
     }
   }
-  const url = code.startsWith("us")
-    ? `https://web.ifzq.gtimg.cn/appstock/app/usMinute/query?code=${encodeURIComponent(code)}`
-    : `https://ifzq.gtimg.cn/appstock/app/minute/query?code=${encodeURIComponent(code)}`;
+  const url = urlCode.startsWith("us")
+    ? `https://web.ifzq.gtimg.cn/appstock/app/usMinute/query?code=${encodeURIComponent(urlCode)}`
+    : `https://ifzq.gtimg.cn/appstock/app/minute/query?code=${encodeURIComponent(urlCode)}`;
   const text = await fetchText(url);
   const json = JSON.parse(text);
-  const d = json?.data?.[code];
+  const d = json?.data?.[urlCode];
   const arr = d?.data?.data || [];
-  const prec = num(d?.data?.prec || d?.qt?.[code]?.[4] || 0);
+  const prec = num(d?.data?.prec || d?.qt?.[urlCode]?.[4] || 0);
   // 返回 "HHMM price vol" -> [分钟索引, 价格]
   const pts = arr.map((s) => {
     const p = s.split(" ");
     return { t: p[0], p: num(p[1]) };
   });
   return { code, prec, points: pts };
+}
+
+/** 单指数分时, 带 5s 独立缓存与并发去重(供单指数与批量只读复用) */
+function getMinute(code) {
+  return cached(`minute:${code}`, 5000, () => handleMinute(code || "sh000001"));
 }
 
 /* ---------------- 腾讯板块榜(行业 t=01 / 概念 t=02) ---------------- */
@@ -706,9 +748,8 @@ async function runDailyBoardsRefresh() {
       try {
         const b = await handleStockBoards(code);
         if (b && (b.industry || b.area || b.concepts.length > 0)) {
-          const row = getStock(code) || { code };
-          row.industry = b.industry; row.area = b.area; row.concepts = b.concepts; row.boards_ts = Date.now();
-          upsertStock(row);
+          // 精简列写入: 只更新行业/概念等长期字段, 避免全行 SELECT * + 全量 COALESCE 覆写(写放大)
+          upsertStockBoards(code, b.name || null, b.industry, b.area, b.concepts, Date.now());
           ok++;
         } else fail++;
       } catch { fail++; }
@@ -1452,6 +1493,8 @@ function msFallbackPayload() {
 // 不必随 mood 每 15s 轮询; 用较长 TTL 缓存(5min)解耦, 约 20 倍削减该接口调用量。
 // 实时涨停/跌停家数已由 mood API 提供, 不受影响。cached 失败会自动回退旧数据。
 const MS_RISE_FALL_TTL = 5 * 60 * 1000; // 5 分钟
+// 实时炸板(ladder/broken): 日度聚合关闭盘中, 需按较短 TTL 轮询才能随涨停/炸板变化
+const MS_BROKEN_TTL = 20 * 1000; // 20 秒
 // 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。15:00 后停止轮询并定格数据, 次日 08:59 自动恢复。
 // 返回 { active, state, label } state = "polling" | "stopped"
 function marketSentimentPollState(now = new Date()) {
@@ -1491,15 +1534,18 @@ async function handleMarketSentimentV2() {
   }
   try {
     // 使用 allSettled 防止单个API失败拖垮整体; rise-fall 走 5min 缓存降低调用频率
+    // 实时炸板(ladder/broken)走 20s 缓存, 与 rise-fall 日度值解耦, 保证盘中随涨停/炸板变化
     const results = await Promise.allSettled([
       kplFetch("/api/market/mood"),
       kplFetch("/api/market/sentiment-indicator"),
       cached("kpl-rise-fall", MS_RISE_FALL_TTL, () => kplFetch("/api/market/rise-fall")),
+      cached(`kpl-ladder-broken:${dashToday()}`, MS_BROKEN_TTL, () => kplFetch("/api/ladder/broken", { date: dashToday() }, 15000)),
     ]);
 
     const mood = results[0].status === "fulfilled" ? results[0].value : null;
     const sentimentInd = results[1].status === "fulfilled" ? results[1].value : null;
     const riseFall = results[2].status === "fulfilled" ? results[2].value : null;
+    const broken = results[3].status === "fulfilled" ? results[3].value : null;
 
     // 如果 mood 接口失败: 回退到日内最后一次成功快照; 无快照则返回兜底结构
     if (!mood) {
@@ -1588,6 +1634,18 @@ async function handleMarketSentimentV2() {
     // 从本地存储取最近半年趋势数据(最新在前), 供图表使用
     const trendData = msTrendFromStore();
 
+    // 实时炸板: rise-fall 的 blown_limit_up_rate 是日度聚合值, 盘中冻结不动;
+    // 改从 ladder/broken 当日炸板列表计数(日内实时), 与 mood 的实时涨停家数合成炸板率,
+    //   炸板率 = 炸板/(当前涨停 + 炸板), 口径与上游自洽。失败/为空时回退 rise-fall 的日度值。
+    let blownLimitUpCount = rawData[0] ? (rawData[0][5] || 0) : (rf?.blown_limit_up_count ?? 0);
+    let blownLimitUpRate = rf?.blown_limit_up_rate ?? 0;
+    const list = Array.isArray(broken) ? broken : Array.isArray(broken?.data) ? broken.data : null;
+    if (list && list.length) {
+      blownLimitUpCount = list.length;
+      const denom = limitUp + blownLimitUpCount;
+      blownLimitUpRate = denom > 0 ? Math.round((blownLimitUpCount / denom) * 1000) / 10 : 0;
+    }
+
     const payload = {
       dataSuccess: true,
       mood: {
@@ -1608,10 +1666,10 @@ async function handleMarketSentimentV2() {
       riseFall: {
         limitUpCount: rf?.limit_up_count ?? 0,
         limitDownCount: rf?.limit_down_count ?? 0,
-        // 炸板 = raw_data 最新一条第5字段 r[5]; 炸板率 = r[5]/(涨停数 + r[5]) 与上游自洽
-        blownLimitUpCount: rawData[0] ? (rawData[0][5] || 0) : (rf?.blown_limit_up_count ?? 0),
+        // 炸板 = 当日 ladder/broken 计数(日内实时); 失败回退 raw_data 最新 r[5] / rise-fall 字段
+        blownLimitUpCount,
         brokenLimitUpCount: rf?.broken_limit_up_count ?? 0,
-        blownLimitUpRate: rf?.blown_limit_up_rate ?? 0,
+        blownLimitUpRate,
         yesterdayLimitUpPerf: rf?.yesterday_limit_up_performance ?? 0,
         yesterdayBrokenPerf: rf?.yesterday_broken_performance ?? 0,
         date: rf?.date ?? "",
@@ -2063,8 +2121,16 @@ async function handleFengFrontBase(date) {
 /* ---------------- 主机路由表 ---------------- */
 const routes = {
   "/api/quotes": async (q) => handleQuotes(q.get("codes") || ""), // 内部按代码独立缓存(TTL 1.5s)
-  "/api/minute": async (q) =>
-    cached(`minute:${q.get("code")}`, 5000, () => handleMinute(q.get("code") || "sh000001")),
+  "/api/minute": async (q) => getMinute(q.get("code") || "sh000001"), // 单指数分时(按代码独立缓存 5s)
+  // 批量分时: 指数面板一次取全部指数, 内部按代码复用 getMinute 缓存与并发去重, 减少 HTTP 往返
+  "/api/minutes": async (q) => {
+    const codes = (q.get("codes") || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const rs = await Promise.all(codes.map((c) => getMinute(c).catch(() => ({ code: c, prec: 0, points: [] }))));
+    const map = Object.create(null);
+    // 以请求时的原始代码(含大小写)为 key, 保证前端按 def.code 能取到(handleMinute 内部会小写化 code 字段)
+    for (let i = 0; i < codes.length; i++) if (rs[i]) map[codes[i]] = rs[i];
+    return map;
+  },
   "/api/boards": async (q) =>
     cached(`boards:${q.get("type")}:${q.get("dir")}:${q.get("n")}`, 5000, () =>
       handleBoards(q.get("type") || "01", q.get("dir") || "0", q.get("n") || "30")
@@ -2374,6 +2440,8 @@ function buildMonitorData() {
       stocks: stockCount(),
       trends: trendCount(),
       dbPath: DB_PATH,
+      // 数据库性能监控指标(读/写调用次数与耗时, 供面板识别热路径/瓶颈)
+      metrics: getDbMetrics(),
     },
     cache: { entries: cache.size },
   };
