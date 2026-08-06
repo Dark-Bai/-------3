@@ -424,7 +424,9 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
   // 轮询开关: 主页面(standalone=false)始终自行轮询; /philia 新页面(standalone=true)仅在主页面关闭时
   // 才独立轮询调取结果, 主页面存在时纯镜像其结果、不独立查询, 避免日志出现重复查询。
   const pollTick = useCallback(() => {
-    runGlobalPoll();
+    // 必须 return runGlobalPoll() 的 promise: 让 usePhiliaPolling 的 Web Locks 锁持有到 LLM 分析完成,
+    // 否则锁在发起 DeepSeek 请求时就释放, 另一标签页(主页/新页面)会再次发起请求, 导致调用翻倍。
+    return runGlobalPoll();
   }, []);
   const noopTick = useCallback(() => {}, []);
   const pollEnabled = !standalone || !mainAlive;

@@ -133,8 +133,10 @@ function runPollOnce(): void {
     inFlightS = true;
     sharedLastTick = Date.now();
     notify();
-    Promise.resolve()
-      .then(() => activeOnTick?.())
+    // 关键: 这里必须 return activeOnTick(runGlobalPoll) 的 promise, 使 Web Locks 锁一直持有到
+    // LLM 分析真正结束。否则锁在发起 DeepSeek 请求的瞬间即释放, 另一标签页(主页/新页面)会再次
+    // 拿到锁并发起第二次请求, 导致调用翻倍。持有到完成才能真正跨标签页串行化。
+    return Promise.resolve(activeOnTick?.())
       .catch(() => {
         /* 轮询失败静默, 由调用方保持当前内容稳定 */
       })
@@ -152,7 +154,7 @@ function runPollOnce(): void {
     navigator.locks
       .request(POLL_LOCK_KEY, { ifAvailable: true }, (lock) => {
         if (!lock) return undefined; // 未拿到锁: 其他标签页/实例在轮询, 本轮跳过
-        return Promise.resolve().then(doPoll); // 返回 promise 以持有锁直到本轮结束
+        return doPoll(); // 返回 doPoll 的 promise: 锁持有到本轮结束(含 LLM 分析完成)
       })
       .catch(() => {
         /* 锁请求异常不应阻断后续调度 */
@@ -160,7 +162,7 @@ function runPollOnce(): void {
   } else if (!isPollLockedByOther()) {
     // 无 Web Locks 环境(极老浏览器)回退: 用 localStorage 时间戳去重
     acquirePollLock();
-    doPoll();
+    void doPoll();
   }
 }
 
