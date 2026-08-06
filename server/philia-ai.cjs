@@ -671,6 +671,9 @@ async function callLLM(apiKey, model, prompt) {
     headers["HTTP-Referer"] = "http://localhost:3000/";
     headers["X-Title"] = "Market Research Cockpit - PHILIA";
   }
+  // DeepSeek V4 为推理模型: 默认先写 reasoning_content 再写 content, 且 max_tokens 是「思考+正文」共享预算。
+  // 本场景只需结构化 JSON, 关掉思考让 content 直接输出, 避免思考耗尽预算导致 content 为空, 同时省 ~94% 输出 token。
+  const isDeepSeekV4 = !or && /v4/i.test(model);
   const resp = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers,
@@ -684,6 +687,7 @@ async function callLLM(apiKey, model, prompt) {
       // DeepSeek V4 为推理模型, 先消费大量 token 于 reasoning, 需更大预算才能落到 content
       max_tokens: or ? 4096 : 8192,
       response_format: { type: "json_object" },
+      ...(isDeepSeekV4 ? { thinking: { type: "disabled" } } : {}),
     }),
     signal: AbortSignal.timeout(150000),
   });
@@ -699,7 +703,13 @@ async function callLLM(apiKey, model, prompt) {
     const m = String(msg.reasoning_content).match(/\{[\s\S]*\}/);
     if (m) content = m[0];
   }
-  if (!content) throw Object.assign(new Error("LLM 未返回内容"), { status: 502 });
+  if (!content) {
+    // 附上 finish_reason 与 usage, 便于定位是「思考耗尽预算(length)」还是其他问题
+    const fr = j?.choices?.[0]?.finish_reason;
+    const cmp = j?.usage?.completion_tokens;
+    const rs = j?.usage?.completion_tokens_details?.reasoning_tokens;
+    throw Object.assign(new Error(`LLM 未返回内容 (finish_reason=${fr}, completion_tokens=${cmp}, reasoning_tokens=${rs})`), { status: 502 });
+  }
   try {
     return parseJsonStrict(content);
   } catch {

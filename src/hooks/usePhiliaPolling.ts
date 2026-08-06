@@ -95,6 +95,8 @@ const subscribe = (fn: () => void) => {
 let activeOnTick: (() => void) | null = null;
 /** 单例在途标记: 上一轮未结束时跳过本轮 */
 let inFlightS = false;
+/** 单例待补标记: 上一轮在途期间错过的整分槽位, 待其结束后立即补跑, 避免丢槽 */
+let pendingS = false;
 /** 单例定时器是否已启动(全局仅一份) */
 let timerStarted = false;
 
@@ -112,6 +114,11 @@ function runPollOnce(): void {
       .finally(() => {
         inFlightS = false;
         notify();
+        // 上一轮在途期间错过的整分槽: 结束后立即补跑一次, 不丢槽; 由下一次 schedule 重新对齐整分
+        if (pendingS && sharedEnabled && inPhiliaPollWindow()) {
+          pendingS = false;
+          runPollOnce();
+        }
       });
   };
   if (typeof navigator !== "undefined" && typeof navigator.locks?.request === "function") {
@@ -145,8 +152,11 @@ function startTimer(): void {
     setTimeout(tick, msUntilNextSlot());
   };
   const tick = () => {
-    // 仅在轮询时段内触发, 且上一轮在途时跳过(防并发)
-    if (sharedEnabled && inPhiliaPollWindow() && !inFlightS) runPollOnce();
+    // 仅在轮询时段内触发; 上一轮在途时标记待补(不丢整分槽), 结束后立即补跑
+    if (sharedEnabled && inPhiliaPollWindow()) {
+      if (!inFlightS) runPollOnce();
+      else pendingS = true;
+    }
     schedule();
   };
   schedule();

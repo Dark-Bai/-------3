@@ -321,10 +321,11 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
   // 「日志」小窗展开状态(纯 UI, 各实例独立互不影响)
   const [showLogs, setShowLogs] = useState(false);
 
-  // 自动轮询仅由主面板(非镜像)驱动; 小窗为纯镜像, 不注册轮询回调、不参与轮询
-  const { enabled, active, transition, toggle } = usePhiliaPolling(
-    isMirror ? () => undefined : () => runGlobalPoll()
-  );
+  // 自动轮询: 单例定时器驱动 runGlobalPoll(模块级共享函数, 更新同一份共享状态)。
+  // 注意: 小窗(镜像)也必须注册同一回调, 不能传空回调——否则空回调会覆盖主面板注册的真实回调,
+  // 导致打开小窗后单例定时器触发的是空操作, 主页轮询随之暂停。
+  // 小窗本身仍无轮询按钮、仍为纯镜像, 只是不抢占/破坏共享的轮询回调。
+  const { enabled, active, transition, toggle } = usePhiliaPolling(() => runGlobalPoll());
 
   const r = analysis?.result;
   const sources: PhiliaDataSource[] = r?.sources || [];
