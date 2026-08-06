@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Routes, Route } from "react-router";
 import { TickerTape, type TapeItem } from "@/components/dash/TickerTape";
 import { DashboardHeader } from "@/components/dash/DashboardHeader";
@@ -13,6 +13,7 @@ import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import PhiliaPage from "@/components/dash/PhiliaPage";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
 import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
+import { startMainHeartbeat } from "@/lib/philiaSync";
 import { MonitorWindow } from "@/components/dash/MonitorWindow";
 import { PhiliaProvider, usePhilia } from "@/components/dash/PhiliaContext";
 import { PhiliaModal } from "@/components/dash/PhiliaModal";
@@ -140,6 +141,9 @@ function StockDetailWindows() {
 
 /** 主面板 + 个股详情 Provider + Philia Provider */
 function DashboardApp() {
+  // 主页面心跳: 周期性广播, 供 /philia 新页面判断「主页面是否仍打开」。
+  // 主页面存在时 /philia 应纯镜像其结果、不独立轮询; 仅有当主页面关闭、/philia 独立打开时才自行调取。
+  useEffect(() => startMainHeartbeat(), []);
   return (
     <StockDetailProvider>
       <PhiliaProvider>

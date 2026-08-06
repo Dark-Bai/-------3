@@ -12,8 +12,8 @@
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { isMainPageAlive, onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 import {
   Sparkles,
   Loader2,
@@ -215,6 +215,8 @@ export interface MarketReviewSectionHandle {
 // 全部提升到模块级广播, 所有实例读到同一份值, 小窗仅作为主面板的纯镜像, 不各自持有轮询日志。
 interface PollLogEntry {
   id: number;
+  /** 触发来源: 手动(启动/重新分析) 或 自动轮询 */
+  kind: "manual" | "poll";
   start: string;
   end?: string;
   duration?: number;
@@ -283,10 +285,10 @@ function setSharedSkills(skills: string[]) {
 let pollSeq = 0;
 const fmt = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
 /** 记录一次分析/轮询日志的开始, 返回 end(error?, cached?) 回调用于补全结束时间/耗时/错误/缓存命中 */
-function beginPollLog(): { id: number; end: (err?: string, cached?: boolean) => void } {
+function beginPollLog(kind: "manual" | "poll" = "poll"): { id: number; end: (err?: string, cached?: boolean) => void } {
   const id = ++pollSeq;
   const t0 = Date.now();
-  setReview({ pollLogs: [{ id, start: fmt(t0) }, ...reviewState.pollLogs].slice(0, 20) });
+  setReview({ pollLogs: [{ id, kind, start: fmt(t0) }, ...reviewState.pollLogs].slice(0, 20) });
   return {
     id,
     end: (err?: string, cached?: boolean) => {
@@ -302,7 +304,7 @@ function beginPollLog(): { id: number; end: (err?: string, cached?: boolean) => 
 /** 模块级轮询: 由单例定时器驱动, 更新共享状态与共享日志(主面板与小窗同步显示) */
 async function runGlobalPoll(): Promise<void> {
   const t0 = Date.now();
-  const log = beginPollLog();
+  const log = beginPollLog("poll");
   const refreshingVer = reviewState.refreshingVer + 1;
   setReview({ refreshing: true, refreshingVer });
   console.log(`[PHILIA轮询] 开始 ${fmt(t0)}`);
@@ -324,10 +326,27 @@ async function runGlobalPoll(): Promise<void> {
   }
 }
 
-export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(function MarketReviewSection(_props, ref) {
-  const { config } = usePhilia();
+export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { standalone?: boolean }>(
+  function MarketReviewSection({ standalone = false }, ref) {
+  const { config, configLoaded } = usePhilia();
   // 是否渲染在悬浮小窗内(纯镜像模式): 小窗断开轮询/启动等交互, 仅实时镜像主面板 PHILIA 数据
   const isMirror = useContext(MirrorContext);
+  // 主页面心跳: 仅 /philia 独立页面(standalone)需要判断主页面是否仍打开。
+  // 主页面存在 → 纯镜像其结果, 不独立轮询/自动查询; 主页面关闭 → 独立调取结果。
+  const [mainAlive, setMainAlive] = useState(isMainPageAlive);
+  useEffect(() => {
+    if (!standalone) return;
+    const check = () => setMainAlive(isMainPageAlive());
+    check();
+    const t = window.setInterval(check, 2000);
+    const unsub = onPhiliaSync((msg) => {
+      if (msg.type === "philia-main-beat") setMainAlive(true);
+    });
+    return () => {
+      window.clearInterval(t);
+      unsub();
+    };
+  }, [standalone]);
   // 订阅共享状态: 结果/加载/刷新/错误/日志在各实例间保持一致(小窗为纯镜像)
   const analysis = useSyncExternalStore(subscribeReview, () => reviewState.analysis, () => reviewState.analysis);
   const loading = useSyncExternalStore(subscribeReview, () => reviewState.loading, () => reviewState.loading);
@@ -371,7 +390,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
     const loadingVer = reviewState.loadingVer + 1;
     setReview({ loading: true, error: "", loadingVer });
     // 手动分析(启动/重新分析)同样记录到日志, 便于与轮询日志一同核对触发节奏
-    const log = beginPollLog();
+    const log = beginPollLog("manual");
     let errMsg: string | undefined;
     let cachedHit = false;
     try {
@@ -402,7 +421,26 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
   // 注意: 小窗(镜像)也必须注册同一回调, 不能传空回调——否则空回调会覆盖主面板注册的真实回调,
   // 导致打开小窗后单例定时器触发的是空操作, 主页轮询随之暂停。
   // 小窗本身仍无轮询按钮、仍为纯镜像, 只是不抢占/破坏共享的轮询回调。
-  const { enabled, active, transition, toggle } = usePhiliaPolling(() => runGlobalPoll());
+  // 轮询开关: 主页面(standalone=false)始终自行轮询; /philia 新页面(standalone=true)仅在主页面关闭时
+  // 才独立轮询调取结果, 主页面存在时纯镜像其结果、不独立查询, 避免日志出现重复查询。
+  const pollTick = useCallback(() => {
+    runGlobalPoll();
+  }, []);
+  const noopTick = useCallback(() => {}, []);
+  const pollEnabled = !standalone || !mainAlive;
+  const pollOnTick = pollEnabled ? pollTick : noopTick;
+  const { enabled, active, transition, toggle } = usePhiliaPolling(pollOnTick);
+
+  // /philia 独立模式兜底: 当主页面关闭、/philia 独立打开时, 自动触发一次分析以直接展示数据。
+  // 主页面存在时(镜像模式)不触发, 仅镜像主页结果。
+  const standaloneAutoRef = useRef(false);
+  useEffect(() => {
+    if (standalone && !mainAlive && configLoaded && !standaloneAutoRef.current) {
+      standaloneAutoRef.current = true;
+      void run(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [standalone, mainAlive, configLoaded]);
 
   const r = analysis?.result;
   const sources: PhiliaDataSource[] = r?.sources || [];
@@ -478,39 +516,54 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
             {showLogs && (
               <div className="absolute right-0 top-full z-30 mt-1 w-[280px] rounded-md border border-[#d8cbb4] bg-[#faf6ee] p-1.5 shadow-lg">
                 <div className="mb-1 flex items-center justify-between border-b border-[#e0d5c0] pb-1">
-                  <span className="text-[12px] font-bold text-[#6b5b3e]">轮询日志（最近 20 次）</span>
+                  <span className="text-[12px] font-bold text-[#6b5b3e]">分析触发日志（最近 20 次）</span>
                   <button type="button" onClick={() => setShowLogs(false)} className="text-[12px] text-[#a8987e] hover:text-[#6b5b3e]">
                     ✕
                   </button>
                 </div>
                 {pollLogs.length === 0 ? (
-                  <p className="text-[12px] text-[#a8987e]">暂无轮询记录。开启「自动轮询」后每次触发会在此显示。</p>
+                  <p className="text-[12px] text-[#a8987e]">暂无记录。手动「启动/重新分析」或开启「自动轮询」后，每次触发会在此显示。</p>
                 ) : (
                   <ul className="max-h-56 overflow-y-auto">
-                    {pollLogs.map((l) =>
-                      l.error ? (
+                    {pollLogs.map((l) => {
+                      // 触发来源徽标: 手动(启动/重新分析) 用橙色, 自动轮询用绿色
+                      const isManual = l.kind === "manual";
+                      const badge = {
+                        text: isManual ? "手动分析" : "自动轮询",
+                        cls: isManual ? "bg-[#f8ead0] text-[#b8860b]" : "bg-[#e6f2e6] text-[#3f7d3f]",
+                      };
+                      // 运行中: 无耗时且无错误
+                      const running = l.duration === undefined && !l.error;
+                      // 状态词 + 配色: 失败红 / 分析中橙 / 命中缓存棕 / 成功绿
+                      const statusWord = l.error ? "失败" : running ? "分析中…" : l.cached ? "命中缓存" : "成功";
+                      const statusCls = l.error
+                        ? "text-red-600"
+                        : running
+                          ? "text-[#d4943a]"
+                          : l.cached
+                            ? "text-[#8b7a5e]"
+                            : "text-[#4a6b3f]";
+                      // 时间区间: 运行中只显示开始时间; 结束显示「开始 → 结束」
+                      const timeSpan = running ? l.start : `${l.start} → ${l.end ?? ""}`;
+                      const durText = running ? "" : ` · ${((l.duration ?? 0) / 1000).toFixed(1)}s`;
+                      return (
                         <li key={l.id} className="border-b border-[#e0d5c0]/50 py-1 text-[11px]">
-                          <div className="flex items-center justify-between gap-2 tabular-nums">
-                            <span className="text-[#8b7a5e]">开始 {l.start}</span>
-                            <span className="text-red-600">
-                              失败 {l.end} · {(l.duration ?? 0) / 1000}s
+                          <div className="flex items-center gap-1.5">
+                            <span className={`shrink-0 rounded px-1 py-px text-[10px] font-bold ${badge.cls}`}>{badge.text}</span>
+                            <span className="shrink-0 tabular-nums text-[#6b5b3e]">{timeSpan}</span>
+                            <span className={`ml-auto shrink-0 tabular-nums font-bold ${statusCls}`}>
+                              {statusWord}
+                              {durText}
                             </span>
                           </div>
-                          <div className="mt-0.5 break-words text-[11px] leading-snug text-red-600" title={l.error}>
-                            原因: {l.error}
-                          </div>
+                          {l.error && (
+                            <div className="mt-0.5 break-words text-[11px] leading-snug text-red-600" title={l.error}>
+                              原因: {l.error}
+                            </div>
+                          )}
                         </li>
-                      ) : (
-                        <li key={l.id} className="flex items-center justify-between gap-2 border-b border-[#e0d5c0]/50 py-1 text-[11px] tabular-nums">
-                          <span className="text-[#8b7a5e]">开始 {l.start}</span>
-                          <span className={l.duration === undefined ? "text-[#d4943a]" : "text-[#4a6b3f]"}>
-                            {l.duration === undefined
-                              ? "分析中…"
-                              : `${l.cached ? "命中缓存 · " : "成功 · "}结束 ${l.end} · ${(l.duration / 1000).toFixed(1)}s`}
-                          </span>
-                        </li>
-                      )
-                    )}
+                      );
+                    })}
                   </ul>
                 )}
               </div>

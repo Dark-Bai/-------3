@@ -40,32 +40,6 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded]);
 
-  // 从其他软件切入(浏览器标签页重新可见 / 窗口重新获得焦点)时,
-  // 自动触发一次分析, 使 philia 内容直接显示。run 内部有并发防抖, 不会重复请求。
-  // 仅在自动轮询开关开启时才自动触发。
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && isPhiliaPollEnabled()) {
-        void reviewRef.current?.run();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-    };
-  }, []);
-
-  // 点击 PHILIA 小窗时自动点击一次「启动 AI 综合分析」。
-  // run 内部有并发防抖, 规避冒泡造成的重复请求; 忽略返回值避免未处理 Promise。
-  // 仅在自动轮询开关开启时才自动触发。
-  const handleWindowClick = () => {
-    if (reviewRef.current && isPhiliaPollEnabled()) {
-      void reviewRef.current.run();
-    }
-  };
-
   return (
     <Panel
       className={className}
@@ -75,7 +49,6 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
       accent="#d4943a"
       defaultWidth={1152}
       defaultHeight={768}
-      onWindowClick={handleWindowClick}
       right={
         <div className="ml-auto flex items-center gap-1.5">
           <LeaderPoolChip />

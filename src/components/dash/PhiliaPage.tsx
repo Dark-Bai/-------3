@@ -34,7 +34,8 @@ function PhiliaPageInner() {
         </div>
       </header>
       <div className="min-h-0 flex-1">
-        <MarketReviewSection ref={reviewRef} />
+        {/* standalone: /philia 独立页面。主页面存在时纯镜像其结果、不独立轮询; 主页面关闭时才自行调取结果 */}
+        <MarketReviewSection ref={reviewRef} standalone />
       </div>
     </div>
   );

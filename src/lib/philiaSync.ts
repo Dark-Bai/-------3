@@ -8,7 +8,7 @@
  * 只广播结果/加载信号, 接收方仅更新本地状态、不反向广播, 因此不会产生循环。
  */
 export interface PhiliaSyncMessage {
-  type: "philia-loading" | "philia-analysis" | "philia-state" | "philia-toggle" | "philia-sync-request";
+  type: "philia-loading" | "philia-analysis" | "philia-state" | "philia-toggle" | "philia-sync-request" | "philia-main-beat";
   /** loading=true 表示某标签页开始重新分析 */
   loading?: boolean;
   /** 重新分析完成后的完整分析结果 */
@@ -17,6 +17,44 @@ export interface PhiliaSyncMessage {
   state?: unknown;
   /** 自动轮询开关的目标状态 */
   enabled?: boolean;
+}
+
+/** 主页面心跳: 主页面(驾驶舱 "/")周期性写入, /philia 新页面据此判断主页面是否仍打开 */
+const MAIN_HEARTBEAT_KEY = "dash:main-heartbeat";
+/** 心跳间隔: 主页面每 4s 写一次 */
+const HEARTBEAT_INTERVAL = 4 * 1000;
+/** 超过 12s(约 3 个周期)未收到心跳即视为主页面已关闭 */
+const HEARTBEAT_TTL = 12 * 1000;
+
+/** 判断主页面(驾驶舱)是否仍打开(心跳是否新鲜) */
+export function isMainPageAlive(): boolean {
+  try {
+    const raw = localStorage.getItem(MAIN_HEARTBEAT_KEY);
+    if (!raw) return false;
+    const ts = Number(raw);
+    return Number.isFinite(ts) && Date.now() - ts < HEARTBEAT_TTL;
+  } catch {
+    return false;
+  }
+}
+
+/** 主页面启动心跳: 周期性写本地时间戳 + 广播, 供 /philia 判断主页面存活。返回清理函数。 */
+export function startMainHeartbeat(): () => void {
+  const beat = () => {
+    try {
+      localStorage.setItem(MAIN_HEARTBEAT_KEY, String(Date.now()));
+    } catch {
+      /* 隐私/配额受限时忽略 */
+    }
+    try {
+      bc?.postMessage({ type: "philia-main-beat" } satisfies PhiliaSyncMessage);
+    } catch {
+      /* 忽略 */
+    }
+  };
+  beat();
+  const t = setInterval(beat, HEARTBEAT_INTERVAL);
+  return () => clearInterval(t);
 }
 
 const CHANNEL = "philia-sync";
