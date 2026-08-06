@@ -296,10 +296,14 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
   const runningRef = useRef(false);
   const run = async (force = false) => {
     if (runningRef.current) return;
+    // 配置未就绪时跳过: 空技能会命中/写入与轮询不同的缓存槽, 导致显示陈旧数据。
+    // 首次挂载的场景由 PhiliaPanel 在 configLoaded 后重新触发兜底。
+    if (!config) return;
+    const skills = config.skills || [];
     runningRef.current = true;
     setReview({ loading: true, error: "" });
     try {
-      const d = await api.philia.marketAnalyze({ skills: config?.skills || [], force });
+      const d = await api.philia.marketAnalyze({ skills, force });
       setReview({ analysis: d });
     } catch (e) {
       setReview({ error: (e as Error)?.message || "分析失败" });

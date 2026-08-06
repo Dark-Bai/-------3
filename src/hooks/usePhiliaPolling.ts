@@ -12,7 +12,8 @@
  *          避免"小窗显示轮询中、主面板不同步"的错位; 也只有一份定时器, 不会重复触发。
  *  - 时段校准: 每 30s 复核一次是否处于轮询时段(收盘后自动停、次日开盘自动恢复)
  *  - 状态记忆: 用户开关持久化到 localStorage, 页面刷新后保持
- *  - 首轮调度: 开启后仅排到下一个 2 分钟边界触发, 不做挂载立即补拉; 仅当"手动打开开关"时立即补拉一次
+ *  - 首轮调度: 开启后仅排到下一个本地时钟整分边界(偶数分钟)触发。不做挂载立即补拉、也不在开启瞬间补拉,
+ *          保证轮询节奏始终以本地时钟整分为准, 与用户进入/开启程序的时刻无关
  */
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
@@ -196,8 +197,9 @@ export function usePhiliaPolling(onTick: () => void): PhiliaPollingState {
       sharedTransition = false;
       notify();
     }, 900);
-    // 手动打开开关: 若处于交易时段且空闲, 立即补拉一次(用户主动操作, 非挂载触发)
-    if (sharedEnabled && inPhiliaPollWindow() && !inFlightS) runPollOnce();
+    // 开启后不立即补拉(否则会以"用户此刻"为准), 而是由定时器在下一次本地时钟整分边界(偶数分钟)触发,
+    // 保证轮询节奏始终以本地时钟整分为准, 与用户进入/开启程序的时刻无关。
+    if (sharedEnabled && !timerStarted) startTimer();
   }, []);
 
   return { enabled, active, lastTick, transition, inWindow: active, toggle };
