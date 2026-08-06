@@ -12,7 +12,7 @@
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   Sparkles,
   Loader2,
@@ -22,12 +22,15 @@ import {
   TrendingUp,
   AlertTriangle,
   Maximize2,
+  History,
+  ExternalLink,
 } from "lucide-react";
 import { api, type PhiliaMarketAnalysis, type PhiliaDataSource } from "@/lib/api";
 import { usePhilia } from "./PhiliaContext";
 import { FloatingWindow } from "./FloatingWindow";
 import { ThinkingProcessButton } from "./ThinkingProcessButton";
 import { usePhiliaPolling } from "@/hooks/usePhiliaPolling";
+import { MirrorContext } from "./Panel";
 
 /* ---------- 设计参数(需求中的占位符取值) ---------- */
 const SPACE_PX = 320; // 为「今日机会/今日风险」预留的最小显示空间(px)
@@ -205,15 +208,85 @@ export interface MarketReviewSectionHandle {
   run: (force?: boolean) => Promise<void>;
 }
 
-// 模块级缓存: 切出主页面再切回时(组件重挂载)保留上次分析结果, 直接显示数据无需再点击。
-// SPA 路由切换不会重载模块, 故该变量在页面切换间常驻; 仅在整页刷新时清空。
-let cachedAnalysis: PhiliaMarketAnalysis | null = null;
+// 模块级共享分析状态(主面板 + 悬浮小窗共用)。
+// 原因: Panel 在放大成悬浮小窗时会同时渲染两份 MarketReviewSection(网格内 section + FloatingWindow 内),
+// 若各自持有本地 state, 会造成"小窗显示轮询中、主面板不同步"的错位。这里把结果/加载/刷新/错误/轮询日志
+// 全部提升到模块级广播, 所有实例读到同一份值, 小窗仅作为主面板的纯镜像, 不各自持有轮询日志。
+interface PollLogEntry {
+  id: number;
+  start: string;
+  end?: string;
+  duration?: number;
+  error?: string;
+}
+interface SharedReviewState {
+  analysis: PhiliaMarketAnalysis | null;
+  loading: boolean;
+  refreshing: boolean;
+  error: string;
+  pollLogs: PollLogEntry[];
+}
+const reviewState: SharedReviewState = { analysis: null, loading: false, refreshing: false, error: "", pollLogs: [] };
+const reviewListeners = new Set<() => void>();
+const setReview = (p: Partial<SharedReviewState>) => {
+  Object.assign(reviewState, p);
+  for (const l of [...reviewListeners]) l();
+};
+const subscribeReview = (fn: () => void) => {
+  reviewListeners.add(fn);
+  return () => {
+    reviewListeners.delete(fn);
+  };
+};
+
+/** 最近一份配置的技能列表(供模块级轮询用, 与实例无关) */
+let sharedSkills: string[] = [];
+function setSharedSkills(skills: string[]) {
+  sharedSkills = skills;
+}
+
+/** 全局轮询序号(跨实例共享, 保证日志 id 唯一) */
+let pollSeq = 0;
+/** 模块级轮询: 由单例定时器驱动, 更新共享状态与共享日志(主面板与小窗同步显示) */
+async function runGlobalPoll(): Promise<void> {
+  const t0 = Date.now();
+  const id = ++pollSeq;
+  const fmt = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
+  setReview({ refreshing: true });
+  setReview({ pollLogs: [{ id, start: fmt(t0) }, ...reviewState.pollLogs].slice(0, 20) });
+  console.log(`[PHILIA轮询] 开始 ${fmt(t0)}`);
+  let errMsg: string | undefined;
+  try {
+    const d = await api.philia.marketAnalyze({ skills: sharedSkills, force: true });
+    setReview({ analysis: d });
+  } catch (e) {
+    // 失败时保留当前内容, 但必须显式记录错误, 便于确认轮询"已完成却未更新"的真实原因
+    errMsg = (e as Error)?.message || "请求失败";
+    console.error(`[PHILIA轮询] 失败 ${fmt()} · 耗时 ${Date.now() - t0}ms · ${errMsg}`);
+  } finally {
+    setReview({ refreshing: false });
+    const dur = Date.now() - t0;
+    setReview({
+      pollLogs: reviewState.pollLogs.map((l) => (l.id === id ? { ...l, end: fmt(), duration: dur, error: errMsg } : l)),
+    });
+    console.log(`[PHILIA轮询] 结束 ${fmt()} · ${errMsg ? "失败" : "成功"} · 耗时 ${dur}ms`);
+  }
+}
 
 export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(function MarketReviewSection(_props, ref) {
   const { config } = usePhilia();
-  const [analysis, setAnalysis] = useState<PhiliaMarketAnalysis | null>(cachedAnalysis);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  // 是否渲染在悬浮小窗内(纯镜像模式): 小窗断开轮询/启动等交互, 仅实时镜像主面板 PHILIA 数据
+  const isMirror = useContext(MirrorContext);
+  // 订阅共享状态: 结果/加载/刷新/错误/日志在各实例间保持一致(小窗为纯镜像)
+  const analysis = useSyncExternalStore(subscribeReview, () => reviewState.analysis, () => reviewState.analysis);
+  const loading = useSyncExternalStore(subscribeReview, () => reviewState.loading, () => reviewState.loading);
+  const refreshing = useSyncExternalStore(subscribeReview, () => reviewState.refreshing, () => reviewState.refreshing);
+  const error = useSyncExternalStore(subscribeReview, () => reviewState.error, () => reviewState.error);
+  const pollLogs = useSyncExternalStore(subscribeReview, () => reviewState.pollLogs, () => reviewState.pollLogs);
+  // 同步最新技能列表至模块级(供全局轮询使用)
+  useEffect(() => {
+    setSharedSkills(config?.skills || []);
+  }, [config]);
   const [showSrc, setShowSrc] = useState(false);
   // 「今日机会」「今日风险」独立小窗: 可同时开启
   const [floats, setFloats] = useState<{ opportunities: boolean; risks: boolean }>({ opportunities: false, risks: false });
@@ -224,17 +297,15 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
   const run = async (force = false) => {
     if (runningRef.current) return;
     runningRef.current = true;
-    setLoading(true);
-    setError("");
+    setReview({ loading: true, error: "" });
     try {
       const d = await api.philia.marketAnalyze({ skills: config?.skills || [], force });
-      setAnalysis(d);
-      cachedAnalysis = d; // 同步模块级缓存, 供切回主页面时直接显示
+      setReview({ analysis: d });
     } catch (e) {
-      setError((e as Error)?.message || "分析失败");
+      setReview({ error: (e as Error)?.message || "分析失败" });
     } finally {
       runningRef.current = false;
-      setLoading(false);
+      setReview({ loading: false });
     }
   };
 
@@ -243,22 +314,13 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
     run,
   }));
 
-  // 自动轮询刷新: 复用 30min 降频缓存(不计费), 失败静默以保持当前内容稳定
-  const [refreshing, setRefreshing] = useState(false);
-  const pollRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const d = await api.philia.marketAnalyze({ skills: config?.skills || [], force: false });
-      setAnalysis(d);
-      cachedAnalysis = d; // 同步模块级缓存, 供切回主页面时直接显示
-    } catch {
-      /* 静默失败, 展示区保留上一次成功内容 */
-    } finally {
-      setRefreshing(false);
-    }
-  }, [config]);
+  // 「日志」小窗展开状态(纯 UI, 各实例独立互不影响)
+  const [showLogs, setShowLogs] = useState(false);
 
-  const { enabled, active, transition, toggle } = usePhiliaPolling(pollRefresh);
+  // 自动轮询仅由主面板(非镜像)驱动; 小窗为纯镜像, 不注册轮询回调、不参与轮询
+  const { enabled, active, transition, toggle } = usePhiliaPolling(
+    isMirror ? () => undefined : () => runGlobalPoll()
+  );
 
   const r = analysis?.result;
   const sources: PhiliaDataSource[] = r?.sources || [];
@@ -269,7 +331,8 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5 p-2">
-      {/* 顶部操作区: 启动按钮 + 状态 + 重新分析 */}
+      {/* 顶部操作区: 启动按钮 + 状态 + 重新分析(主面板显示; 镜像小窗隐藏, 仅镜像数据) */}
+      {!isMirror && (
       <div className="flex flex-wrap items-center gap-2 rounded border border-[#d4943a]/40 bg-gradient-to-b from-[#faf6ee] to-[#ede4d4] px-3 py-1.5">
         <button
           type="button"
@@ -306,6 +369,70 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
           />
         )}
         <div className="ml-auto flex items-center gap-2">
+          {/* 新页面: 在新标签页单独打开 PHILIA 复盘, 便于大屏/多窗查看 */}
+          <button
+            type="button"
+            onClick={() => window.open("/philia", "_blank")}
+            title="在新页面打开 PHILIA 复盘窗口"
+            className="flex items-center gap-1 rounded border border-[#e0d5c0] bg-[#faf6ee] px-1.5 py-0.5 text-[12px] font-bold text-[#8b7a5e] transition-colors hover:border-[#d4943a]/70 hover:text-[#6b5b3e]"
+          >
+            <ExternalLink size={12} />
+            新页面
+          </button>
+          {/* 轮询日志小按钮: 点击弹出每次轮询的开始/结束时间与耗时, 便于核对 2 分钟触发节奏 */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowLogs((v) => !v)}
+              title="轮询日志: 查看每次轮询的开始/结束时间与耗时"
+              className="flex items-center gap-1 rounded border border-[#e0d5c0] bg-[#faf6ee] px-1.5 py-0.5 text-[12px] font-bold text-[#8b7a5e] transition-colors hover:border-[#d4943a]/70 hover:text-[#6b5b3e]"
+            >
+              <History size={12} />
+              日志
+              {pollLogs.some((l) => l.duration === undefined) && (
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#d4943a]" />
+              )}
+            </button>
+            {showLogs && (
+              <div className="absolute right-0 top-full z-30 mt-1 w-[280px] rounded-md border border-[#d8cbb4] bg-[#faf6ee] p-1.5 shadow-lg">
+                <div className="mb-1 flex items-center justify-between border-b border-[#e0d5c0] pb-1">
+                  <span className="text-[12px] font-bold text-[#6b5b3e]">轮询日志（最近 20 次）</span>
+                  <button type="button" onClick={() => setShowLogs(false)} className="text-[12px] text-[#a8987e] hover:text-[#6b5b3e]">
+                    ✕
+                  </button>
+                </div>
+                {pollLogs.length === 0 ? (
+                  <p className="text-[12px] text-[#a8987e]">暂无轮询记录。开启「自动轮询」后每次触发会在此显示。</p>
+                ) : (
+                  <ul className="max-h-56 overflow-y-auto">
+                    {pollLogs.map((l) =>
+                      l.error ? (
+                        <li key={l.id} className="border-b border-[#e0d5c0]/50 py-1 text-[11px]">
+                          <div className="flex items-center justify-between gap-2 tabular-nums">
+                            <span className="text-[#8b7a5e]">开始 {l.start}</span>
+                            <span className="text-red-600">
+                              失败 {l.end} · {(l.duration ?? 0) / 1000}s
+                            </span>
+                          </div>
+                          <div className="mt-0.5 break-words text-[11px] leading-snug text-red-600" title={l.error}>
+                            原因: {l.error}
+                          </div>
+                        </li>
+                      ) : (
+                        <li key={l.id} className="flex items-center justify-between gap-2 border-b border-[#e0d5c0]/50 py-1 text-[11px] tabular-nums">
+                          <span className="text-[#8b7a5e]">开始 {l.start}</span>
+                          <span className={l.duration === undefined ? "text-[#d4943a]" : "text-[#4a6b3f]"}>
+                            {l.duration === undefined ? "分析中…" : `成功 · 结束 ${l.end} · ${(l.duration / 1000).toFixed(1)}s`}
+                          </span>
+                        </li>
+                      )
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* 自动轮询开关: 显示状态 + 手动切换 + 切换过渡反馈 */}
           <button
             type="button"
@@ -313,9 +440,9 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
             title={
               enabled
                 ? active
-                  ? "自动轮询已开启 · 盘中 09:14-15:01 每分钟刷新 · 正在轮询中(点击关闭)"
+                  ? "自动轮询已开启 · 盘中 09:14-15:01 每2分钟刷新 · 正在轮询中(点击关闭)"
                   : "自动轮询已开启 · 当前非轮询时段(09:14-15:01)(点击关闭)"
-                : "自动轮询已关闭 · 盘中 09:14-15:01 每分钟自动刷新(点击开启)"
+                : "自动轮询已关闭 · 盘中 09:14-15:01 每2分钟自动刷新(点击开启)"
             }
             aria-pressed={enabled}
             className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[13px] font-bold transition-all duration-300 ${
@@ -344,6 +471,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
           </span>
         </div>
       </div>
+      )}
 
       {error && (
         <p className="rounded border border-[#b8533a]/40 bg-[#b8533a]/8 px-2 py-1 text-[13px] text-[#b8533a]">{error}</p>

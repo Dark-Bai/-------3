@@ -10,6 +10,7 @@ import { NewsPanel } from "@/components/dash/NewsPanel";
 import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
 import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
 import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
+import PhiliaPage from "@/components/dash/PhiliaPage";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
 import { StockDetailWindow } from "@/components/dash/StockDetailWindow";
 import { MonitorWindow } from "@/components/dash/MonitorWindow";
@@ -155,6 +156,7 @@ export default function App() {
       <Route path="/" element={<DashboardApp />} />
       <Route path="/ai" element={<AiDashboard />} />
       <Route path="/fin" element={<FinDashboard />} />
+      <Route path="/philia" element={<PhiliaPage />} />
     </Routes>
   );
 }

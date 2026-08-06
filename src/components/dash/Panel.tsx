@@ -1,7 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useState, type ReactNode } from "react";
 import { ZoomIn, ZoomOut } from "lucide-react";
 import { isTv } from "@/lib/tv";
 import { FloatingWindow } from "./FloatingWindow";
+
+/** 标记内容是否渲染在悬浮小窗内(纯镜像模式)。Panel 放大成小窗时会同时渲染两份 children
+ *  (网格内 section + FloatingWindow 内), 子组件据此隐藏轮询等交互、仅镜像主面板数据。 */
+export const MirrorContext = createContext(false);
 
 export interface PanelZoomProps {
   panelId?: string;
@@ -123,7 +127,7 @@ export function Panel({
           defaultHeight={defaultHeight}
           onWindowClick={onWindowClick}
         >
-          {children}
+          <MirrorContext.Provider value={true}>{children}</MirrorContext.Provider>
         </FloatingWindow>
       )}
     </>
