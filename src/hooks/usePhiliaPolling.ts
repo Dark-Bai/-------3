@@ -16,6 +16,7 @@
  *          保证轮询节奏始终以本地时钟整分为准, 与用户进入/开启程序的时刻无关
  */
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 
 /** 轮询时段(分钟): 09:14(含) 至 15:01(不含) */
 const POLL_START_MIN = 9 * 60 + 14;
@@ -79,6 +80,32 @@ let sharedEnabled = loadPersisted();
 let sharedActive = inPhiliaPollWindow();
 let sharedLastTick = 0;
 let sharedTransition = false;
+
+// 跨标签页同步开关: 任一标签页 toggle 会写 localStorage + BroadcastChannel 广播,
+// 其他标签页通过 philia-toggle 消息即时同步, 保证「新页面」与「主页」的自动轮询开关状态一致。
+// (storage 事件在本环境不可靠, 故以 BroadcastChannel 为主, storage 仅作兜底)
+onPhiliaSync((msg) => {
+  if (msg.type === "philia-toggle" && msg.enabled !== undefined) {
+    const next = !!msg.enabled;
+    if (next !== sharedEnabled) {
+      sharedEnabled = next;
+      if (sharedEnabled && !timerStarted) startTimer();
+      notify();
+    }
+  }
+});
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === LS_KEY && e.newValue !== null) {
+      const next = e.newValue === "1";
+      if (next !== sharedEnabled) {
+        sharedEnabled = next;
+        if (sharedEnabled && !timerStarted) startTimer();
+        notify();
+      }
+    }
+  });
+}
 
 const listeners = new Set<() => void>();
 const notify = () => {
@@ -162,6 +189,11 @@ function startTimer(): void {
   schedule();
 }
 
+/** 读取当前自动轮询开关状态(供页面其他组件判断是否应自动触发分析) */
+export function isPhiliaPollEnabled(): boolean {
+  return sharedEnabled;
+}
+
 export interface PhiliaPollingState {
   /** 用户开关状态(持久化) */
   enabled: boolean;
@@ -201,6 +233,8 @@ export function usePhiliaPolling(onTick: () => void): PhiliaPollingState {
     } catch {
       /* 隐私/配额受限时忽略 */
     }
+    // 广播开关状态, 让其他标签页(新页面/主页)的自动轮询开关即时同步
+    postPhiliaSync({ type: "philia-toggle", enabled: sharedEnabled });
     sharedTransition = true;
     notify();
     window.setTimeout(() => {

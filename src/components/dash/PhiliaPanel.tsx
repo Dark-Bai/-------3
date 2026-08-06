@@ -3,6 +3,7 @@ import { Panel, type PanelZoomProps } from "./Panel";
 import { LeaderPoolChip } from "./LeaderPoolChip";
 import { MarketReviewSection, type MarketReviewSectionHandle } from "./MarketReviewSection";
 import { usePhilia } from "./PhiliaContext";
+import { isPhiliaPollEnabled } from "@/hooks/usePhiliaPolling";
 
 /**
  * 界面中央大型整体模块: 由"上部空白模块" + "原 philia 模块"纵向合并而成。
@@ -19,11 +20,12 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
 
   // 进入 PHILIA 小窗(isZoomed 由 false→true)时自动触发一次「启动 AI 综合分析」,
   // 无需任何点击即可直接显示数据。run 内部有并发防抖, 规避重复请求。
+  // 仅在自动轮询开关开启时才自动触发, 否则只由用户手动「启动/重新分析」驱动。
   const prevZoomed = useRef(isZoomed);
   useEffect(() => {
     const wasZoomed = prevZoomed.current;
     prevZoomed.current = isZoomed;
-    if (isZoomed && !wasZoomed) {
+    if (isZoomed && !wasZoomed && isPhiliaPollEnabled()) {
       void reviewRef.current?.run();
     }
   }, [isZoomed]);
@@ -32,16 +34,18 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
   // 注: 页面初始的 focus/visibility 事件可能在组件挂载前就已触发, 事件监听器会漏掉,
   // 因此需在挂载后显式补一次, 否则全新启动时 PHILIA 只显示占位符。
   // 该触发须等配置加载完成(configLoaded), 以确保用真实技能命中与轮询相同的缓存槽。
+  // 仅在自动轮询开关开启时才自动触发, 避免开关关闭时仍进入「AI 分析中」。
   useEffect(() => {
-    if (configLoaded) void reviewRef.current?.run();
+    if (configLoaded && isPhiliaPollEnabled()) void reviewRef.current?.run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded]);
 
   // 从其他软件切入(浏览器标签页重新可见 / 窗口重新获得焦点)时,
   // 自动触发一次分析, 使 philia 内容直接显示。run 内部有并发防抖, 不会重复请求。
+  // 仅在自动轮询开关开启时才自动触发。
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === "visible" && isPhiliaPollEnabled()) {
         void reviewRef.current?.run();
       }
     };
@@ -55,8 +59,9 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
 
   // 点击 PHILIA 小窗时自动点击一次「启动 AI 综合分析」。
   // run 内部有并发防抖, 规避冒泡造成的重复请求; 忽略返回值避免未处理 Promise。
+  // 仅在自动轮询开关开启时才自动触发。
   const handleWindowClick = () => {
-    if (reviewRef.current) {
+    if (reviewRef.current && isPhiliaPollEnabled()) {
       void reviewRef.current.run();
     }
   };

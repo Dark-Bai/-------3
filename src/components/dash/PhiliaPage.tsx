@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Link } from "react-router";
 import { ChevronLeft } from "lucide-react";
 import { PhiliaProvider } from "./PhiliaContext";
@@ -6,16 +6,12 @@ import { MarketReviewSection, type MarketReviewSectionHandle } from "./MarketRev
 
 /**
  * PHILIA 独立页面: 由驾驶舱「PHILIA」小窗的「新页面」按钮打开。
- * 全屏单独展示龙头情绪复盘, 挂载时自动加载已有分析/触发一次分析, 交互能力与驾驶舱一致。
+ * 全屏单独展示龙头情绪复盘。本页是主面板 PHILIA 的实时镜像: 打开时通过跨标签页同步
+ * 拉取主面板当前状态, 不自行触发分析, 保证与主面板所有按钮状态一致; 若主面板未打开
+ * (直接访问 /philia), 由 MarketReviewSection 内的兜底逻辑从缓存加载已有分析。
  */
 function PhiliaPageInner() {
   const reviewRef = useRef<MarketReviewSectionHandle>(null);
-
-  // 挂载后自动触发一次分析: 保证直接显示内容(与驾驶舱 PhiliaPanel 首次挂载行为一致)
-  useEffect(() => {
-    void reviewRef.current?.run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div className="flex h-screen flex-col bg-[#f5f0e6] text-[#6b5b3e]">

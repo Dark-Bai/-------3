@@ -13,6 +13,7 @@
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
 import { forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 import {
   Sparkles,
   Loader2,
@@ -218,6 +219,8 @@ interface PollLogEntry {
   end?: string;
   duration?: number;
   error?: string;
+  /** 是否命中 30min 降频缓存(未重新调用 LLM, 数据时间不等于本次触发时间) */
+  cached?: boolean;
 }
 interface SharedReviewState {
   analysis: PhiliaMarketAnalysis | null;
@@ -225,12 +228,43 @@ interface SharedReviewState {
   refreshing: boolean;
   error: string;
   pollLogs: PollLogEntry[];
+  /** 手动分析(重新分析按钮)版本号: 每次开始一次新的手动分析时递增, 用于"最新一次分析胜出"的并发消解 */
+  loadingVer: number;
+  /** 自动轮询版本号: 每次开始一次新的轮询时递增, 与手动分析版本号相互独立, 避免并发时无法清除各自的加载态 */
+  refreshingVer: number;
 }
-const reviewState: SharedReviewState = { analysis: null, loading: false, refreshing: false, error: "", pollLogs: [] };
+const reviewState: SharedReviewState = {
+  analysis: null,
+  loading: false,
+  refreshing: false,
+  error: "",
+  pollLogs: [],
+  loadingVer: 0,
+  refreshingVer: 0,
+};
 const reviewListeners = new Set<() => void>();
+/** 是否正在套用远端消息: 套用远端时不广播, 避免跨标签页循环同步 */
+let applyingRemote = false;
 const setReview = (p: Partial<SharedReviewState>) => {
   Object.assign(reviewState, p);
   for (const l of [...reviewListeners]) l();
+  // 广播完整共享状态, 让其他标签页(新页面/主页)同步所有按钮的实时状态与数据
+  if (!applyingRemote) postPhiliaSync({ type: "philia-state", state: { ...reviewState } });
+};
+/** 套用远端标签页广播来的完整状态(不反向广播, 防循环)。
+ *  版本号守卫: 当本地在「手动分析」与「自动轮询」两个维度都严格领先于远端时,
+ *  忽略较旧的远端状态, 避免旧标签页覆盖新状态; 任一维度远端更新则采用远端(保证并发时不丢加载态)。 */
+const applyRemoteState = (s: SharedReviewState) => {
+  const rLoading = s.loadingVer ?? 0;
+  const rRefreshing = s.refreshingVer ?? 0;
+  if (rLoading < (reviewState.loadingVer ?? 0) && rRefreshing < (reviewState.refreshingVer ?? 0)) return;
+  applyingRemote = true;
+  try {
+    Object.assign(reviewState, s);
+    for (const l of [...reviewListeners]) l();
+  } finally {
+    applyingRemote = false;
+  }
 };
 const subscribeReview = (fn: () => void) => {
   reviewListeners.add(fn);
@@ -247,29 +281,46 @@ function setSharedSkills(skills: string[]) {
 
 /** 全局轮询序号(跨实例共享, 保证日志 id 唯一) */
 let pollSeq = 0;
+const fmt = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
+/** 记录一次分析/轮询日志的开始, 返回 end(error?, cached?) 回调用于补全结束时间/耗时/错误/缓存命中 */
+function beginPollLog(): { id: number; end: (err?: string, cached?: boolean) => void } {
+  const id = ++pollSeq;
+  const t0 = Date.now();
+  setReview({ pollLogs: [{ id, start: fmt(t0) }, ...reviewState.pollLogs].slice(0, 20) });
+  return {
+    id,
+    end: (err?: string, cached?: boolean) => {
+      const dur = Date.now() - t0;
+      setReview({
+        pollLogs: reviewState.pollLogs.map((l) =>
+          l.id === id ? { ...l, end: fmt(), duration: dur, error: err, cached: cached === true } : l
+        ),
+      });
+    },
+  };
+}
 /** 模块级轮询: 由单例定时器驱动, 更新共享状态与共享日志(主面板与小窗同步显示) */
 async function runGlobalPoll(): Promise<void> {
   const t0 = Date.now();
-  const id = ++pollSeq;
-  const fmt = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
-  setReview({ refreshing: true });
-  setReview({ pollLogs: [{ id, start: fmt(t0) }, ...reviewState.pollLogs].slice(0, 20) });
+  const log = beginPollLog();
+  const refreshingVer = reviewState.refreshingVer + 1;
+  setReview({ refreshing: true, refreshingVer });
   console.log(`[PHILIA轮询] 开始 ${fmt(t0)}`);
   let errMsg: string | undefined;
+  let cachedHit = false;
   try {
     const d = await api.philia.marketAnalyze({ skills: sharedSkills, force: true });
-    setReview({ analysis: d });
+    // 仅当本次轮询仍是最新(未被新轮询覆盖)时才写入结果, 避免旧轮询覆盖新轮询
+    if (reviewState.refreshingVer === refreshingVer) setReview({ analysis: d }); // setReview 会自动广播完整状态, 同步轮询结果到其他标签页
+    cachedHit = d.fromCache === true;
   } catch (e) {
     // 失败时保留当前内容, 但必须显式记录错误, 便于确认轮询"已完成却未更新"的真实原因
     errMsg = (e as Error)?.message || "请求失败";
     console.error(`[PHILIA轮询] 失败 ${fmt()} · 耗时 ${Date.now() - t0}ms · ${errMsg}`);
   } finally {
-    setReview({ refreshing: false });
-    const dur = Date.now() - t0;
-    setReview({
-      pollLogs: reviewState.pollLogs.map((l) => (l.id === id ? { ...l, end: fmt(), duration: dur, error: errMsg } : l)),
-    });
-    console.log(`[PHILIA轮询] 结束 ${fmt()} · ${errMsg ? "失败" : "成功"} · 耗时 ${dur}ms`);
+    if (reviewState.refreshingVer === refreshingVer) setReview({ refreshing: false });
+    log.end(errMsg, cachedHit);
+    console.log(`[PHILIA轮询] 结束 ${fmt()} · ${errMsg ? "失败" : "成功"} · 耗时 ${Date.now() - t0}ms`);
   }
 }
 
@@ -287,6 +338,20 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
   useEffect(() => {
     setSharedSkills(config?.skills || []);
   }, [config]);
+  // 订阅跨标签页同步: 任意标签页触发分析/轮询后, 把完整共享状态同步到本页(所有按键实时状态一致)。
+  // 新标签页(/philia)打开时广播「同步请求」, 主面板收到后把当前完整状态推过来, 避免空白。
+  useEffect(() => {
+    postPhiliaSync({ type: "philia-sync-request" });
+    return onPhiliaSync((msg) => {
+      if (msg.type === "philia-sync-request") {
+        // 响应其他标签页的同步请求: 把本页当前完整状态(含 loadingVer/refreshingVer)推给对方
+        postPhiliaSync({ type: "philia-state", state: { ...reviewState } });
+      } else if (msg.type === "philia-state" && msg.state) {
+        applyRemoteState(msg.state as SharedReviewState);
+      }
+    });
+  }, []);
+
   const [showSrc, setShowSrc] = useState(false);
   // 「今日机会」「今日风险」独立小窗: 可同时开启
   const [floats, setFloats] = useState<{ opportunities: boolean; risks: boolean }>({ opportunities: false, risks: false });
@@ -301,15 +366,27 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
     if (!config) return;
     const skills = config.skills || [];
     runningRef.current = true;
-    setReview({ loading: true, error: "" });
+    // 手动分析使用独立版本号(loadingVer), 与自动轮询(refreshingVer)互不干扰,
+    // 保证手动分析与轮询并发时都能在 finally 中正确清除各自的加载态, 避免按钮永久置灰
+    const loadingVer = reviewState.loadingVer + 1;
+    setReview({ loading: true, error: "", loadingVer });
+    // 手动分析(启动/重新分析)同样记录到日志, 便于与轮询日志一同核对触发节奏
+    const log = beginPollLog();
+    let errMsg: string | undefined;
+    let cachedHit = false;
     try {
       const d = await api.philia.marketAnalyze({ skills, force });
-      setReview({ analysis: d });
+      // 仅当本次分析仍是最新(未被新分析覆盖)时才写入结果, 避免旧分析覆盖新分析
+      if (reviewState.loadingVer === loadingVer) setReview({ analysis: d });
+      cachedHit = d.fromCache === true;
     } catch (e) {
-      setReview({ error: (e as Error)?.message || "分析失败" });
+      errMsg = (e as Error)?.message || "分析失败";
+      if (reviewState.loadingVer === loadingVer) setReview({ error: errMsg });
     } finally {
       runningRef.current = false;
-      setReview({ loading: false });
+      // 仅当本次分析仍是最新时才结束 loading, 否则让更新的分析继续持有加载态
+      if (reviewState.loadingVer === loadingVer) setReview({ loading: false });
+      log.end(errMsg, cachedHit);
     }
   };
 
@@ -427,7 +504,9 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, {}>(fun
                         <li key={l.id} className="flex items-center justify-between gap-2 border-b border-[#e0d5c0]/50 py-1 text-[11px] tabular-nums">
                           <span className="text-[#8b7a5e]">开始 {l.start}</span>
                           <span className={l.duration === undefined ? "text-[#d4943a]" : "text-[#4a6b3f]"}>
-                            {l.duration === undefined ? "分析中…" : `成功 · 结束 ${l.end} · ${(l.duration / 1000).toFixed(1)}s`}
+                            {l.duration === undefined
+                              ? "分析中…"
+                              : `${l.cached ? "命中缓存 · " : "成功 · "}结束 ${l.end} · ${(l.duration / 1000).toFixed(1)}s`}
                           </span>
                         </li>
                       )
