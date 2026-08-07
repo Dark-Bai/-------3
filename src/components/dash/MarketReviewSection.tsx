@@ -14,7 +14,7 @@
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isMainPageAlive, onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 import {
   Sparkles,
@@ -77,8 +77,14 @@ function toPosLevel(v: unknown): string | null {
   return null;
 }
 
-/** 将文本中的已知金融标的名称(如龙头个股)以蓝色高亮; 证券代码(600519/sh603618)保持原色 */
-function highlightTargets(text: string, names: string[] = []): ReactNode {
+/** 将文本中的已知金融标的名称(如龙头个股)以蓝色高亮; 证券代码(600519/sh603618)保持原色。
+ *  codeMap: 名称→股票代码(如 贵州茅台→sh600519); onOpenStock: 单击高亮名称时回调(唤起同花顺) */
+function highlightTargets(
+  text: string,
+  names: string[] = [],
+  codeMap?: Map<string, string>,
+  onOpenStock?: (code: string) => void
+): ReactNode {
   const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const namePats = names
     .map(esc)
@@ -89,7 +95,19 @@ function highlightTargets(text: string, names: string[] = []): ReactNode {
   const parts = String(text ?? "").split(re);
   return parts.map((p, i) =>
     i % 2 === 1 ? (
-      <span key={i} style={{ color: TARGET_COLOR, fontWeight: 600 }}>{p}</span>
+      <span
+        key={i}
+        style={{ color: TARGET_COLOR, fontWeight: 600 }}
+        onClick={
+          onOpenStock && codeMap?.has(p)
+            ? (e) => { e.stopPropagation(); onOpenStock(codeMap.get(p)!); }
+            : undefined
+        }
+        title={onOpenStock && codeMap?.has(p) ? `单击在同花顺中打开 ${p}` : undefined}
+        className={onOpenStock && codeMap?.has(p) ? "cursor-pointer select-none hover:underline" : undefined}
+      >
+        {p}
+      </span>
     ) : (
       p
     )
@@ -278,7 +296,17 @@ function LeaderCoreCard({
 }
 
 /** 机会明细列表(供面板预览与独立小窗复用) */
-function OpportunitiesBody({ opportunities, names }: { opportunities: PhiliaMarketAnalysis["result"]["opportunities"]; names?: string[] }) {
+function OpportunitiesBody({
+  opportunities,
+  names,
+  codeMap,
+  onOpenStock,
+}: {
+  opportunities: PhiliaMarketAnalysis["result"]["opportunities"];
+  names?: string[];
+  codeMap?: Map<string, string>;
+  onOpenStock?: (code: string) => void;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       {(opportunities || []).map((o, i) => (
@@ -289,8 +317,8 @@ function OpportunitiesBody({ opportunities, names }: { opportunities: PhiliaMark
             </span>
             <PositionChip position={o.position} size={11} />
           </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(o.analysis, names)}</p>
-          {o.opportunity && <p className="mt-1 text-[12px] text-[#4a6b3f]">机会点：{highlightTargets(o.opportunity, names)}</p>}
+          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(o.analysis, names, codeMap, onOpenStock)}</p>
+          {o.opportunity && <p className="mt-1 text-[12px] text-[#4a6b3f]">机会点：{highlightTargets(o.opportunity, names, codeMap, onOpenStock)}</p>}
           <SourceTag sourceRef={o.sourceRef} skill={o.skill} tactic={o.tactic} size={10} />
         </div>
       ))}
@@ -299,7 +327,17 @@ function OpportunitiesBody({ opportunities, names }: { opportunities: PhiliaMark
 }
 
 /** 风险明细列表(供面板预览与独立小窗复用) */
-function RisksBody({ risks, names }: { risks: PhiliaMarketAnalysis["result"]["risks"]; names?: string[] }) {
+function RisksBody({
+  risks,
+  names,
+  codeMap,
+  onOpenStock,
+}: {
+  risks: PhiliaMarketAnalysis["result"]["risks"];
+  names?: string[];
+  codeMap?: Map<string, string>;
+  onOpenStock?: (code: string) => void;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       {(risks || []).map((rk, i) => (
@@ -313,8 +351,8 @@ function RisksBody({ risks, names }: { risks: PhiliaMarketAnalysis["result"]["ri
             </span>
             <span className="text-[14px] font-bold text-[#6b5b3e]">{rk.scope || "风险"}</span>
           </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(rk.description, names)}</p>
-          {rk.mitigation && <p className="mt-1 text-[12px] text-[#4a6b3f]">应对：{highlightTargets(rk.mitigation, names)}</p>}
+          <p className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{highlightTargets(rk.description, names, codeMap, onOpenStock)}</p>
+          {rk.mitigation && <p className="mt-1 text-[12px] text-[#4a6b3f]">应对：{highlightTargets(rk.mitigation, names, codeMap, onOpenStock)}</p>}
           <SourceTag sourceRef={rk.sourceRef} skill={rk.skill} tactic={rk.tactic} size={10} />
         </div>
       ))}
@@ -610,7 +648,18 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
   // 蓝色高亮标的名称集合: 优先取后端汇总的 targets(龙头+机会+风险), 兼容旧数据回退到龙头名
   const leaderNames = (r?.leaderCore?.leaders || []).map((l) => l.name).filter(Boolean);
   const highlightNames = (r?.targets && r.targets.length ? r.targets : leaderNames);
-  const highlight = (text: string): ReactNode => highlightTargets(text, highlightNames);
+  // 名称→代码映射(龙头核心 + 龙头低吸), 供蓝色高亮双击唤起同花顺
+  const codeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of r?.leaderCore?.leaders || []) if (l.name && l.code) m.set(l.name, l.code);
+    for (const l of r?.leaderLowAbsorb?.leaders || []) if (l.name && l.code) m.set(l.name, l.code);
+    return m;
+  }, [r]);
+  /** 双击蓝色股票名称: 后台唤起同花顺并跳转该股 */
+  const handleHexin = useCallback(async (code: string) => {
+    try { await api.launchHexin(code); } catch { /* 唤起失败静默 */ }
+  }, []);
+  const highlight = (text: string): ReactNode => highlightTargets(text, highlightNames, codeMap, handleHexin);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5 p-2">
@@ -1013,7 +1062,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
           defaultY={70}
         >
           <div className="p-2.5">
-            <OpportunitiesBody opportunities={r.opportunities} names={highlightNames} />
+            <OpportunitiesBody opportunities={r.opportunities} names={highlightNames} codeMap={codeMap} onOpenStock={handleHexin} />
           </div>
         </FloatingWindow>
       )}
@@ -1030,7 +1079,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
           defaultY={70}
         >
           <div className="p-2.5">
-            <RisksBody risks={r.risks} names={highlightNames} />
+            <RisksBody risks={r.risks} names={highlightNames} codeMap={codeMap} onOpenStock={handleHexin} />
           </div>
         </FloatingWindow>
       )}
