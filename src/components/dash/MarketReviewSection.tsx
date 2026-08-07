@@ -665,13 +665,28 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
   // 蓝色高亮标的名称集合: 优先取后端汇总的 targets(龙头+机会+风险), 兼容旧数据回退到龙头名
   const leaderNames = (r?.leaderCore?.leaders || []).map((l) => l.name).filter(Boolean);
   const highlightNames = (r?.targets && r.targets.length ? r.targets : leaderNames);
-  // 名称→代码映射(龙头核心 + 龙头低吸), 供蓝色高亮双击唤起同花顺
+  // 名称→代码映射, 供蓝色高亮单击唤起同花顺:
+  // 1) 龙头核心/龙头低吸 leaders 自带代码; 2) 后端汇总的 targetCodes(覆盖机会/风险/验证等全部文本标的);
+  // 3) 旧缓存缺失 targetCodes 时, 用龙头参考池(leaderPool)兜底补齐(一次性轻量请求)
+  const [extraCodes, setExtraCodes] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.philia.leaderPool().then((d) => {
+      if (cancelled || !d?.pool) return;
+      const m: Record<string, string> = {};
+      for (const s of d.pool) if (s.name && s.code) m[s.name] = s.code;
+      setExtraCodes(m);
+    }).catch(() => { /* 兜底失败静默: 不影响正常跳转 */ });
+    return () => { cancelled = true; };
+  }, []);
   const codeMap = useMemo(() => {
     const m = new Map<string, string>();
     for (const l of r?.leaderCore?.leaders || []) if (l.name && l.code) m.set(l.name, l.code);
     for (const l of r?.leaderLowAbsorb?.leaders || []) if (l.name && l.code) m.set(l.name, l.code);
+    for (const [k, v] of Object.entries(r?.targetCodes || {})) if (k && v) m.set(k, v);
+    for (const [k, v] of Object.entries(extraCodes || {})) if (k && v && !m.has(k)) m.set(k, v);
     return m;
-  }, [r]);
+  }, [r, extraCodes]);
   /** 双击蓝色股票名称: 后台唤起同花顺并跳转该股 */
   const handleHexin = useCallback(async (code: string) => {
     try { await api.launchHexin(code); } catch { /* 唤起失败静默 */ }

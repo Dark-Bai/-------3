@@ -906,6 +906,25 @@ async function assembleContext(tracer) {
     sources.push({ name: "龙头股参考池(网页热点)", fetchedAt: fmtMin(leaderPool.updatedAt || Date.now()) });
   }
 
+  // 全部标的名称→代码映射(供前端单击标的名跳转同花顺):
+  // 覆盖涨停池/炸板池/跌停池/昨日涨停池/龙头低吸候选/龙头参考池/昨日梯队对照, 兼容 {code,name} 与 {c,n} 两种字段
+  const nameToCode = {};
+  const feedNameToCode = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const x of arr) {
+      const name = x?.name || x?.n;
+      const code = x?.code || x?.c;
+      if (name && code) nameToCode[name] = String(code);
+    }
+  };
+  feedNameToCode(zt?.pool);
+  feedNameToCode(zb?.pool);
+  feedNameToCode(dt?.pool);
+  feedNameToCode(yestPool);
+  feedNameToCode(lowAbsorbPool);
+  feedNameToCode(leaderPool?.pool);
+  feedNameToCode(yesterdayMatch?.rows);
+
   const ctx = {
     date: today,
     mood: mood || null,
@@ -926,6 +945,7 @@ async function assembleContext(tracer) {
     boardToday,       // 板块因子·今日(行业/概念 涨跌幅+主力净额)
     boardYesterday,   // 板块因子·昨日(TOP板块 涨跌幅+主力净额)
     volumeSignal,     // 大盘量能客观评估(放量/缩量, 个股判断的环境约束)
+    nameToCode,   // 全部标的名称→代码映射(供前端单击标的名跳转同花顺)
     sources,      // 数据源清单(名称 + 获取时间)
   };
   contextCache = { ts: Date.now(), data: ctx };
@@ -1375,7 +1395,7 @@ function buildMarketPrompt(ctx, skills) {
 }
 
 /** 5 模块结果校验与规范化(容错) */
-function normalizeMarketResult(raw) {
+function normalizeMarketResult(raw, nameToCode) {
   const num = (v, lo = 0, hi = 999) => {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0;
@@ -1488,7 +1508,16 @@ function normalizeMarketResult(raw) {
       reason: str(c.reason),
     })),
   };
-  return { leaderCore, leaderLowAbsorb, sentimentCycle, opportunities, risks, marketValidation, targets };
+  // 标的名称→代码映射(供前端单击标的名跳转同花顺): 优先 leaders 自带代码, 其余以数据源映射补齐
+  const targetCodes = {};
+  for (const l of [...(Array.isArray(lc.leaders) ? lc.leaders : []), ...(Array.isArray(la.leaders) ? la.leaders : [])]) {
+    const n = str(l.name), c = str(l.code);
+    if (n && c) targetCodes[n] = c;
+  }
+  for (const name of targets) {
+    if (!targetCodes[name] && nameToCode && nameToCode[name]) targetCodes[name] = String(nameToCode[name]);
+  }
+  return { leaderCore, leaderLowAbsorb, sentimentCycle, opportunities, risks, marketValidation, targets, targetCodes };
 }
 
 /** 龙头情绪复盘(5 模块): 复用 LLM 管线与降频缓存 */
@@ -1538,7 +1567,7 @@ async function analyzeMarket({ model, skills = [], force = false }) {
     throw e;
   });
   tracer.add({ type: "tool", name: "调用 LLM(推理模型)", status: "ok", startedAt: llmT0, durationMs: Date.now() - llmT0, params: { 模型: model }, summary: "已返回结构化 JSON 结果" });
-  const result = normalizeMarketResult(raw);
+  const result = normalizeMarketResult(raw, ctx.nameToCode);
   result.sources = (ctx.sources || []).map((s) => ({ name: s.name, fetchedAt: s.fetchedAt }));
   tracer.add({ type: "tool", name: "结果规范化", status: "ok", startedAt: Date.now(), durationMs: 0, params: {}, summary: "5 模块结果校验与字段规范化(含双日对照验证)" });
 

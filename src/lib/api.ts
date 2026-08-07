@@ -1080,6 +1080,8 @@ export interface PhiliaMarketAnalysisResult {
   marketValidation: PhiliaMarketValidation;
   /** 汇总的全部标的名称(龙头 + 机会 + 风险), 用于蓝色高亮标注 */
   targets?: string[];
+  /** 标的名称→代码映射(供单击标的名跳转同花顺); 旧缓存缺失时前端以龙头池兜底 */
+  targetCodes?: Record<string, string>;
   /** AI 生成内容所参考的数据源列表(含获取时间) */
   sources?: PhiliaDataSource[];
 }
