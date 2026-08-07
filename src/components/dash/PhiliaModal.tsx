@@ -53,6 +53,7 @@ export function PhiliaModal() {
   const [thsUsername, setThsUsername] = useState("");
   const [thsPassword, setThsPassword] = useState("");
   const [thsMac, setThsMac] = useState("");
+  const [thsHexinExe, setThsHexinExe] = useState("");
   const [thsError, setThsError] = useState<string | null>(null);
 
   /* 合并模型列表: 后端优先, 空则用兜底 */
@@ -94,8 +95,9 @@ export function PhiliaModal() {
       setThsInfo(info);
       setThsUsername(info.username || "");
       setThsMac(info.mac || "");
+      setThsHexinExe(info.hexinExe || "");
     }).catch(() => {
-      if (on) setThsInfo({ configured: false, username: "", mac: "", gatewayAlive: false });
+      if (on) setThsInfo({ configured: false, username: "", mac: "", hexinExe: "", gatewayAlive: false });
     });
     return () => { on = false; };
   }, []);
@@ -178,7 +180,7 @@ export function PhiliaModal() {
     setSubmitting("saving");
     setSaved(false);
     try {
-      const info = await api.thsAccount.save({ username: u, password: thsPassword.trim() || undefined, mac: thsMac.trim() });
+      const info = await api.thsAccount.save({ username: u, password: thsPassword.trim() || undefined, mac: thsMac.trim(), hexinExe: thsHexinExe.trim() });
       setThsInfo(info);
       setThsPassword("");
       setSaved(true);
@@ -422,6 +424,22 @@ export function PhiliaModal() {
                   placeholder="如 FC:9D:05:26:42:EF"
                   className="w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] text-[#6b5b3e] outline-none transition-colors placeholder:text-[#c9b99a] focus:border-[#d4943a]/70"
                 />
+              </div>
+
+              {/* 同花顺客户端路径(hexin.exe): 供自选股卡片「唤起同花顺」按钮使用 */}
+              <div>
+                <label className="mb-1 block text-[12px] font-semibold text-[#8b7a5e]">同花顺客户端路径 (hexin.exe)</label>
+                <input
+                  type="text"
+                  value={thsHexinExe}
+                  disabled={!!submitting}
+                  onChange={(e) => { setThsHexinExe(e.target.value); setThsError(null); }}
+                  placeholder="如 D:\同花顺\hexin.exe（留空用默认路径）"
+                  className="w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] text-[#6b5b3e] outline-none transition-colors placeholder:text-[#c9b99a] focus:border-[#d4943a]/70"
+                />
+                <p className="mt-1 text-[10px] text-[#a8987e]">
+                  用于自选股卡片「唤起同花顺」按钮；留空时使用默认路径 D:\同花顺\hexin.exe。
+                </p>
               </div>
 
               {thsError && <p className="text-[11px] text-[#b8533a]">{thsError}</p>}

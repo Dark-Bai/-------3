@@ -6,8 +6,9 @@ import { DashboardLayout, type PanelRowDef } from "@/components/dash/DashboardLa
 import { IndexPanel } from "@/components/dash/IndexPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
-import { NewsPanel } from "@/components/dash/NewsPanel";
+import { MiniWatchlistPanel } from "@/components/dash/MiniWatchlistPanel";
 import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
+import { WatchlistProvider } from "@/components/dash/WatchlistContext";
 import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import PhiliaPage from "@/components/dash/PhiliaPage";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
@@ -61,16 +62,16 @@ const PANEL_ROWS: PanelRowDef[] = [
       { id: "index", component: IndexPanel, defaultW: 0.2222, mobileH: "h-[280px]", colStart: 1 },
       // 中央大型整体模块: 自选股移除后, philia 跨第一、二行(rowSpan=2)并吸收新闻 60% 宽度腾出的空间(0.4889→0.6045)
       { id: "philia", component: PhiliaPanel, defaultW: 0.6045, mobileH: "h-[560px]", colStart: 2, rowSpan: 2 },
-      // 实时热点新闻·7×24 快讯: 宽度缩减至 60%(0.2889→0.1733)
-      { id: "news", component: NewsPanel, defaultW: 0.1733, mobileH: "h-[280px]", colStart: 3 },
+      // 市场板块实时热点(与第二行快讯对调, 原 news 位置): 宽度 60%(0.2889→0.1733)
+      { id: "sector", component: SectorPanel, defaultW: 0.1733, mobileH: "h-[280px]", colStart: 3 },
     ],
   },
   {
     defaultH: 0.42,
     panels: [
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]", colStart: 1 },
-      // 市场板块实时热点: 宽度缩减至 60%(0.2889→0.1733)
-      { id: "sector", component: SectorPanel, defaultW: 0.1733, mobileH: "h-[340px]", colStart: 3 },
+      // mini自选(原 news 位置): 自选股单行紧凑视图, 标题右侧搜索添加
+      { id: "miniWatch", component: MiniWatchlistPanel, defaultW: 0.1733, mobileH: "h-[340px]", colStart: 3 },
     ],
   },
   {
@@ -148,8 +149,10 @@ function DashboardApp() {
   return (
     <StockDetailProvider>
       <PhiliaProvider>
-        <Dashboard />
-        <StockDetailWindows />
+        <WatchlistProvider>
+          <Dashboard />
+          <StockDetailWindows />
+        </WatchlistProvider>
       </PhiliaProvider>
     </StockDetailProvider>
   );

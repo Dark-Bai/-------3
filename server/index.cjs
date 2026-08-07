@@ -7,7 +7,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const iconv = require("iconv-lite");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const crypto = require("crypto");
 const dns = require("dns");
 // push2his.eastmoney.com 对本机 IPv6 连接不稳定, 强制优先 IPv4 以保证历史K线等网页数据源稳定抓取
@@ -272,6 +272,79 @@ function dashToday() {
   return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
 }
 
+/* ---------------- 同花顺客户端唤起(hexin.exe) ----------------
+ * 自选股卡片图标按钮 → 后台启动 hexin.exe → 等主窗口出现 → 激活 → 输入股票代码 → Enter。
+ * 路径可由「分析配置-同花顺账号」页填写(存 ths-account.json), 未配置时用默认/环境变量。
+ * 输入依赖 PowerShell(Add-Type user32 SetForegroundWindow + System.Windows.Forms.SendKeys), 仅本机 Windows 可用。 */
+const HEXIN_EXE_DEFAULT = process.env.HEXIN_EXE || "D:\\同花顺\\hexin.exe";
+const HEXIN_PROC = "hexin";
+
+/** 读取用户配置的 hexin.exe 路径(ths-account.json 的 hexinExe 字段) */
+function getHexinExe() {
+  try {
+    const file = path.join(__dirname, "ths-account.json");
+    if (fs.existsSync(file)) {
+      const acc = JSON.parse(fs.readFileSync(file, "utf-8"));
+      if (acc.hexinExe && /\.exe$/i.test(acc.hexinExe)) return acc.hexinExe;
+    }
+  } catch { /* 损坏则用默认 */ }
+  return HEXIN_EXE_DEFAULT;
+}
+
+/** 激活 hexin 窗口并输入 6 位代码 + Enter */
+function hexinSendKeys(code6) {
+  // 注意: here-string(@"..."@) 必须保持换行, 不能用 ";" 单行化(会破坏语法)
+  const script = [
+    "Add-Type -AssemblyName System.Windows.Forms",
+    'Add-Type -TypeDefinition @"',
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public class HexinWin {",
+    '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
+    '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);',
+    "}",
+    '"@',
+    "$deadline = (Get-Date).AddSeconds(20)",
+    "$proc = $null",
+    "do {",
+    "  $proc = Get-Process " + HEXIN_PROC + " -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object StartTime -Descending | Select-Object -First 1",
+    "  if ($proc) { break }",
+    "  Start-Sleep -Milliseconds 500",
+    "} while ((Get-Date) -lt $deadline)",
+    "if (-not $proc) { Write-Output 'NO_WINDOW'; exit 1 }",
+    "[HexinWin]::ShowWindow($proc.MainWindowHandle, 3) | Out-Null", // 3=SW_MAXIMIZE: 唤起时最大化窗口
+    "[HexinWin]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null",
+    "Start-Sleep -Milliseconds 800",
+    `[System.Windows.Forms.SendKeys]::SendWait('${code6}')`,
+    "Start-Sleep -Milliseconds 300",
+    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
+    "Write-Output 'OK'",
+  ].join("\n");
+  return new Promise((resolve, reject) => {
+    execFile("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", script], { maxBuffer: 1024 * 1024, timeout: 30000, windowsHide: true }, (err, stdout, stderr) => {
+      const out = String(stdout || "").trim();
+      if (err || out === "NO_WINDOW") return reject(new Error(out || String(stderr || "").slice(0, 200) || err?.message));
+      resolve(out);
+    });
+  });
+}
+
+/** 唤起同花顺: 未运行则先启动, 再等窗口并输入代码跳转 */
+async function handleLaunchHexin(code6) {
+  const running = await new Promise((resolve) => {
+    execFile("tasklist", ["/FI", "IMAGENAME eq hexin.exe", "/FO", "CSV", "/NH"], { windowsHide: true }, (e, out) => {
+      resolve(!e && String(out || "").includes("hexin.exe"));
+    });
+  });
+  if (!running) {
+    try {
+      const child = spawn(getHexinExe(), [], { detached: true, stdio: "ignore" });
+      child.unref();
+    } catch { /* 启动失败时 sendKeys 侧会报无窗口 */ }
+  }
+  return hexinSendKeys(code6);
+}
+
 function send(res, code, obj, extra = {}) {
   const body = typeof obj === "string" ? obj : JSON.stringify(obj);
   const headers = {
@@ -515,6 +588,45 @@ async function handleQuotes(codes) {
       }
     }
   }
+  // ★ 北交所(bj): THS 网关(thsdk market_data_cn)对 USTM 无返回, 腾讯对北交所 涨幅/成交额 返回 0,
+  //   用东方财富 push2 补齐(secid=0.<代码>, 920 段新代码数据完整; 旧代码"已切换"返回价格 0 则跳过)
+  const bjMissing = missing.filter((c) => /^bj\d{6}$/.test(c) && (!out[c] || (!out[c].amount && !out[c].pct)));
+  if (bjMissing.length) {
+    try {
+      const secids = bjMissing.map((c) => `0.${c.slice(2)}`).join(",");
+      const j = await emGet(`https://push2.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f2,f3,f4,f5,f6,f12,f14&np=1&fltt=2&invt=2`);
+      const raw = j?.data?.diff;
+      const diff = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? Object.values(raw) : [];
+      const ts = Date.now();
+      for (const d of diff) {
+        const code = `bj${d.f12}`;
+        if (!code || !/^bj\d{6}$/.test(code)) continue;
+        const price = num(d.f2);
+        if (price <= 0) continue; // 旧代码段"已切换"返回 0, 跳过
+        const prev = price - num(d.f4);
+        const q = {
+          symbol: code,
+          name: String(d.f14 || ""),
+          price,
+          prev,
+          change: +num(d.f4).toFixed(2),
+          pct: +num(d.f3).toFixed(2),
+          open: prev,
+          high: price,
+          low: price,
+          amount: Math.round(num(d.f6) / 10000) || 0,
+          turnover: 0,
+          time: "",
+        };
+        if (saneQuote(q)) {
+          out[code] = q;
+          cacheSet(`q:${code}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+        }
+      }
+    } catch (e) {
+      console.error(`[em-bj] bulk fetch error:`, e?.message || e);
+    }
+  }
   // 金额校验机制: 非A股(hk*/us*)成交额口径非"万元"(腾讯对美股指数返回"点数×成交量"的伪值),
   // 一律置 0(前端不展示); A股金额再做合理性钳制(非有限/负/天文数字视为异常置 0), 防止异常值外泄
   for (const c of Object.keys(out)) {
@@ -559,7 +671,7 @@ async function thsMinuteFetch(code) {
     const q = await thsThrottled("/api/ths/quote", { code: thsCode }, { timeout: 8000, retries: 1 });
     if (q?.success && q.data?.[0]) prec = num(q.data[0]["昨收价"]);
   } catch { /* prec 保持 0 */ }
-  const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]), v: num(r["成交量"]) }));
+  const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]) }));
   return { code, prec, points: pts };
 }
 
@@ -572,7 +684,7 @@ async function tencentMinuteFetch(code) {
   const arr = d?.data?.data || [];
   if (!arr.length) return null;
   const prec = num(d?.data?.prec || d?.qt?.[code]?.[4] || 0);
-  const pts = arr.map((s) => { const p = s.split(" "); return { t: p[0], p: num(p[1]), v: num(p[2]) }; });
+  const pts = arr.map((s) => { const p = s.split(" "); return { t: p[0], p: num(p[1]) }; });
   return { code, prec, points: pts };
 }
 
@@ -601,9 +713,9 @@ async function handleMinute(code) {
       const d = j?.data;
       const trends = Array.isArray(d?.trends) ? d.trends : [];
       const prec = num(d?.preClose || d?.preSettlement);
-      // "2026-08-07 08:00,6365.07,0,6365.070" -> {t:"08:00", p:6365.07}(全球指数无成交量, v=0)
+      // "2026-08-07 08:00,6365.07,0,6365.070" -> {t:"08:00", p:6365.07}
       const pts = trends
-        .map((s) => { const f = String(s).split(","); return { t: String(f[0]).slice(11, 16), p: num(f[1]), v: 0 }; })
+        .map((s) => { const f = String(s).split(","); return { t: String(f[0]).slice(11, 16), p: num(f[1]) }; })
         .filter((p) => p.t.includes(":"));
       return { code, prec, points: pts };
     } catch (e) {
@@ -659,10 +771,10 @@ async function handleMinute(code) {
   const d = json?.data?.[urlCode];
   const arr = d?.data?.data || [];
   const prec = num(d?.data?.prec || d?.qt?.[urlCode]?.[4] || 0);
-  // 返回 "HHMM price vol" -> [分钟索引, 价格, 成交量]
+  // 返回 "HHMM price vol" -> [分钟索引, 价格]
   const pts = arr.map((s) => {
     const p = s.split(" ");
-    return { t: p[0], p: num(p[1]), v: num(p[2]) };
+    return { t: p[0], p: num(p[1]) };
   });
   return { code, prec, points: pts };
 }
@@ -1178,52 +1290,6 @@ async function fetchSinaJson(url, { referer } = {}) {
     // node fetch 被新浪 WAF 拦截(返回HTML)时,改走 curl
     const text = await curlText(url, { referer });
     return JSON.parse(text);
-  }
-}
-
-/* ---------------- 新浪 7x24 快讯 ---------------- */
-function parseNewsItem(it) {
-  const raw = it.rich_text || "";
-  const m = raw.match(/^【(.+?)】([\s\S]*)$/);
-  return {
-    id: it.id,
-    title: m ? m[1] : "",
-    content: m ? m[2] : raw,
-    time: it.create_time,
-  };
-}
-
-/* 华尔街见闻快讯(兜底源,全球可达,CORS开放) */
-async function fetchWscnNews(size) {
-  const url = `https://api-one-wscn.awtmt.com/apiv1/content/lives?channel=global-channel&limit=${Math.min(size, 50)}`;
-  const text = await fetchText(url);
-  const json = JSON.parse(text);
-  const items = json?.data?.items || [];
-  const fmt = (sec) => {
-    if (!sec) return "";
-    const d = new Date(sec * 1000);
-    const p = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  };
-  return items
-    .filter((it) => it.content_text || it.content)
-    .map((it, i) => ({
-      id: it.id || it.display_time * 100 + i,
-      title: it.title || "",
-      content: (it.content_text || it.content || "").replace(/<[^>]+>/g, ""),
-      time: fmt(it.display_time),
-    }));
-}
-
-async function handleNews(page, size) {
-  const url = `https://zhibo.sina.com.cn/api/zhibo/feed?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(size)}&zhibo_id=152&tag_id=0`;
-  try {
-    const json = await fetchSinaJson(url);
-    const list = json?.result?.data?.feed?.list || [];
-    if (list.length) return list.map(parseNewsItem);
-    throw new Error("empty sina feed");
-  } catch {
-    return fetchWscnNews(size);
   }
 }
 
@@ -2838,10 +2904,19 @@ const routes = {
   "/api/stock-detail": async (q) => handleStockDetail(q.get("code") || ""), // 个股详情聚合(本地数据库: 按需抓取+失败回退+行业概念永久保留)
   "/api/stock-finance": async (q) =>
     cached(`sfn:${q.get("code")}`, 24 * 3600 * 1000, () => handleStockFinance(q.get("code") || "")), // 财务指标, 24h 缓存
-  "/api/news": async (q) =>
-    cached(`news:${q.get("page")}:${q.get("size")}`, 8000, () =>
-      handleNews(q.get("page") || "1", q.get("size") || "40")
-    ),
+  // 实时热点新闻·7×24 快讯已清空: 不再拉取新浪/华尔街见闻, 返回空列表, 等待人工添加新内容
+  "/api/news": async () => ({ ok: true, data: [] }),
+  // 唤起同花顺客户端: 后台启动 hexin.exe → 输入股票代码 + Enter 跳转(仅本机 Windows)
+  "/api/launch-hexin": async (q) => {
+    const code = String(q.get("code") || "").replace(/^(sh|sz|bj)/, "").trim();
+    if (!/^\d{6}$/.test(code)) return { ok: false, error: "invalid code" };
+    try {
+      await handleLaunchHexin(code);
+      return { ok: true, code };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e).slice(0, 200) };
+    }
+  },
   "/api/treasuries": async () => cached("treasuries", 30000, () => handleTreasuries()),
   "/api/finance-main": async (q) =>
     cached(`fin-main:${q.get("code")}`, 3600000, () => handleFinanceMain(q.get("code") || "")), // 单公司近12期主指标, 1h缓存
@@ -2869,20 +2944,22 @@ const routes = {
       } catch { return false; }
     };
     if (body === undefined) {
-      let configured = false, username = "", mac = "";
+      let configured = false, username = "", mac = "", hexinExe = "";
       try {
         if (fs.existsSync(file)) {
           const acc = JSON.parse(fs.readFileSync(file, "utf-8"));
           configured = !!(acc.username && acc.password);
           username = acc.username || "";
           mac = acc.mac || "";
+          hexinExe = acc.hexinExe || "";
         }
       } catch (e) { console.error("[ths-account] read error:", e?.message || e); }
-      return { configured, username, mac, gatewayAlive: await alive() };
+      return { configured, username, mac, hexinExe, gatewayAlive: await alive() };
     }
     const username = String(body?.username || "").trim();
     const password = String(body?.password || "").trim();
     const mac = String(body?.mac || "").trim();
+    const hexinExe = String(body?.hexinExe || "").trim();
     if (!username) throw Object.assign(new Error("账号不能为空"), { status: 400 });
     // 密码留空则保留原密码(避免每次保存都需重输)
     let finalPwd = password;
@@ -2895,8 +2972,8 @@ const routes = {
       } catch { finalPwd = ""; }
     }
     if (!finalPwd) throw Object.assign(new Error("密码不能为空(首次配置需填写)"), { status: 400 });
-    fs.writeFileSync(file, JSON.stringify({ username, password: finalPwd, mac }, null, 2), "utf-8");
-    console.log("[ths-account] saved", username);
+    fs.writeFileSync(file, JSON.stringify({ username, password: finalPwd, mac, hexinExe }, null, 2), "utf-8");
+    console.log("[ths-account] saved", username, hexinExe ? `hexin=${hexinExe}` : "");
     // 同步网关内存账号并热重连(网关在线时); 失败不影响文件已保存
     try {
       await fetch(`${THS_GATEWAY}/api/ths/account`, {
@@ -2906,7 +2983,7 @@ const routes = {
         signal: AbortSignal.timeout(3000),
       });
     } catch (e) { console.error("[ths-account] gateway sync failed:", e?.message || e); }
-    return { configured: true, username, mac, gatewayAlive: true };
+    return { configured: true, username, mac, hexinExe, gatewayAlive: true };
   },
   /* --------------------------------------------------------------------------
    * GET /api/monitor — 系统监控接口(供前端"系统监控"面板)

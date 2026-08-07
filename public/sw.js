@@ -3,6 +3,8 @@
  * 作用: 满足 PWA 可安装性, 并缓存带 hash 的静态构建产物加速二次打开。
  * 注意: /api 为实时行情数据, 永不缓存; 页面导航始终走网络, 避免发到旧版本。
  */
+// 缓存名占位符: 每次 vite build 时被 swCacheBust 插件替换为 cockpit-static-<ts>(见 vite.config.ts),
+// 新 SW activate 时自动清除旧版本缓存, 保证部署新构建后不会命中历史 bundle
 const STATIC_CACHE = "cockpit-static-v1";
 
 self.addEventListener("install", () => self.skipWaiting());

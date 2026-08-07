@@ -171,13 +171,6 @@ export interface BoardFlow {
   points: { t: string; v: number }[];
 }
 
-export interface NewsItem {
-  id: number;
-  title: string;
-  content: string;
-  time: string;
-}
-
 export interface Treasury {
   symbol: string;
   name: string;
@@ -209,8 +202,7 @@ export interface OrUsageDay {
 export interface MinuteData {
   code: string;
   prec: number;
-  /** v = 当分钟成交量(股, A股个股/指数; 全球指数为 0) */
-  points: { t: string; p: number; v?: number }[];
+  points: { t: string; p: number }[];
   /** 实际数据源: "kpl" | "tencent" | "ths" | "sina"(美债等) */
   source?: string;
 }
@@ -466,37 +458,6 @@ async function withFallback<T>(serverFn: () => Promise<T>, directFn?: () => Prom
   }
 }
 
-/** 快讯浏览器直连兜底:华尔街见闻(CORS 开放,全球可达) */
-interface WscnItem {
-  id?: number;
-  title?: string;
-  content?: string;
-  content_text?: string;
-  display_time?: number;
-}
-
-async function directNews(size: number): Promise<NewsItem[]> {
-  const r = await fetch(
-    `https://api-one-wscn.awtmt.com/apiv1/content/lives?channel=global-channel&limit=${Math.min(size, 50)}`
-  );
-  const j = await r.json();
-  const items: WscnItem[] = j?.data?.items || [];
-  const fmt = (sec?: number) => {
-    if (!sec) return "";
-    const d = new Date(sec * 1000);
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  };
-  return items
-    .filter((it) => it.content_text || it.content)
-    .map((it, i) => ({
-      id: it.id || (it.display_time || 0) * 100 + i,
-      title: it.title || "",
-      content: (it.content_text || it.content || "").replace(/<[^>]+>/g, ""),
-      time: fmt(it.display_time),
-    }));
-}
-
 /** 个股资金流批量聚合: 60ms 窗口内的 stockFlow 调用合并为一次 /api/stock-flows 请求
  *  (避免每个 QuoteRow 各发一条请求, 把东财队列打爆) */
 const flowLoader = (() => {
@@ -549,11 +510,12 @@ export const api = {
   stockDetail: (code: string) => get<StockDetail>(`/api/stock-detail?code=${encodeURIComponent(code)}`),
   stockFinance: (code: string) => get<StockFinance>(`/api/stock-finance?code=${encodeURIComponent(code)}`),
   boardFlow: (n = 20) => get<BoardFlow[]>(`/api/board-flow?n=${n}`),
-  news: (size = 60) => withFallback(() => get<NewsItem[]>(`/api/news?size=${size}`), () => directNews(size)),
   treasuries: () => get<Treasury[]>(`/api/treasuries`),
   treasuryHistory: () => get<TreasuryCurvePoint[]>(`/api/treasury-history`),
   openRouterUsage: () => get<OrUsageDay[]>(`/api/openrouter-usage`),
   stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`),
+  /** 唤起同花顺客户端: 后台启动 hexin.exe 并输入股票代码跳转(本机 Windows) */
+  launchHexin: (code: string) => get<{ ok: boolean; error?: string }>(`/api/launch-hexin?code=${encodeURIComponent(code)}`),
   financeMain: (code: string) => get<FinanceMain>(`/api/finance-main?code=${encodeURIComponent(code)}`),
   financeBoard: (period = "") => get<FinanceBoard>(`/api/finance-board${period ? `?period=${encodeURIComponent(period)}` : ""}`),
   financeForecast: (period = "") => get<FinanceForecast>(`/api/finance-forecast${period ? `?period=${encodeURIComponent(period)}` : ""}`),
@@ -609,7 +571,7 @@ export const api = {
     /** 读取账号配置(GET 不回传明文密码) */
     get: () => get<ThsAccountInfo>(`/api/ths/account`),
     /** 保存账号配置并热重连网关; password 留空则保留原密码 */
-    save: (cfg: { username: string; password?: string; mac?: string }) =>
+    save: (cfg: { username: string; password?: string; mac?: string; hexinExe?: string }) =>
       post<ThsAccountInfo>(`/api/ths/account`, cfg),
   },
 };
@@ -834,6 +796,8 @@ export interface ThsAccountInfo {
   configured: boolean;
   username: string;
   mac: string;
+  /** 同花顺客户端 hexin.exe 路径(分析配置-同花顺账号页填写, 供自选股卡片唤起使用) */
+  hexinExe: string;
   /** THS 数据网关是否在线(前端展示连接状态) */
   gatewayAlive: boolean;
 }
