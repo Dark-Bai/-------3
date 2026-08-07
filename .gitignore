@@ -17,6 +17,16 @@ server/.env
 server/data/
 server/ths-account.json
 
+# 敏感凭据(账号/密钥/证书, 防止个人账号与 key 误提交)
+*.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
