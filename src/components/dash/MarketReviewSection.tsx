@@ -194,6 +194,7 @@ function LeaderCoreCard({
   onToggleSrc,
   sources,
   stripOpportunity = false,
+  onOpenStock,
 }: {
   title: string;
   icon: ReactNode;
@@ -220,6 +221,8 @@ function LeaderCoreCard({
   sources?: PhiliaDataSource[];
   /** 是否移除 note 中的「机会」二字(龙头低吸用, 节省显示空间) */
   stripOpportunity?: boolean;
+  /** 单击股票名时回调(唤起同花顺跳转该股); 传入后股票名显示为可点击蓝色高亮 */
+  onOpenStock?: (code: string) => void;
 }) {
   // 移除「机会」二字(及紧随的标点/空白, 避免残留"："前缀)以节省空间, 剩余备注信息可完整清晰显示
   const cleanNote = (text?: string) => {
@@ -274,7 +277,21 @@ function LeaderCoreCard({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-1">
-                  <span className="text-[12px] font-bold text-[#6b5b3e]">{l.name}</span>
+                  <span
+                    className={`text-[12px] font-bold ${onOpenStock && l.code ? "select-none hover:underline" : ""}`}
+                    style={{
+                      color: onOpenStock && l.code ? TARGET_COLOR : undefined,
+                      cursor: onOpenStock && l.code ? "pointer" : undefined,
+                    }}
+                    onClick={
+                      onOpenStock && l.code
+                        ? (e) => { e.stopPropagation(); onOpenStock(l.code); }
+                        : undefined
+                    }
+                    title={onOpenStock && l.code ? `单击在同花顺中打开 ${l.name}` : undefined}
+                  >
+                    {l.name}
+                  </span>
                   <PositionChip position={l.position} size={10} />
                 </div>
                 <div className="truncate text-[10px] text-[#a8987e]">
@@ -863,6 +880,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
                 showSrc={showSrc}
                 onToggleSrc={() => setShowSrc((v) => !v)}
                 sources={sources}
+                onOpenStock={handleHexin}
               />
               <LeaderCoreCard
                 title="龙头低吸"
@@ -871,6 +889,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
                 data={r.leaderLowAbsorb}
                 highlight={highlight}
                 stripOpportunity
+                onOpenStock={handleHexin}
               />
             </div>
 

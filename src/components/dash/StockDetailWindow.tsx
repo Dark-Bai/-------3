@@ -29,7 +29,7 @@ const MINUTE_H_MIN = 52;
 const MINUTE_H_MAX = 320;
 
 /** 可调高度的分时图容器: 底部拖拽手柄调整高度, 结果持久化到 localStorage */
-function ResizableMinuteChart({ minute }: { minute: MinuteData | null }) {
+function ResizableMinuteChart({ minute, onDoubleClick }: { minute: MinuteData | null; onDoubleClick?: () => void }) {
   const [h, setH] = useState(() => {
     const saved = Number(localStorage.getItem(MINUTE_H_KEY));
     return Number.isFinite(saved) && saved > 0 ? Math.min(MINUTE_H_MAX, Math.max(MINUTE_H_MIN, saved)) : 200;
@@ -65,7 +65,7 @@ function ResizableMinuteChart({ minute }: { minute: MinuteData | null }) {
     <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6]">
       <div className="p-2">
         {minute && minute.points.length > 1 ? (
-          <MinuteChart points={minute.points} prec={minute.prec} height={h} />
+          <MinuteChart points={minute.points} prec={minute.prec} height={h} onDoubleClick={onDoubleClick} />
         ) : (
           <div className="flex items-center justify-center text-[10px] text-[#a8987e]" style={{ height: h }}>
             {minute ? "暂无分时数据" : "分时数据加载中..."}
@@ -149,6 +149,15 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
     return scored.sort((a, b) => b.score - a.score).map((s) => s.concept);
   }, [boards?.concepts, profile?.mainBusiness]);
 
+  /* ---------------- 唤起同花顺(后台启动 hexin.exe + 输入代码跳转) ---------------- */
+  const [hexinBusy, setHexinBusy] = useState(false);
+  const handleHexin = async () => {
+    if (hexinBusy) return; // 防连点并发唤起
+    setHexinBusy(true);
+    try { await api.launchHexin(code); } catch { /* 唤起失败静默(后台已尝试), 用户可手动打开同花顺 */ }
+    finally { setHexinBusy(false); }
+  };
+
   return (
     <FloatingWindow
       id={`stock-detail-${code}`}
@@ -160,10 +169,22 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
       defaultHeight={600}
     >
       <div className="flex h-full flex-col gap-3 p-4">
-        {/* 顶部: 代码 + 价格 + 涨跌幅 */}
+        {/* 顶部: 代码 + 同花顺按钮 + 价格 + 涨跌幅 */}
         <div className="flex items-baseline justify-between">
           <div>
-            <div className="text-[10px] text-[#a8987e]">{code}</div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-[#a8987e]">{code}</span>
+              {/* 唤起同花顺: 后台启动 hexin.exe 并输入股票代码跳转 */}
+              <button
+                type="button"
+                onClick={handleHexin}
+                disabled={hexinBusy}
+                title="在同花顺中打开该股票"
+                className="flex h-[16px] w-[16px] items-center justify-center rounded border border-[#e0d5c0] bg-[#f5f0e6] transition-colors hover:border-[#d4943a]/60 hover:bg-[#d4943a]/10 disabled:opacity-50"
+              >
+                <img src="/hexin.ico" alt="同花顺" className="h-[12px] w-[12px]" draggable={false} />
+              </button>
+            </div>
             <div className="text-[30px] font-bold leading-tight tracking-tight text-[#6b5b3e]" style={TNUM}>
               {p != null ? fmtPrice(p) : "—"}
             </div>
@@ -195,8 +216,8 @@ export function StockDetailWindow({ code, name, onClose }: StockDetailWindowProp
           <span className="font-semibold text-[#6b5b3e]" style={TNUM}>{open != null ? fmtPrice(open) : "—"}</span>
         </div>
 
-        {/* 可拖拽调整高度的分时走势图 */}
-        <ResizableMinuteChart minute={minute} />
+        {/* 可拖拽调整高度的分时走势图(双击分时图唤起同花顺) */}
+        <ResizableMinuteChart minute={minute} onDoubleClick={handleHexin} />
 
         {/* 核心数据格 */}
         <div className="grid grid-cols-4 gap-x-3">

@@ -7,6 +7,8 @@ interface MinuteChartProps {
   height: number;
   /** X 轴时间映射: A股交易时段(默认) / 24h(港美股等连续交易) */
   session?: "ashare" | "h24";
+  /** 双击分时图回调(如唤起同花顺跳转该股) */
+  onDoubleClick?: () => void;
 }
 
 /** 名义视口宽度(与容器宽度按比例对应, 坐标轴标签用百分比定位) */
@@ -35,7 +37,7 @@ function niceStep(target: number): number {
 }
 
 /** 分时走势图: 时间/百分比坐标轴 + 鼠标悬停数据悬浮框 */
-export function MinuteChart({ points, prec, height, session = "ashare" }: MinuteChartProps) {
+export function MinuteChart({ points, prec, height, session = "ashare", onDoubleClick }: MinuteChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef(0);
   const pendingRef = useRef<{ i: number; leftPct: number } | null>(null);
@@ -162,6 +164,7 @@ export function MinuteChart({ points, prec, height, session = "ashare" }: Minute
         preserveAspectRatio="none"
         onMouseMove={handleMove}
         onMouseLeave={handleLeave}
+        onDoubleClick={onDoubleClick}
       >
         {/* 横向网格线(涨跌幅刻度) */}
         {data.yTicks.map((t, i) => (
