@@ -125,6 +125,99 @@ async function thsFetch(path, params = {}, timeout = 8000) {
   }
 }
 
+/* ---------------- THS 网关调用治理层 ----------------
+ * 串行队列(上限 20) + 指数退避重试 + 429(rateLimited)感知:
+ *  - 网关侧令牌桶超限返回 429 + extra.rateLimited=true, 此处按 0.3/0.6/1.2s 退避
+ *  - 队列满直接返回失败(503 语义), 由上层回退到备用数据源, 不无限排队 */
+const thsQueue = (() => {
+  let chain = Promise.resolve();
+  let pending = 0;
+  const MAX = 20;
+  return (fn) => {
+    if (pending >= MAX) {
+      return Promise.reject(Object.assign(new Error("ths busy, retry later"), { status: 503 }));
+    }
+    pending++;
+    const run = () => fn().finally(() => { pending--; });
+    const p = chain.then(run, run);
+    chain = p.catch(() => {});
+    return p;
+  };
+})();
+
+async function thsThrottled(path, params = {}, { timeout = 8000, retries = 3 } = {}) {
+  try {
+    return await thsQueue(async () => {
+      for (let attempt = 0; ; attempt++) {
+        const r = await thsFetch(path, params, timeout);
+        const limited = r?.extra?.rateLimited === true;
+        if (r?.success !== false && !limited) return r;
+        if (attempt >= retries) return r; // 重试耗尽: 返回最后一次失败, 交上层回退
+        await sleep(300 * 2 ** attempt);  // 0.3/0.6/1.2s 退避
+      }
+    });
+  } catch {
+    return { success: false, error: "ths busy", data: null, extra: {} };
+  }
+}
+
+/** THS 完整代码(USHA600519) → 前端符号(sh600519); 非法返回 "" */
+function thsSymbolOf(thsCode) {
+  const m = String(thsCode || "").match(/^(USHA|USZA|USTM)(\d{6})$/);
+  if (!m) return "";
+  const pre = m[1] === "USHA" ? "sh" : m[1] === "USZA" ? "sz" : "bj";
+  return pre + m[2];
+}
+
+/** thsdk 中文字段行 → 统一 quote 结构(对齐腾讯/东财语义)。
+ *  单位换算: 成交量 股→手(÷100), 总金额 元→万元(÷1e4), 市值 元→亿(÷1e8)。 */
+function thsRowToQuote(row) {
+  const price = num(row["价格"]);
+  const prev = num(row["昨收价"]);
+  return {
+    price,
+    prev,
+    change: num(row["涨跌"]),
+    pct: num(row["涨幅"]),
+    open: num(row["开盘价"]),
+    high: num(row["最高价"]),
+    low: num(row["最低价"]),
+    vol: Math.round(num(row["成交量"]) / 100),       // 股 → 手
+    amount: Math.round(num(row["总金额"]) / 10000),  // 元 → 万元
+    turnover: num(row["换手率"]),                    // %
+    amplitude: num(row["振幅"]),                     // %
+    volRatio: num(row["量比"]),
+    pe: num(row["市盈率TTM"]),
+    pb: num(row["市净率1"]),
+    totalMarketCap: num(row["总市值"]) / 1e8,        // 元 → 亿
+    floatMarketCap: num(row["流通市值"]) / 1e8,
+    marketValue: num(row["总市值"]),                 // 元(供弹窗展示)
+  };
+}
+
+/** 批量 A股个股行情(THS 主源): codes 为前端符号(sh600519); 任一失败返回 null 供回退。
+ *  网关内已按市场分组 + 每批 50 + 批间 sleep 0.1s(令牌桶 + 分批双重限流保护)。 */
+async function thsBulkQuotes(codes) {
+  const groups = { USHA: [], USZA: [], USTM: [] };
+  for (const c of codes) {
+    const mkt = thsCodeOf(c);
+    if (mkt && groups[mkt]) groups[mkt].push(mkt + c.replace(/^(sh|sz|bj)/, ""));
+  }
+  const out = {};
+  for (const list of Object.values(groups)) {
+    for (let i = 0; i < list.length; i += 50) {
+      const chunk = list.slice(i, i + 50);
+      const j = await thsThrottled("/api/ths/bulk-quote", { codes: chunk.join(","), fields: "basic" }, { timeout: 10000, retries: 2 });
+      if (!j?.success) return null; // 任一批失败 → 整体回退备用源
+      for (const row of j.data || []) {
+        const sym = thsSymbolOf(row["代码"]);
+        if (sym) out[sym] = { symbol: sym, name: row["名称"] || "", ...thsRowToQuote(row) };
+      }
+    }
+  }
+  return out;
+}
+
 /** 裸 6 位 A股代码 → THS 完整代码(USHA/USZA/USTM 前缀) */
 function thsCodeOf(code6) {
   const c = String(code6 || "").replace(/^[a-z]{2}/i, "");
@@ -266,7 +359,24 @@ async function handleQuotes(codes) {
     if (hit && hit.data !== undefined && now - hit.ts < QUOTE_CACHE_TTL) out[c] = hit.data;
     else missing.push(c);
   }
-  // ★ 腾讯为最高优先级: 先取腾讯(覆盖全部代码, 含 A股核心指数)
+  // ★ A股个股优先走 THS 批量(迁移主源); 失败/缺失再落腾讯
+  const isAShareStock = (c) => (/^s[hz]\d{6}$/.test(c) || /^bj\d{6}$/.test(c)) && !c.startsWith("sh000") && !c.startsWith("sz399");
+  const thsMissing = missing.filter((c) => isAShareStock(c) && !out[c]);
+  if (thsMissing.length) {
+    try {
+      const thsQuotes = await thsBulkQuotes(thsMissing);
+      if (thsQuotes) {
+        const ts = Date.now();
+        for (const q of Object.values(thsQuotes)) {
+          if (saneQuote(q)) {
+            out[q.symbol] = q;
+            cacheSet(`q:${q.symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
+          }
+        }
+      }
+    } catch (e) { console.error(`[ths-quotes] bulk error:`, e?.message || e); }
+  }
+  // ★ 剩余缺失(非A股 或 THS 未覆盖的A股): 腾讯补齐(覆盖全部代码, 含 A股核心指数)
   if (missing.length) {
     // 按 60 个/块分块并发(报价中心全集可达数百, 单 URL 过长会被上游拒绝)
     const chunks = [];
@@ -432,21 +542,21 @@ const minuteSrcState = new Map();  // code -> { primary, fail, okOnBackup }
 
 function minuteState(code) {
   let s = minuteSrcState.get(code);
-  if (!s) { s = { primary: "tencent", fail: 0, okOnBackup: 0 }; minuteSrcState.set(code, s); }
+  if (!s) { s = { primary: "ths", fail: 0, okOnBackup: 0 }; minuteSrcState.set(code, s); }
   return s;
 }
 
-/** 同花顺 THS 个股分时(备源); 成功返回 {code,prec,points}, 失败/空返回 null */
+/** 同花顺 THS 个股分时(主源); 成功返回 {code,prec,points}, 失败/空返回 null */
 async function thsMinuteFetch(code) {
   const stockCode = code.replace(/^s[hz]/, "");
   const thsCode = thsCodeOf(stockCode);
   if (!thsCode) return null;
-  const j = await thsFetch("/api/ths/minute", { code: thsCode });
+  const j = await thsThrottled("/api/ths/minute", { code: thsCode }, { timeout: 8000, retries: 2 });
   const rows = j?.data || [];
   if (!j?.success || !rows.length) return null;
   let prec = 0;
   try {
-    const q = await thsFetch("/api/ths/quote", { code: thsCode });
+    const q = await thsThrottled("/api/ths/quote", { code: thsCode }, { timeout: 8000, retries: 1 });
     if (q?.success && q.data?.[0]) prec = num(q.data[0]["昨收价"]);
   } catch { /* prec 保持 0 */ }
   const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]) }));
@@ -844,6 +954,17 @@ function scheduleDailyBoardsRefresh() {
 async function handleStockQuote(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return null;
+  // THS 主源(full: 基础+汇总, 含换手/振幅/量比/PE/PB/市值); 失败回退东财 ulist
+  const thsCode = thsCodeOf(stockCode);
+  if (thsCode) {
+    try {
+      const j = await thsThrottled("/api/ths/bulk-quote", { codes: thsCode, fields: "full" }, { timeout: 8000, retries: 2 });
+      const row = j?.success ? (j.data || []).find((x) => String(x["代码"]).toUpperCase() === thsCode) : null;
+      if (row && num(row["价格"]) > 0) {
+        return { code: String(code || ""), name: row["名称"] || "", ...thsRowToQuote(row), time: "" };
+      }
+    } catch (e) { console.error(`[ths-quote] ${code} error:`, e?.message || e); }
+  }
   const market = /^6|^9/.test(stockCode) ? 1 : 0; // 沪=1, 深/北=0
   try {
     const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${market}.${stockCode}&fields=f2,f3,f4,f5,f6,f8,f9,f10,f12,f14,f15,f16,f17,f18,f20,f23&np=1&fltt=2&invt=2`);
@@ -964,10 +1085,33 @@ async function handleStockFlows(codesParam) {
   return list.map((c) => out[c]).filter(Boolean);
 }
 
-/* ---------------- 个股主力净额(东财 ulist f62/f184, 替代 KPL 主力资金 main-forces) ---------------- */
+/* ---------------- 个股主力净额(THS 主源 / 东财 ulist 备, 替代 KPL 主力资金 main-forces) ---------------- */
 async function handleStockMainForces(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return Promise.reject(new Error("invalid stock code"));
+  // THS 主源: 基础(总金额) + 扩展1(主力净流入592890); 失败回退东财
+  const thsCode = thsCodeOf(stockCode);
+  if (thsCode) {
+    try {
+      const j = await thsThrottled("/api/ths/main-forces", { code: thsCode }, { timeout: 8000, retries: 2 });
+      const d = j?.success ? (j.data || [])[0] : null;
+      if (d && d["主力净流入"] !== undefined) {
+        const netIn = num(d["主力净流入"]); // 主力净流入(元)
+        const totalAmt = num(d["总金额"]);  // 成交额(元)
+        return {
+          code,
+          day: dashToday(),
+          netAmount: netIn,
+          totalAmount: totalAmt,
+          buyAmount: netIn > 0 ? netIn : 0,
+          sellAmount: netIn < 0 ? -netIn : 0,
+          buyRatio: netIn > 0 ? Math.abs(num(d["主力净量"])) : 0,
+          sellRatio: netIn < 0 ? Math.abs(num(d["主力净量"])) : 0,
+          mainForce: netIn >= 0 ? "流入" : "流出",
+        };
+      }
+    } catch (e) { console.error(`[ths-main-forces] ${code} error:`, e?.message || e); }
+  }
   const market = /^6|^9/.test(stockCode) ? 1 : 0;
   try {
     const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${market}.${stockCode}&fields=f12,f14,f62,f184,f6,f5&np=1&fltt=2&invt=2`);
@@ -1999,6 +2143,19 @@ async function handleNewsAnalystKPL() {
 /* ---------------- 股票搜索(名称/拼音首字母→代码) ---------------- */
 async function handleStockSearch(query) {
   if (!query || query.length < 1) return [];
+  // THS 主源: search_symbols(替代新浪 suggest, 免 GBK 解析与 WAF 拦截); 失败回退新浪
+  try {
+    const j = await thsThrottled("/api/ths/search", { q: query }, { timeout: 6000, retries: 1 });
+    if (j?.success && j.data?.length) {
+      const out = [];
+      for (const s of j.data) {
+        const sym = thsSymbolOf(s["THSCODE"] || s["代码"] || "");
+        if (!sym) continue; // 仅保留 A股(sh/sz/bj)
+        out.push({ code: sym, name: String(s["名称"] || s["Name"] || ""), pinyin: "" });
+      }
+      if (out.length) return out.slice(0, 10);
+    }
+  } catch (e) { console.error(`[ths-search] ${query} error:`, e?.message || e); }
   const url = `https://suggest3.sinajs.cn/suggest/type=&key=${encodeURIComponent(query)}`;
   const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
   const buf = await resp.arrayBuffer();
