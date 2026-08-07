@@ -596,7 +596,7 @@ export const api = {
     },
     /** 龙头池与龙头股数据源一致性深度校验 */
     validateLeaderPool: () => get<PhiliaLeaderValidateReport>(`/api/philia/leader-pool/validate`),
-    /** 龙头情绪复盘(4 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险; force=true 强制重算; LLM 耗时长用独立长超时 */
+    /** 龙头情绪复盘(5 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险/昨日梯队双日对照; force=true 强制重算; LLM 耗时长用独立长超时 */
     marketAnalyze: (cfg: { model?: string; skills?: string[]; force?: boolean }) =>
       post<PhiliaMarketAnalysis>(`/api/philia/market-analyze`, cfg, 180000),
   },
@@ -989,7 +989,7 @@ export interface PhiliaAnalyzeReq {
   force?: boolean;
 }
 
-/* ---------------- 龙头情绪复盘(4 模块) ---------------- */
+/* ---------------- 龙头情绪复盘(5 模块) ---------------- */
 
 /** 今日龙头核心 */
 export interface PhiliaMarketLeaderCore {
@@ -1020,6 +1020,31 @@ export interface PhiliaMarketSentimentCycle {
   analysis: string;
   /** 整体操作建议(依据 skill 语气风格) */
   suggestion?: string;
+}
+
+/** 龙头低吸(今日龙头核心右侧并列模块): 与 PhiliaMarketLeaderCore 结构完全一致 */
+export interface PhiliaMarketLowAbsorb {
+  title: string;
+  summary: string;
+  leaders: {
+    name: string;
+    code: string;
+    board: string;
+    /** 昨日连板高度 */
+    ladder: number;
+    /** 今日状态与昨日封单描述(如 今日断板·昨封4.82亿) */
+    seal: string;
+    /** 低吸点评(辩证分析投资机会与潜在风险) */
+    note: string;
+    /** 所参考 skill 思路名称 */
+    skill?: string;
+    /** 对应战法编号 */
+    tactic?: string;
+    /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+    position?: string;
+    /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
+    sourceRef?: string;
+  }[];
 }
 
 /** 今日机会 */
@@ -1056,16 +1081,41 @@ export interface PhiliaMarketRisk {
   sourceRef?: string;
 }
 
-/** 龙头情绪复盘结果(4 模块) */
+/** 龙头情绪复盘结果(5 模块) */
 export interface PhiliaMarketAnalysisResult {
   leaderCore: PhiliaMarketLeaderCore;
+  /** 龙头低吸(今日龙头核心右侧并列模块) */
+  leaderLowAbsorb: PhiliaMarketLowAbsorb;
   sentimentCycle: PhiliaMarketSentimentCycle;
   opportunities: PhiliaMarketOpportunity[];
   risks: PhiliaMarketRisk[];
+  /** 第 5 模块: 昨日连板梯队 · 今日实盘对照验证(双日对照) */
+  marketValidation: PhiliaMarketValidation;
   /** 汇总的全部标的名称(龙头 + 机会 + 风险), 用于蓝色高亮标注 */
   targets?: string[];
   /** AI 生成内容所参考的数据源列表(含获取时间) */
   sources?: PhiliaDataSource[];
+}
+
+/** 昨日连板梯队 · 今日实盘对照验证(双日对照) */
+export interface PhiliaMarketValidation {
+  /** 昨日连板梯队复盘摘要(昨日涨停/连板家数、最高高度、总龙头与分支龙头, 须标注日期) */
+  yesterdaySummary: string;
+  /** 昨日梯队个股今日实盘表现(晋级/维持/断板/炸板/跌停概况, 总龙头今日命运) */
+  todayPerformance: string;
+  /** 双日对照(今日最高板高度较昨日打开或压制、新老梯队交替、主线延续或切换) */
+  comparison: string;
+  /** 昨日四大结论逐项验证(命中/偏差/失准) */
+  conclusionCheck: {
+    /** 昨日结论项(判定的龙头/情绪周期阶段/机会方向/风险信号) */
+    conclusion: string;
+    /** 今日实盘验证情况 */
+    verification: string;
+    /** 验证结果: 命中/偏差/失准 */
+    result: string;
+    /** 偏差或失准的原因说明 */
+    reason?: string;
+  }[];
 }
 
 /** 龙头情绪复盘记录 */

@@ -1,18 +1,20 @@
 /**
- * 龙头情绪复盘(4 模块): 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险
+ * 龙头情绪复盘(5 模块): 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险 / 昨日连板梯队·今日实盘对照验证
  *
  * 由一个「启动 AI 综合分析」按钮触发, 调用后端 /api/philia/market-analyze(LLM),
- * 一次性返回 4 个结构化模块, 前端分卡片清晰展示。
+ * 一次性返回 5 个结构化模块, 前端分卡片清晰展示。
  * 交互: 启动按钮 + 加载状态提示 + 结果展示区 + 重新分析(force)。
  *
  * 本次增强:
  *  - 「今日龙头核心」「今日情绪周期」缩放至 70%(字体/容器), 为「今日机会/今日风险」预留 ≥320px 空间
+ *  - 「昨日连板梯队 · 今日实盘对照验证」: 双日对照验证模块, 将昨日连板梯队个股的今日实盘表现与今日最新梯队对照,
+ *    验证昨日复盘结论(龙头核心/情绪周期/机会/风险)在今日市场中的应对状况、准确性及有效性
  *  - 每条主观信息旁标注 skill 来源(参考: 思路 - 战法N)
  *  - 具投资机会的标的标注建议仓位(固定四级分类: 小/中/大/满)
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isMainPageAlive, onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 import {
   Sparkles,
@@ -25,6 +27,7 @@ import {
   Maximize2,
   History,
   ExternalLink,
+  Crosshair,
 } from "lucide-react";
 import { api, type PhiliaMarketAnalysis, type PhiliaDataSource } from "@/lib/api";
 import { usePhilia } from "./PhiliaContext";
@@ -108,6 +111,9 @@ const stageMeta = (s: string) => {
 /** 风险等级配色 */
 const RISK_COLOR: Record<string, string> = { 高: "#b8533a", 中: "#d4943a", 低: "#4a6b3f" };
 
+/** 双日对照验证结果配色(命中/偏差/失准) */
+const RESULT_COLOR: Record<string, string> = { 命中: "#4a6b3f", 偏差: "#d4943a", 失准: "#b8533a" };
+
 /** 时间戳 → HH:MM */
 const fmtTime = (ts: number) => {
   const d = new Date(ts);
@@ -156,6 +162,118 @@ function PositionChip({ position, size = 10 }: { position?: string | number | nu
     >
       建议仓位：{level}
     </span>
+  );
+}
+
+/** 龙头卡片(左右两栏共用): 「今日龙头核心」与「龙头低吸」排版/数据展示/分析维度完全一致 */
+function LeaderCoreCard({
+  title,
+  icon,
+  accent,
+  data,
+  highlight,
+  showSrc,
+  onToggleSrc,
+  sources,
+  stripOpportunity = false,
+}: {
+  title: string;
+  icon: ReactNode;
+  accent: string;
+  data?: {
+    title?: string;
+    summary?: string;
+    leaders?: {
+      name: string;
+      code: string;
+      board: string;
+      ladder: number;
+      seal: string;
+      note: string;
+      skill?: string;
+      tactic?: string;
+      position?: string | number | null;
+      sourceRef?: string;
+    }[];
+  } | null;
+  highlight: (text: string) => ReactNode;
+  showSrc?: boolean;
+  onToggleSrc?: () => void;
+  sources?: PhiliaDataSource[];
+  /** 是否移除 note 中的「机会」二字(龙头低吸用, 节省显示空间) */
+  stripOpportunity?: boolean;
+}) {
+  // 移除「机会」二字(及紧随的标点/空白, 避免残留"："前缀)以节省空间, 剩余备注信息可完整清晰显示
+  const cleanNote = (text?: string) => {
+    if (!text) return "";
+    if (!stripOpportunity) return String(text);
+    // 1) 先剥离「机会」及其后紧跟的标点/空白(机会: / 机会： / 机会, / 机会。 / 机会 等)
+    // 2) 再兜底移除孤立残留的「机会」二字
+    return String(text)
+      .replace(/机会[：:，,。；;、\s]*/g, "")
+      .replace(/机会/g, "");
+  };
+  return (
+    <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 p-1">
+      <div className="mb-0.5 flex items-center gap-1 border-b border-[#c9b99a]/50 pb-0.5" style={{ color: accent }}>
+        {icon}
+        <span className="text-[12px] font-bold font-newspaper-heading">{title}</span>
+        {onToggleSrc && (
+          <button
+            type="button"
+            onClick={onToggleSrc}
+            className="ml-auto flex items-center gap-0.5 rounded border border-[#c9b99a]/60 bg-[#faf6ee] px-1 py-px text-[8px] leading-none text-[#8b7a5e]"
+          >
+            数据源 {sources?.length ? `(${sources.length})` : ""}
+            <span className="text-[8px]">{showSrc ? "▲" : "▼"}</span>
+          </button>
+        )}
+      </div>
+      {showSrc && sources && sources.length > 0 && (
+        <div className="mb-0.5 rounded border border-[#d8cbb4] bg-[#faf6ee] px-1.5 py-0.5 text-[8px] text-[#8b7a5e]">
+          {sources.map((s) => (
+            <div key={s.name} className="flex items-center justify-between gap-2 py-px">
+              <span className="truncate">{s.name}</span>
+              <span className="shrink-0 tabular-nums text-[#a8987e]">{s.fetchedAt}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {data?.title && <p className="mb-0.5 text-[12px] font-bold text-[#6b5b3e]">总龙头：{highlight(data.title)}</p>}
+      {data?.summary && (
+        <p className="mb-0.5 text-[11px] leading-snug text-[#8b7a5e]">{highlight(data.summary)}</p>
+      )}
+      <div className="flex flex-col gap-0.5">
+        {(data?.leaders || []).map((l, i) => {
+          const noteText = cleanNote(l.note);
+          return (
+            <div
+              key={i}
+              className="flex items-start gap-1 rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/60 px-1 py-0.5"
+            >
+              <span className="mt-px shrink-0 rounded bg-[#4a6b3f]/15 px-1 py-px text-[11px] font-bold tabular-nums text-[#4a6b3f]">
+                {l.ladder}板
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-1">
+                  <span className="text-[12px] font-bold text-[#6b5b3e]">{l.name}</span>
+                  <PositionChip position={l.position} size={10} />
+                </div>
+                <div className="truncate text-[10px] text-[#a8987e]">
+                  {highlight(`${l.code} · ${l.board} · ${l.seal}`)}
+                </div>
+                <SourceTag sourceRef={l.sourceRef} skill={l.skill} tactic={l.tactic} size={9} />
+                {noteText && (
+                  <p className="mt-0.5 break-words text-[10px] leading-snug text-[#d4943a]">
+                    {highlight(noteText)}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -281,6 +399,19 @@ function setSharedSkills(skills: string[]) {
   sharedSkills = skills;
 }
 
+/** 全局 LLM 互斥锁: 手动分析(run) 与 自动轮询(runGlobalPoll) 共享同一把锁,
+ *  保证任意时刻至多 1 个 LLM 请求在途, 避免多触发通道(挂载/放大/standalone 兜底/2min 轮询)并行重复计费。
+ *  返回 false 表示已有请求在途, 调用方应跳过本轮。 */
+let llmBusy = false;
+function tryAcquireLLM(): boolean {
+  if (llmBusy) return false;
+  llmBusy = true;
+  return true;
+}
+function releaseLLM(): void {
+  llmBusy = false;
+}
+
 /** 全局轮询序号(跨实例共享, 保证日志 id 唯一) */
 let pollSeq = 0;
 const fmt = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
@@ -303,6 +434,17 @@ function beginPollLog(kind: "manual" | "poll" = "poll"): { id: number; end: (err
 }
 /** 模块级轮询: 由单例定时器驱动, 更新共享状态与共享日志(主面板与小窗同步显示) */
 async function runGlobalPoll(): Promise<void> {
+  // 跨标签页互斥: 任一标签页手动分析(loading)在途时跳过本轮(状态经 BroadcastChannel 同步),
+  // 避免本页轮询与另一标签页的手动分析并行重复计费
+  if (reviewState.loading) {
+    console.log(`[PHILIA轮询] 跳过 ${fmt()} · 手动分析在途`);
+    return;
+  }
+  // 全局互斥: 手动分析/其他实例轮询在途时跳过本轮, 避免并行 LLM 重复计费
+  if (!tryAcquireLLM()) {
+    console.log(`[PHILIA轮询] 跳过 ${fmt()} · 已有分析/轮询在途`);
+    return;
+  }
   const t0 = Date.now();
   const log = beginPollLog("poll");
   const refreshingVer = reviewState.refreshingVer + 1;
@@ -322,6 +464,7 @@ async function runGlobalPoll(): Promise<void> {
   } finally {
     if (reviewState.refreshingVer === refreshingVer) setReview({ refreshing: false });
     log.end(errMsg, cachedHit);
+    releaseLLM();
     console.log(`[PHILIA轮询] 结束 ${fmt()} · ${errMsg ? "失败" : "成功"} · 耗时 ${Date.now() - t0}ms`);
   }
 }
@@ -383,6 +526,23 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
     // 配置未就绪时跳过: 空技能会命中/写入与轮询不同的缓存槽, 导致显示陈旧数据。
     // 首次挂载的场景由 PhiliaPanel 在 configLoaded 后重新触发兜底。
     if (!config) return;
+    // 跨标签页互斥: 任一标签页轮询(refreshing)在途时, 非强制的自动触发直接跳过(轮询结果会同步本页)
+    if (reviewState.refreshing && !force) {
+      console.log(`[PHILIA] 跳过自动触发 ${fmt()} · 轮询在途`);
+      return;
+    }
+    // 全局互斥: 轮询在途时, 非强制的自动触发(挂载/放大/standalone 兜底)直接跳过,
+    // 避免与 2min 轮询并行重复计费(轮询结果会同步到本页)。强制手动点击不受影响。
+    if (!tryAcquireLLM()) {
+      if (!force) return; // 自动触发: 跳过, 等待轮询结果
+      // 手动强制: 等待在途请求结束后再执行, 避免并发双请求
+      const wait = (): Promise<void> => {
+        if (llmBusy) return new Promise<void>((r) => setTimeout(r, 300)).then(() => wait());
+        return Promise.resolve();
+      };
+      await wait();
+      if (!tryAcquireLLM()) return;
+    }
     const skills = config.skills || [];
     runningRef.current = true;
     // 手动分析使用独立版本号(loadingVer), 与自动轮询(refreshingVer)互不干扰,
@@ -406,6 +566,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
       // 仅当本次分析仍是最新时才结束 loading, 否则让更新的分析继续持有加载态
       if (reviewState.loadingVer === loadingVer) setReview({ loading: false });
       log.end(errMsg, cachedHit);
+      releaseLLM();
     }
   };
 
@@ -460,7 +621,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
           type="button"
           onClick={() => run(false)}
           disabled={loading || refreshing}
-          title="启动 AI 综合分析: 一次性生成今日龙头核心/情绪周期/机会/风险"
+          title="启动 AI 综合分析: 一次性生成今日龙头核心/情绪周期/机会/风险/昨日梯队双日对照"
           className="group flex items-center gap-1.5 rounded border border-[#d4943a]/60 bg-[#4a6b3f] px-2.5 py-1 text-[14px] font-bold text-[#faf6ee] transition-colors hover:bg-[#3d5940] disabled:opacity-60"
         >
           {loading ? (
@@ -623,10 +784,10 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
           </div>
           <p className="text-[16px] font-bold text-[#6b5b3e]">做好复盘准备，点击「启动 AI 综合分析」</p>
           <p className="max-w-md text-[13px] leading-relaxed text-[#a8987e]">
-            由 AI 基于上游市场数据白皮书，一次性生成以下四项核心分析：
+            由 AI 基于上游市场数据白皮书，一次性生成以下五项核心分析：
           </p>
           <div className="flex flex-wrap items-center justify-center gap-1.5">
-            {["今日龙头核心", "今日情绪周期", "今日机会", "今日风险"].map((m) => (
+            {["今日龙头核心", "今日情绪周期", "今日机会", "今日风险", "昨日梯队双日对照"].map((m) => (
               <span
                 key={m}
                 className="rounded border border-[#e0d5c0] bg-[#faf6ee] px-2 py-0.5 text-[12px] font-semibold text-[#8b7a5e]"
@@ -642,64 +803,26 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
           {/* ===== 今日龙头核心 / 今日情绪周期: 全宽紧凑, 充分利用面板宽度 ===== */}
           <div className="flex flex-col gap-1.5">
-            {/* 今日龙头核心 (紧凑) */}
-            <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 p-1">
-              <div
-                className="mb-0.5 flex items-center gap-1 border-b border-[#c9b99a]/50 pb-0.5"
-                style={{ color: "#4a6b3f" }}
-              >
-                <Crown size={12} />
-                <span className="text-[12px] font-bold font-newspaper-heading">今日龙头核心</span>
-                <button
-                  type="button"
-                  onClick={() => setShowSrc((v) => !v)}
-                  className="ml-auto flex items-center gap-0.5 rounded border border-[#c9b99a]/60 bg-[#faf6ee] px-1 py-px text-[8px] leading-none text-[#8b7a5e]"
-                >
-                  数据源 {sources.length ? `(${sources.length})` : ""}
-                  <span className="text-[8px]">{showSrc ? "▲" : "▼"}</span>
-                </button>
-              </div>
-              {showSrc && sources.length > 0 && (
-                <div className="mb-0.5 rounded border border-[#d8cbb4] bg-[#faf6ee] px-1.5 py-0.5 text-[8px] text-[#8b7a5e]">
-                  {sources.map((s) => (
-                    <div key={s.name} className="flex items-center justify-between gap-2 py-px">
-                      <span className="truncate">{s.name}</span>
-                      <span className="shrink-0 tabular-nums text-[#a8987e]">{s.fetchedAt}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {r.leaderCore.title && (
-                <p className="mb-0.5 text-[12px] font-bold text-[#6b5b3e]">总龙头：{r.leaderCore.title}</p>
-              )}
-              {r.leaderCore.summary && (
-                <p className="mb-0.5 text-[11px] leading-snug text-[#8b7a5e]">{highlight(r.leaderCore.summary)}</p>
-              )}
-              <div className="flex flex-col gap-0.5">
-                {(r.leaderCore.leaders || []).map((l, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-1 rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/60 px-1 py-0.5"
-                  >
-                    <span className="shrink-0 rounded bg-[#4a6b3f]/15 px-1 py-px text-[11px] font-bold tabular-nums text-[#4a6b3f]">
-                      {l.ladder}板
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-1">
-                        <span className="text-[12px] font-bold text-[#6b5b3e]">{l.name}</span>
-                        {/* 需求4: 建议仓位置于标的名称后方 */}
-                        <PositionChip position={l.position} size={10} />
-                      </div>
-                      <div className="truncate text-[10px] text-[#a8987e]">
-                        {highlight(`${l.code} · ${l.board} · ${l.seal}`)}
-                      </div>
-                      {/* 需求3: 来源标注 */}
-                      <SourceTag sourceRef={l.sourceRef} skill={l.skill} tactic={l.tactic} size={9} />
-                    </div>
-                    {l.note && <span className="max-w-[38%] shrink-0 truncate text-[10px] text-[#d4943a]">{highlight(l.note)}</span>}
-                  </div>
-                ))}
-              </div>
+            {/* 今日龙头核心(左) / 龙头低吸(右): 左右两栏, 排版与数据展示完全一致 */}
+            <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-2">
+              <LeaderCoreCard
+                title="今日龙头核心"
+                icon={<Crown size={12} />}
+                accent="#4a6b3f"
+                data={r.leaderCore}
+                highlight={highlight}
+                showSrc={showSrc}
+                onToggleSrc={() => setShowSrc((v) => !v)}
+                sources={sources}
+              />
+              <LeaderCoreCard
+                title="龙头低吸"
+                icon={<Crosshair size={12} />}
+                accent="#d4943a"
+                data={r.leaderLowAbsorb}
+                highlight={highlight}
+                stripOpportunity
+              />
             </div>
 
             {/* 今日情绪周期 (70%) + 操作建议 */}
@@ -747,7 +870,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
               <button
                 type="button"
                 onClick={() => toggleFloat("opportunities")}
-                title="点击弹出「今日机会」独立小窗(可同时与今日风险/自选股并存)"
+                title="点击弹出「今日机会」独立小窗(可与今日风险并存)"
                 className="mb-1 flex w-full items-center gap-1 border-b border-[#c9b99a]/50 pb-1 text-left transition-colors hover:bg-[#faf6ee]/60"
                 style={{ color: "#b8533a" }}
               >
@@ -781,7 +904,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
               <button
                 type="button"
                 onClick={() => toggleFloat("risks")}
-                title="点击弹出「今日风险」独立小窗(可同时与今日机会/自选股并存)"
+                title="点击弹出「今日风险」独立小窗(可与今日机会并存)"
                 className="mb-1 flex w-full items-center gap-1 border-b border-[#c9b99a]/50 pb-1 text-left transition-colors hover:bg-[#faf6ee]/60"
                 style={{ color: "#b8533a" }}
               >
@@ -811,6 +934,67 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* ===== 昨日连板梯队 · 今日实盘对照验证(第 5 模块, 双日对照) ===== */}
+          <div className="rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 p-1">
+            <div
+              className="mb-0.5 flex items-center gap-1 border-b border-[#c9b99a]/50 pb-0.5"
+              style={{ color: "#4a6b3f" }}
+            >
+              <History size={12} />
+              <span className="text-[12px] font-bold font-newspaper-heading">昨日连板梯队 · 今日实盘对照验证</span>
+            </div>
+            {r.marketValidation ? (
+              <div className="flex flex-col gap-0.5">
+                {r.marketValidation.yesterdaySummary && (
+                  <p className="text-[11px] leading-snug text-[#8b7a5e]">
+                    <span className="font-bold text-[#6b5b3e]">昨日梯队复盘摘要：</span>
+                    {highlight(r.marketValidation.yesterdaySummary)}
+                  </p>
+                )}
+                {r.marketValidation.todayPerformance && (
+                  <p className="text-[11px] leading-snug text-[#8b7a5e]">
+                    <span className="font-bold text-[#6b5b3e]">今日实盘表现：</span>
+                    {highlight(r.marketValidation.todayPerformance)}
+                  </p>
+                )}
+                {r.marketValidation.comparison && (
+                  <p className="text-[11px] leading-snug text-[#8b7a5e]">
+                    <span className="font-bold text-[#6b5b3e]">双日对照：</span>
+                    {highlight(r.marketValidation.comparison)}
+                  </p>
+                )}
+                {(r.marketValidation.conclusionCheck || []).length > 0 && (
+                  <div className="mt-0.5 flex flex-col gap-0.5">
+                    {(r.marketValidation.conclusionCheck || []).map((c, i) => (
+                      <div
+                        key={i}
+                        className="flex flex-col gap-0.5 rounded border border-[#e0d5c0]/70 bg-[#faf6ee]/60 px-1.5 py-1"
+                      >
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span
+                            className="shrink-0 rounded px-1 py-px text-[11px] font-bold text-white"
+                            style={{ backgroundColor: RESULT_COLOR[c.result] || "#d4943a" }}
+                          >
+                            {c.result || "—"}
+                          </span>
+                          <span className="text-[12px] font-bold text-[#6b5b3e]">{c.conclusion}</span>
+                        </div>
+                        {c.verification && (
+                          <p className="text-[11px] leading-snug text-[#8b7a5e]">今日验证：{highlight(c.verification)}</p>
+                        )}
+                        {c.reason && (
+                          <p className="text-[11px] leading-snug text-[#d4943a]">原因：{highlight(c.reason)}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#a8987e]">暂无双日对照验证数据。</p>
+            )}
           </div>
         </div>
       )}

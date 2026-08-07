@@ -42,99 +42,98 @@ function fmtTurnover(v: number) {
   return v + "";
 }
 
-/* ========== 卡片1: 市场情绪评分 (圆形仪表盘) ========== */
+/* ========== 卡片1: 市场情绪评分 (圆形仪表盘, 紧凑) ========== */
 function SentimentScoreCard({ score, level, desc }: { score: number; level: string; desc: string }) {
   const color = score >= 75 ? COLORS.red : score >= 60 ? COLORS.orange : score >= 45 ? COLORS.beige : score >= 30 ? COLORS.green : "#4a6b3f";
   const bgTag = score >= 75 ? "bg-[#b8533a]/15 text-[#b8533a]" : score >= 60 ? "bg-[#d4943a]/15 text-[#d4943a]" : score >= 45 ? "bg-[#a8987e]/15 text-[#a8987e]" : score >= 30 ? "bg-[#4a6b3f]/15 text-[#4a6b3f]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
-  // 圆弧参数
-  const r = 28, cx = 36, cy = 36, circumference = 2 * Math.PI * r;
+  // 圆弧参数(紧凑: 44px 仪表)
+  const r = 17, cx = 22, cy = 22, circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - score / 100);
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">市场情绪评分</div>
-      <div className="flex items-center gap-3">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      <div className="mb-0.5 truncate text-[10px] font-semibold text-[#8b7a5e]">市场情绪评分</div>
+      <div className="flex min-h-0 flex-1 items-center gap-1.5">
         {/* SVG 圆形仪表 */}
-        <svg width={72} height={72} viewBox="0 0 72 72" className="shrink-0">
-          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e0d5c0" strokeWidth={6} />
-          <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={6}
+        <svg width={44} height={44} viewBox="0 0 44 44" className="shrink-0">
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e0d5c0" strokeWidth={4} />
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={4}
             strokeDasharray={circumference} strokeDashoffset={offset}
             strokeLinecap="round" transform={`rotate(-90 ${cx} ${cy})`}
             style={{ transition: "stroke-dashoffset 0.6s ease" }} />
-          <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight="bold" fill={color} style={{ fontVariantNumeric: "tabular-nums" }}>
+          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize={13} fontWeight="bold" fill={color} style={{ fontVariantNumeric: "tabular-nums" }}>
             {score}
           </text>
-          <text x={cx} y={cy + 12} textAnchor="middle" fontSize={8} fill="#a8987e">/100</text>
         </svg>
         <div className="min-w-0 flex-1">
-          <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${bgTag}`}>{level}</span>
-          <div className="mt-1 text-[12px] leading-relaxed text-[#8b7a5e]">{desc}</div>
+          <span className={`inline-block max-w-full truncate rounded px-1 py-px text-[10px] font-medium ${bgTag}`}>{level}</span>
+          <div className="mt-0.5 truncate text-[10px] leading-tight text-[#8b7a5e]" title={desc}>{desc}</div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ========== 卡片2: 涨跌统计 ========== */
+/* ========== 卡片2: 涨跌统计 (紧凑) ========== */
 function UpDownCard({ upCount, downCount, upRatio, downRatio, total }: { upCount: number; downCount: number; upRatio: number; downRatio: number; total: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨跌统计</div>
-      <div className="flex items-center justify-around py-1">
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{fmt(upCount)}</div>
-          <div className="text-[12px] text-[#a8987e]">上涨</div>
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      <div className="mb-0.5 truncate text-[10px] font-semibold text-[#8b7a5e]">涨跌统计</div>
+      <div className="flex min-h-0 flex-1 items-center gap-1">
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#b8533a]" style={TNUM}>{fmt(upCount)}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">上涨</div>
         </div>
-        <div className="text-[20px] text-[#d4c5a8]">/</div>
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{fmt(downCount)}</div>
-          <div className="text-[12px] text-[#a8987e]">下跌</div>
+        <div className="text-[13px] leading-none text-[#d4c5a8]">/</div>
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#4a6b3f]" style={TNUM}>{fmt(downCount)}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">下跌</div>
         </div>
       </div>
-      {/* 涨跌比例条 */}
-      <div className="mb-1 flex h-3 overflow-hidden rounded-full bg-[#e0d5c0]">
+      {/* 涨跌比例条(紧凑) */}
+      <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-[#e0d5c0]">
         <div className="h-full rounded-l-full bg-[#b8533a]" style={{ width: `${upRatio}%` }} />
         <div className="h-full rounded-r-full bg-[#4a6b3f]" style={{ flex: 1 }} />
       </div>
-      <div className="flex items-center justify-between text-[12px] text-[#a8987e]">
-        <span>涨 {upRatio.toFixed(1)}%</span>
-        <span>总 {fmt(total)}</span>
-        <span>跌 {downRatio.toFixed(1)}%</span>
+      <div className="mt-0.5 flex items-center justify-between text-[9px] leading-none text-[#a8987e]">
+        <span>{upRatio.toFixed(1)}%</span>
+        <span>总{fmt(total)}</span>
+        <span>{downRatio.toFixed(1)}%</span>
       </div>
     </div>
   );
 }
 
-/* ========== 卡片3: 涨停跌停对比 ========== */
+/* ========== 卡片3: 涨停跌停对比 (紧凑) ========== */
 function LimitUpDownCard({ limitUp, limitDown, blownUp, blownRate }: { limitUp: number; limitDown: number; blownUp: number; blownRate: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停跌停</div>
-      <div className="flex items-center justify-around py-1">
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#b8533a]" style={TNUM}>{limitUp}</div>
-          <div className="text-[12px] text-[#a8987e]">涨停</div>
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      <div className="mb-0.5 truncate text-[10px] font-semibold text-[#8b7a5e]">涨停跌停</div>
+      <div className="flex min-h-0 flex-1 items-center justify-around gap-0.5">
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#b8533a]" style={TNUM}>{limitUp}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">涨停</div>
         </div>
-        <div className="text-[20px] text-[#d4c5a8]">/</div>
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#4a6b3f]" style={TNUM}>{limitDown}</div>
-          <div className="text-[12px] text-[#a8987e]">跌停</div>
-        </div>
-        <div className="w-px self-stretch bg-[#e0d5c0]" />
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#d4943a]" style={TNUM}>{blownUp}</div>
-          <div className="text-[12px] text-[#a8987e]">炸板</div>
+        <div className="text-[13px] leading-none text-[#d4c5a8]">/</div>
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#4a6b3f]" style={TNUM}>{limitDown}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">跌停</div>
         </div>
         <div className="w-px self-stretch bg-[#e0d5c0]" />
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{blownRate.toFixed(1)}%</div>
-          <div className="text-[12px] text-[#a8987e]">炸板率</div>
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#d4943a]" style={TNUM}>{blownUp}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">炸板</div>
+        </div>
+        <div className="w-px self-stretch bg-[#e0d5c0]" />
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#6b5b3e]" style={TNUM}>{blownRate.toFixed(1)}%</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">炸板率</div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ========== 卡片4: 连板梯队(api/market/limit-up-ladder) ========== */
+/* ========== 卡片4: 连板梯队(api/market/limit-up-ladder, 紧凑) ========== */
 function LadderCard({ ladder }: { ladder: LadderData }) {
   const [open, setOpen] = useState(false);
   const hasData = ladder.firstBoard + ladder.secondBoard + ladder.thirdBoard + ladder.highBoard > 0;
@@ -145,37 +144,37 @@ function LadderCard({ ladder }: { ladder: LadderData }) {
     { label: "高度板", v: ladder.highBoard, color: COLORS.green },
   ];
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
       <button
         type="button"
         onClick={() => setOpen(true)}
         className="flex w-full cursor-pointer items-center justify-between"
         title="点击查看连板梯队明细"
       >
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">连板梯队</span>
+        <span className="truncate text-[10px] font-semibold text-[#8b7a5e]">连板梯队</span>
         {hasData && (
-          <span className="rounded bg-[#d4943a]/15 px-1.5 py-0.5 text-[11px] font-medium text-[#b07a2a]" style={TNUM}>
-            连板率 {ladder.ladderRate.toFixed(1)}%
+          <span className="shrink-0 rounded bg-[#d4943a]/15 px-1 py-px text-[9px] font-medium text-[#b07a2a]" style={TNUM}>
+            {ladder.ladderRate.toFixed(1)}%
           </span>
         )}
       </button>
       {hasData ? (
         <>
-          <div className="flex items-center justify-around py-1">
+          <div className="flex min-h-0 flex-1 items-center justify-around gap-0.5">
             {boards.map((b) => (
-              <div key={b.label} className="text-center">
-                <div className="text-[18px] font-bold" style={{ color: b.color, fontVariantNumeric: "tabular-nums" }}>{b.v}</div>
-                <div className="text-[11px] text-[#a8987e]">{b.label}</div>
+              <div key={b.label} className="flex min-w-0 flex-col items-center">
+                <div className="text-[14px] font-bold leading-none" style={{ color: b.color, fontVariantNumeric: "tabular-nums" }}>{b.v}</div>
+                <div className="text-[9px] leading-tight text-[#a8987e]">{b.label}</div>
               </div>
             ))}
           </div>
-          <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#a8987e]" style={TNUM}>
+          <div className="mt-0.5 flex items-center justify-between text-[9px] leading-none text-[#a8987e]" style={TNUM}>
             <span>{ladder.date ? ladder.date.slice(5) : "—"}</span>
-            <span>破板率 {ladder.brokenRate.toFixed(1)}%</span>
+            <span>破板 {ladder.brokenRate.toFixed(1)}%</span>
           </div>
         </>
       ) : (
-        <div className="flex flex-1 items-center justify-center text-[12px] text-[#a8987e]">暂无数据</div>
+        <div className="flex min-h-0 flex-1 items-center justify-center text-[11px] text-[#a8987e]">暂无数据</div>
       )}
       <LadderModal open={open} onClose={() => setOpen(false)} ladder={ladder} />
     </div>
@@ -363,56 +362,48 @@ function LadderModal({ open, onClose, ladder }: {
   );
 }
 
-/* ========== 卡片5: 量能分析 ========== */
+/* ========== 卡片5: 量能分析 (紧凑) ========== */
 function VolumeCard({ turnover, prevTurnover, ratio, change, level }: { turnover: number; prevTurnover: number; ratio: number; change: number; level: string }) {
   const tagCls = change >= 20 ? "bg-[#b8533a]/15 text-[#b8533a]" : change >= 5 ? "bg-[#d4943a]/15 text-[#d4943a]" : change >= -5 ? "bg-[#a8987e]/15 text-[#a8987e]" : "bg-[#4a6b3f]/15 text-[#4a6b3f]";
-  // 提示灯条：正涨(红)负跌(绿)，绝对值越大颜色越深
-  const intensity = Math.min(Math.abs(change) / 40, 1); // 0~1
-  const lampOpacity = 0.20 + intensity * 0.65; // 透明度 0.20~0.85
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">量能分析</span>
-        <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${tagCls}`}>{level}</span>
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      <div className="mb-0.5 flex items-center justify-between">
+        <span className="truncate text-[10px] font-semibold text-[#8b7a5e]">量能分析</span>
+        <span className={`shrink-0 rounded px-1 py-px text-[10px] font-medium leading-none ${tagCls}`}>{level}</span>
       </div>
-      <div className="flex items-baseline justify-between">
-        <span className="text-[20px] font-bold text-[#6b5b3e]" style={TNUM}>{fmtTurnover(turnover)}</span>
-        <span className="text-[12px] text-[#a8987e]">流通量</span>
+      <div className="flex min-h-0 flex-1 flex-col justify-center">
+        <div className="flex items-baseline gap-1">
+          <span className="text-[15px] font-bold leading-none text-[#6b5b3e]" style={TNUM}>{fmtTurnover(turnover)}</span>
+          <span className="text-[9px] leading-none text-[#a8987e]">流通</span>
+        </div>
+        <div className="mt-0.5 truncate text-[9px] leading-none text-[#a8987e]">
+          前日{fmtTurnover(prevTurnover)} <span className={`font-medium ${clsChg(change)}`} style={TNUM}>{change >= 0 ? "+" : ""}{change.toFixed(1)}%</span>
+        </div>
+        <div className="mt-0.5 text-[9px] leading-none text-[#a8987e]">量比 <span className="font-medium text-[#6b5b3e]" style={TNUM}>{ratio.toFixed(2)}x</span></div>
       </div>
-      <div className="mt-1 flex items-center gap-2 text-[12px] text-[#a8987e]">
-        <span>前日 {fmtTurnover(prevTurnover)}</span>
-        <span className={`font-medium ${clsChg(change)}`} style={TNUM}>{change >= 0 ? "+" : ""}{change.toFixed(1)}%</span>
-      </div>
-      {/* 提示灯条：居中，颜色深浅反映量能变化幅度 */}
-      <div className="mt-1.5 h-2 w-3/4 overflow-hidden rounded-full transition-all mx-auto"
-        style={{ backgroundColor: `rgba(0,0,0,0.06)` }}>
-        <div className="h-full w-full rounded-full transition-all duration-500"
-          style={{ backgroundColor: `rgba(${change > 0 ? "184,83,58" : change < 0 ? "74,107,63" : "160,150,130"},${lampOpacity})` }} />
-      </div>
-      <div className="mt-1 text-[12px] text-[#a8987e]">量比 <span className="font-medium text-[#6b5b3e]" style={TNUM}>{ratio.toFixed(2)}x</span></div>
     </div>
   );
 }
 
-/* ========== 卡片6: 涨停表现 ========== */
+/* ========== 卡片6: 涨停表现 (紧凑) ========== */
 function LimitPerfCard({ yestPerf, yestBroken, brokenUp }: { yestPerf: number; yestBroken: number; brokenUp: number }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-1.5">
-      <div className="mb-1 text-[11px] font-semibold text-[#8b7a5e]">涨停表现</div>
-      <div className="flex items-center justify-around py-1">
-        <div className="text-center">
-          <div className={`text-[20px] font-bold ${clsChg(yestPerf)}`} style={TNUM}>{fmtPct(yestPerf)}</div>
-          <div className="text-[12px] text-[#a8987e]">昨涨停表现</div>
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      <div className="mb-0.5 truncate text-[10px] font-semibold text-[#8b7a5e]">涨停表现</div>
+      <div className="flex min-h-0 flex-1 items-center justify-around gap-0.5">
+        <div className="flex min-w-0 flex-col items-center">
+          <div className={`text-[15px] font-bold leading-none ${clsChg(yestPerf)}`} style={TNUM}>{fmtPct(yestPerf)}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">昨涨停</div>
         </div>
         <div className="w-px self-stretch bg-[#e0d5c0]" />
-        <div className="text-center">
-          <div className={`text-[20px] font-bold ${clsChg(yestBroken)}`} style={TNUM}>{fmtPct(yestBroken)}</div>
-          <div className="text-[12px] text-[#a8987e]">昨破板表现</div>
+        <div className="flex min-w-0 flex-col items-center">
+          <div className={`text-[15px] font-bold leading-none ${clsChg(yestBroken)}`} style={TNUM}>{fmtPct(yestBroken)}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">昨破板</div>
         </div>
         <div className="w-px self-stretch bg-[#e0d5c0]" />
-        <div className="text-center">
-          <div className="text-[20px] font-bold text-[#d4943a]" style={TNUM}>{brokenUp}</div>
-          <div className="text-[12px] text-[#a8987e]">破板数</div>
+        <div className="flex min-w-0 flex-col items-center">
+          <div className="text-[15px] font-bold leading-none text-[#d4943a]" style={TNUM}>{brokenUp}</div>
+          <div className="text-[9px] leading-tight text-[#a8987e]">破板数</div>
         </div>
       </div>
     </div>
@@ -502,39 +493,36 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
   const handleMouseLeave = () => setHoverIdx(null);
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-3 py-2.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8b7a5e]">涨停跌停趋势 (近{reversed.length}天)</span>
-        <div className="flex items-center gap-2 text-[11px]">
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#b8533a]" />涨停</span>
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#4a6b3f]" />跌停</span>
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#d4943a]" />炸板</span>
-        </div>
-      </div>
-      {/* 查看天数控制 */}
-      <div className="mb-1 flex items-center gap-1.5 text-[10px] text-[#8b7a5e]">
-        <span>查看</span>
-        {[7, 15, 30].filter(n => n < maxDays).map(n => (
-          <button key={n} onClick={() => { setViewDays(n); setDaysInput(String(n)); }}
-            className={`rounded px-1.5 py-0.5 transition-colors ${viewDays === n ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
-            {n}天
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded border border-[#e0d5c0] bg-[#f5f0e6]/40 px-1.5 py-1">
+      {/* 标题 + 图例 + 天数控制(单行紧凑) */}
+      <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="truncate text-[10px] font-semibold text-[#8b7a5e]">涨停跌停趋势({reversed.length}天)</span>
+        <span className="flex items-center gap-1 text-[9px] text-[#a8987e]"><span className="h-1.5 w-2 rounded-sm bg-[#b8533a]" />涨</span>
+        <span className="flex items-center gap-1 text-[9px] text-[#a8987e]"><span className="h-1.5 w-2 rounded-sm bg-[#4a6b3f]" />跌</span>
+        <span className="flex items-center gap-1 text-[9px] text-[#a8987e]"><span className="h-1.5 w-2 rounded-sm bg-[#d4943a]" />炸</span>
+        <div className="ml-auto flex items-center gap-1 text-[9px] text-[#8b7a5e]">
+          {[7, 15, 30].filter(n => n < maxDays).map(n => (
+            <button key={n} onClick={() => { setViewDays(n); setDaysInput(String(n)); }}
+              className={`rounded px-1 py-px leading-none transition-colors ${viewDays === n ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
+              {n}
+            </button>
+          ))}
+          <button onClick={() => { setViewDays(maxDays); setDaysInput(String(maxDays)); }}
+            className={`rounded px-1 py-px leading-none transition-colors ${viewDays === maxDays ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
+            全部
           </button>
-        ))}
-        <button onClick={() => { setViewDays(maxDays); setDaysInput(String(maxDays)); }}
-          className={`rounded px-1.5 py-0.5 transition-colors ${viewDays === maxDays ? "bg-[#d4943a] text-white" : "bg-[#e0d5c0] hover:bg-[#d4c5a8]"}`}>
-          全部
-        </button>
-        <input type="number" min={2} max={maxDays} value={daysInput}
-          onChange={e => {
-            const v = e.target.value;
-            setDaysInput(v);
-            if (v === "") return; // 允许空值, 便于输入
-            const n = Number(v);
-            if (!isNaN(n) && n >= 2) setViewDays(Math.min(maxDays, n));
-          }}
-          onBlur={() => { if (daysInput === "") setDaysInput(String(viewDays)); }} // 失焦时若为空则回填当前值
-          className="w-12 rounded border border-[#d4c5a8] bg-[#f5f0e6] px-1 py-0.5 text-center text-[10px] text-[#6b5b3e] outline-none focus:border-[#a8987e]" />
-        <span>天</span>
+          <input type="number" min={2} max={maxDays} value={daysInput}
+            onChange={e => {
+              const v = e.target.value;
+              setDaysInput(v);
+              if (v === "") return; // 允许空值, 便于输入
+              const n = Number(v);
+              if (!isNaN(n) && n >= 2) setViewDays(Math.min(maxDays, n));
+            }}
+            onBlur={() => { if (daysInput === "") setDaysInput(String(viewDays)); }}
+            className="w-9 rounded border border-[#d4c5a8] bg-[#f5f0e6] px-0.5 py-px text-center text-[9px] text-[#6b5b3e] outline-none focus:border-[#a8987e]" />
+          <span>天</span>
+        </div>
       </div>
       <div className="relative min-h-0 w-full flex-1">
         <svg ref={svgRef} viewBox={`0 0 ${w} ${h}`} className="h-full w-full" preserveAspectRatio="none"
@@ -560,12 +548,20 @@ function TrendChart({ data }: { data: PluginMarketSentimentData["riseFall"]["tre
         {/* Y轴单位 (HTML, 正常比例) */}
         <span className="absolute text-[8px] leading-none text-[#a8987e]" style={{ left: px(pad.left - 4), top: py(pad.top - 2), transform: "translate(-100%, -100%)" }}>家</span>
 
-        {/* 日期标签 (HTML, 正常比例) */}
+        {/* 日期标签 (HTML, 正常比例): 首尾标签右/左对齐避免超出容器被裁剪 */}
         {reversed.map((d, i) => {
           if (i % Math.max(1, Math.floor(reversed.length / 5)) !== 0 && i !== reversed.length - 1) return null;
           const dateStr = d.date?.slice(5) || "";
+          const isFirst = i === 0;
+          const isLast = i === reversed.length - 1;
+          const left = isFirst
+            ? px(pad.left)
+            : isLast
+              ? px(pad.left + i * stepX)
+              : px(pad.left + i * stepX);
+          const translate = isFirst ? "translate(0%, 0%)" : isLast ? "translate(-100%, 0%)" : "translate(-50%, 0%)";
           return (
-            <span key={i} className="absolute whitespace-nowrap text-[8px] leading-none text-[#a8987e]" style={{ left: px(pad.left + i * stepX), top: py(h - 3), transform: "translate(-50%, 0%)" }}>
+            <span key={i} className="absolute whitespace-nowrap text-[8px] leading-none text-[#a8987e]" style={{ left, top: py(h - 3), transform: translate }}>
               {dateStr}
             </span>
           );
@@ -605,7 +601,7 @@ function ScrollSentinel({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        className="scroll-sentinel flex flex-col gap-2 overflow-y-auto"
+        className="scroll-sentinel flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
         style={{ scrollbarWidth: "thin", scrollbarColor: "#d4c5a8 transparent" }}
       >
         {children}
@@ -714,28 +710,19 @@ export function MarketSentimentPanel({ className = "", ...zoomProps }: { classNa
               const { mood, sentiment: si, ladder: ladderData, riseFall } = effective;
               return (
                 <>
-                  <div className="flex gap-2">
-                    {/* 左列: 6个小卡片 (固定49%宽, 为折线图让出更多宽度) */}
-                    <div className="flex w-[49%] shrink-0 flex-col gap-2">
-                      {/* 第一行: 情绪评分 + 涨跌统计 + 涨停跌停 */}
-                      <div className="flex shrink-0 gap-2">
-                        <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
-                        <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
-                        <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
+                  {/* 单行布局: 6 个小卡片 + 涨停跌停趋势图, 全部同一行且占满可用高度 */}
+                  <div className="flex min-h-0 flex-1 items-stretch gap-2">
+                    <SentimentScoreCard score={si.sentimentScore} level={si.sentimentLevel} desc={si.sentimentDesc} />
+                    <UpDownCard upCount={mood.upCount} downCount={mood.downCount} upRatio={mood.upRatio} downRatio={mood.downRatio} total={mood.totalCount} />
+                    <LimitUpDownCard limitUp={mood.limitUp} limitDown={mood.limitDown} blownUp={riseFall.blownLimitUpCount} blownRate={riseFall.blownLimitUpRate} />
+                    <LadderCard ladder={ladderData} />
+                    <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
+                    <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
+                    {riseFall.trendData.length >= 2 && (
+                      <div className="flex min-w-0 flex-[1.4]">
+                        <TrendChart data={riseFall.trendData} />
                       </div>
-
-                      {/* 第二行: 连板梯队 + 量能分析 + 涨停表现 */}
-                      <div className="flex shrink-0 gap-2">
-                        <LadderCard ladder={ladderData} />
-                        <VolumeCard turnover={mood.turnover} prevTurnover={mood.prevTurnover} ratio={mood.ratio} change={mood.turnoverChange} level={mood.volLevel} />
-                        <LimitPerfCard yestPerf={riseFall.yesterdayLimitUpPerf} yestBroken={riseFall.yesterdayBrokenPerf} brokenUp={riseFall.brokenLimitUpCount} />
-                      </div>
-                    </div>
-
-                    {/* 右列: 折线图占满右侧, 竖跨两行高度 */}
-                    <div className="flex min-w-0 flex-1">
-                      {riseFall.trendData.length >= 2 && <TrendChart data={riseFall.trendData} />}
-                    </div>
+                    )}
                   </div>
                 </>
               );

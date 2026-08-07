@@ -8,7 +8,6 @@ import { SectorPanel } from "@/components/dash/SectorPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
 import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
-import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
 import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import PhiliaPage from "@/components/dash/PhiliaPage";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
@@ -57,26 +56,28 @@ function Tape() {
 
 const PANEL_ROWS: PanelRowDef[] = [
   {
-    defaultH: 0.34,
+    defaultH: 0.36,
     panels: [
       { id: "index", component: IndexPanel, defaultW: 0.2222, mobileH: "h-[280px]", colStart: 1 },
-      // 中央大型整体模块: 移除「商品·美债」后, philia 跨第一、二行(rowSpan=2)向上延展占据其中央位置
-      { id: "philia", component: PhiliaPanel, defaultW: 0.4889, mobileH: "h-[560px]", colStart: 2, rowSpan: 2 },
-      { id: "news", component: NewsPanel, defaultW: 0.2889, mobileH: "h-[280px]", colStart: 3 },
+      // 中央大型整体模块: 自选股移除后, philia 跨第一、二行(rowSpan=2)并吸收新闻 60% 宽度腾出的空间(0.4889→0.6045)
+      { id: "philia", component: PhiliaPanel, defaultW: 0.6045, mobileH: "h-[560px]", colStart: 2, rowSpan: 2 },
+      // 实时热点新闻·7×24 快讯: 宽度缩减至 60%(0.2889→0.1733)
+      { id: "news", component: NewsPanel, defaultW: 0.1733, mobileH: "h-[280px]", colStart: 3 },
     ],
   },
   {
-    defaultH: 0.38,
+    defaultH: 0.42,
     panels: [
       { id: "boardFlow", component: BoardFlowPanel, defaultW: 0.2222, mobileH: "h-[340px]", colStart: 1 },
-      { id: "sector", component: SectorPanel, defaultW: 0.2889, mobileH: "h-[340px]", colStart: 3 },
+      // 市场板块实时热点: 宽度缩减至 60%(0.2889→0.1733)
+      { id: "sector", component: SectorPanel, defaultW: 0.1733, mobileH: "h-[340px]", colStart: 3 },
     ],
   },
   {
-    defaultH: 0.28,
+    defaultH: 0.22,
     panels: [
-      { id: "watchlist", component: WatchlistPanel, defaultW: 0.2222, mobileH: "h-[400px]", colStart: 1 },
-      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 0.7778, mobileH: "h-[560px]", colStart: 2, colSpan: 2 },
+      // 自选股已移除, 市场情绪独占整行(宽度 1.0), 在保持功能完整性的前提下降低 UI 高度占用(0.28→0.22)
+      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 1, mobileH: "h-[560px]", colStart: 1, colSpan: 3 },
     ],
   },
 ];

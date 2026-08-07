@@ -130,13 +130,98 @@ function todayCompact() {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** 抓取涨停/炸板/跌停池: kind ∈ {ZTPool, ZBPool, DTPool} */
-async function fetchTopicPool(kind) {
-  const url = `https://push2ex.eastmoney.com/getTopic${kind}?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${todayCompact()}`;
-  const j = await emGet(url).catch((e) => { console.error(`[philia] fetchTopicPool ${kind} failed:`, e.message); return null; });
+/** 上一交易日 YYYYMMDD(跳过周末; 周一→上周五, 周日→上周五) */
+function yesterdayCompact() {
+  const d = new Date();
+  let off = -1;
+  const w = d.getDay();
+  if (w === 1) off = -3; else if (w === 0) off = -2;
+  d.setDate(d.getDate() + off);
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 抓取涨停/炸板/跌停池: kind ∈ {ZTPool, ZBPool, DTPool}; date 默认当日, 可传历史日期获取昨日快照 */
+async function fetchTopicPool(kind, date = todayCompact()) {
+  const url = `https://push2ex.eastmoney.com/getTopic${kind}?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${date}`;
+  const j = await emGet(url).catch((e) => { console.error(`[philia] fetchTopicPool ${kind}(${date}) failed:`, e.message); return null; });
   if (!j || !j.data) return null;
   const pool = Array.isArray(j.data.pool) ? j.data.pool : [];
   return { count: typeof j.data.tc === "number" ? j.data.tc : pool.length, pool };
+}
+
+/** 由昨日涨停池构建「昨日连板梯队」(含个股名单, 按连板高度降序) */
+function yestLadderFromPool(pool, date) {
+  const counts = new Map();
+  for (const s of pool || []) {
+    const l = s.lbc || s.zttj?.days || 1;
+    counts.set(l, (counts.get(l) || 0) + 1);
+  }
+  const get = (n) => counts.get(n) || 0;
+  const total = (pool || []).length || 1;
+  const highBoard = [...counts.entries()].reduce((a, b) => (a > b[0] ? a : b[0]), 1);
+  return {
+    date,
+    firstBoard: get(1),
+    secondBoard: get(2),
+    thirdBoard: get(3),
+    highBoard: get(highBoard),
+    最高连板: highBoard,
+    ladderRate: Math.round(((total - get(1)) / total) * 1000) / 10,
+    comment: `昨日最高${highBoard}连板, 昨日涨停${total}家, 昨日连板股${total - get(1)}只`,
+    stocks: (pool || [])
+      .map((s) => ({ code: s.c, name: s.n, ladder: s.lbc || s.zttj?.days || 1, board: s.hybk || "—" }))
+      .sort((a, b) => b.ladder - a.ladder),
+  };
+}
+
+/** 昨日梯队个股今日实盘对照: 用今日三池(涨停/炸板/跌停)交叉判定每只昨日涨停股的今日状态 */
+function matchYesterdayLadder(yestPool, ztPool, zbPool, dtPool) {
+  const ztMap = new Map((ztPool || []).map((s) => [s.c, s]));
+  const zbSet = new Set((zbPool || []).map((s) => s.c));
+  const dtSet = new Set((dtPool || []).map((s) => s.c));
+  const rows = [];
+  for (const s of yestPool || []) {
+    const yLadder = s.lbc || s.zttj?.days || 1;
+    const today = ztMap.get(s.c);
+    let status;
+    let todayLadder = null;
+    if (today) {
+      todayLadder = today.lbc || today.zttj?.days || 1;
+      status = todayLadder > yLadder ? "晋级" : todayLadder === yLadder ? "维持" : "断板";
+    } else if (dtSet.has(s.c)) status = "跌停";
+    else if (zbSet.has(s.c)) status = "炸板";
+    else status = "断板";
+    rows.push({ code: s.c, name: s.n, yLadder, todayLadder, status, board: s.hybk || "—" });
+  }
+  const stats = { 晋级: 0, 维持: 0, 断板: 0, 跌停: 0, 炸板: 0 };
+  rows.forEach((r) => { stats[r.status] = (stats[r.status] || 0) + 1; });
+  return { rows, stats };
+}
+
+/** 龙头低吸候选池: 从昨日连板梯队中筛选「表现亮眼(昨日连板≥2) 且 今日未涨停(断板/炸板/跌停)」的个股 */
+function buildLowAbsorbPool(yestPool, yesterdayMatch) {
+  if (!Array.isArray(yestPool) || !yesterdayMatch || !Array.isArray(yesterdayMatch.rows)) return [];
+  const byCode = new Map((yesterdayMatch.rows || []).map((r) => [r.code, r]));
+  const list = [];
+  for (const s of yestPool) {
+    const r = byCode.get(s.c);
+    if (!r) continue;
+    // 条件1: 昨日连板≥2(表现亮眼/龙头梯队成员)
+    if ((r.yLadder || 1) < 2) continue;
+    // 条件2: 今日未处于涨停状态(晋级/维持=今日仍涨停, 排除)
+    if (r.status === "晋级" || r.status === "维持") continue;
+    list.push({
+      code: s.c,
+      name: s.n,
+      board: s.hybk || r.board || "—",
+      yLadder: r.yLadder || 1,
+      todayStatus: r.status || "断板",   // 今日状态: 断板/炸板/跌停
+      todayLadder: r.todayLadder,
+      yestSeal: s.fund ? `${((s.fund || 0) / 1e8).toFixed(2)}亿` : "—", // 昨日封单(判断分歧/一致)
+    });
+  }
+  // 按昨日连板高度降序, 相同高度按昨日封单降序
+  return list.sort((a, b) => b.yLadder - a.yLadder || (b.yestSeal === "—" ? -1 : 1));
 }
 
 /** 全市场涨跌家数(按上证+深证指数聚合 f104/f105/f106) */
@@ -332,10 +417,12 @@ function resolveSkillSource(skill, tactic) {
  * 该内容在 Prompt 中作为「次要参考」注入, 优先级严格低于 youzi-qijie-jinghua。
  */
 // 仅保留以下客观数据章节(以 `## ` 二级标题识别), 其余(分析维度/输出原则等主观研判)一律剔除
+// 注: 「一·补3、昨日连板梯队复盘与今日实盘对照验证」为双日对照验证的标准流程(客观数据方法), 一并保留
 const LUOTOU_KEEP_HEADERS = [
   "一、数据来源",
   "一·补、数据采集完整性要求",
   "一·补2、数据提取要点",
+  "一·补3、昨日连板梯队复盘与今日实盘对照验证",
 ];
 // 主观/情绪/结论性词汇(命中即整行过滤)
 const LUOTOU_SUBJECTIVE_RE =
@@ -461,17 +548,20 @@ async function assembleContext(tracer) {
     return contextCache.data;
   }
   const today = dashToday();
-  // 并行抓取 4 路网页数据源, 任一失败不影响整体(Promise.allSettled)
+  const yestCompact = yesterdayCompact(); // 上一交易日 YYYYMMDD(双日对照用)
+  // 并行抓取 5 路网页数据源(含昨日涨停池用于双日对照), 任一失败不影响整体(Promise.allSettled)
   const results = await Promise.allSettled([
-    fetchTopicPool("ZTPool"),   // 涨停池
-    fetchTopicPool("ZBPool"),   // 炸板池
-    fetchTopicPool("DTPool"),   // 跌停池
-    fetchBreadth(),             // 全市场涨跌家数
+    fetchTopicPool("ZTPool"),            // 今日涨停池
+    fetchTopicPool("ZBPool"),            // 今日炸板池
+    fetchTopicPool("DTPool"),            // 今日跌停池
+    fetchBreadth(),                      // 全市场涨跌家数
+    fetchTopicPool("ZTPool", yestCompact), // 昨日涨停池(双日对照验证数据源)
   ]);
   const zt = results[0].status === "fulfilled" ? results[0].value : null;
   const zb = results[1].status === "fulfilled" ? results[1].value : null;
   const dt = results[2].status === "fulfilled" ? results[2].value : null;
   const breadth = results[3].status === "fulfilled" ? results[3].value : null;
+  const yestZt = results[4].status === "fulfilled" ? results[4].value : null;
 
   // 记录 4 路网页数据源加载步骤(并行, 统一使用本次组装起点时间戳)
   const srcMeta = [
@@ -493,6 +583,28 @@ async function assembleContext(tracer) {
     startedAt: t0, durationMs: Date.now() - t0,
     params: { 范围: "上证 + 深证聚合" },
     summary: breadth ? `上涨${breadth.up} 下跌${breadth.down} 平${breadth.flat}` : "获取失败",
+  });
+  // 昨日涨停池(双日对照): 独立记录加载结果
+  const yestPool = yestZt?.pool || null;
+  const yesterdayLadder = yestPool ? yestLadderFromPool(yestPool, yestCompact) : null;
+  const yesterdayMatch = yestPool ? matchYesterdayLadder(yestPool, zt?.pool, zb?.pool, dt?.pool) : null;
+  // 龙头低吸候选池: 昨日连板≥2 且 今日未涨停(断板/炸板/跌停)的个股, 供「龙头低吸」模块分析
+  const lowAbsorbPool = yestPool ? buildLowAbsorbPool(yestPool, yesterdayMatch) : [];
+  tracer?.add({
+    type: "resource", name: "龙头低吸候选池(昨日梯队×今日未涨停)", status: yestPool ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 候选数量: lowAbsorbPool.length, 筛选条件: "昨日连板≥2 且 今日未涨停" },
+    summary: lowAbsorbPool.length
+      ? `筛选出 ${lowAbsorbPool.length} 只龙头低吸候选(含 ${lowAbsorbPool.filter((x) => x.todayStatus === "炸板").length} 只今日炸板)`
+      : "无满足条件候选(昨日数据缺失或全部涨停)",
+  });
+  tracer?.add({
+    type: "resource", name: "东方财富·昨日涨停池(双日对照)", status: yestPool ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { date: yestCompact, 池内数量: yestPool?.length ?? 0 },
+    summary: yesterdayLadder
+      ? `昨日最高${yesterdayLadder["最高连板"]}板, 昨日涨停${yestPool.length}家, 今日晋级${yesterdayMatch?.stats.晋级 ?? 0}只/断板${yesterdayMatch?.stats.断板 ?? 0}只`
+      : "获取失败(双日对照数据缺失, 如实标注)",
   });
 
   const ztCount = zt?.count ?? (zt?.pool ? zt.pool.length : 0);
@@ -541,6 +653,7 @@ async function assembleContext(tracer) {
   });
   if (trends.length) sources.push({ name: "本地情绪趋势", fetchedAt: fetchedMin });
   if (ladder.length) sources.push({ name: "本地连板梯队", fetchedAt: fetchedMin });
+  if (yestPool) sources.push({ name: `东方财富·昨日涨停池(${yestCompact})`, fetchedAt: fetchedMin });
 
   // 核心标的参考池(主板热点 → 龙头股): 由 index.cjs 注入的 getter 获取, 失败不影响整体分析
   let leaderPool = null;
@@ -569,6 +682,9 @@ async function assembleContext(tracer) {
     trends,       // 近 30 日情绪趋势
     ladder,       // 近 10 日连板梯队(本地库)
     leaderPool,   // 核心标的参考池(龙头股)
+    yesterdayLadder,  // 昨日连板梯队(双日对照)
+    yesterdayMatch,   // 昨日梯队个股今日实盘对照(双日对照)
+    lowAbsorbPool,    // 龙头低吸候选池(昨日连板≥2 且 今日未涨停)
     sources,      // 数据源清单(名称 + 获取时间)
   };
   contextCache = { ts: Date.now(), data: ctx };
@@ -608,6 +724,34 @@ function contextToText(ctx) {
   if (ctx.trends && ctx.trends.length) {
     const recent = ctx.trends.slice(-5).map((t) => `${t.date} 涨停${t.limitUp}/跌停${t.limitDown}/炸板率${t.blownRate}%`).join("；");
     lines.push(`[近5日情绪趋势] ${recent}`);
+  }
+  // 昨日连板梯队 + 今日实盘对照(双日对照验证): 供 LLM 验证昨日结论在今日市场的应对状况
+  if (ctx.yesterdayLadder) {
+    const y = ctx.yesterdayLadder;
+    lines.push(`[昨日连板梯队(${y.date})] 一板:${y.firstBoard} 二板:${y.secondBoard} 三板:${y.thirdBoard} 高度板:${y.highBoard} 最高连板:${y["最高连板"]}板 连板率:${y.ladderRate}% ${y.comment}`);
+    const topStocks = y.stocks.slice(0, 12);
+    if (topStocks.length) {
+      lines.push(`[昨日梯队个股TOP] ` + topStocks.map((s) => `${s.name}(${emSymbol(s.code)}) ${s.ladder}板 行业:${s.board || "—"}`).join("；"));
+    }
+  } else {
+    lines.push(`[昨日连板梯队] 昨日涨停池数据缺失, 无法进行双日对照, 请如实标注并跳过对照验证。`);
+  }
+  if (ctx.yesterdayMatch) {
+    const m = ctx.yesterdayMatch;
+    lines.push(`[昨日梯队今日表现] 晋级:${m.stats.晋级} 维持:${m.stats.维持} 断板:${m.stats.断板} 炸板:${m.stats.炸板} 跌停:${m.stats.跌停} (共${m.rows.length}只昨日涨停股)`);
+    const promo = m.rows.filter((r) => r.status === "晋级").slice(0, 10);
+    if (promo.length) lines.push(`[昨日梯队今日晋级名单] ` + promo.map((r) => `${r.name}(${r.code}) ${r.yLadder}板→${r.todayLadder}板`).join("；"));
+    const broke = m.rows.filter((r) => r.status === "断板" || r.status === "跌停").slice(0, 10);
+    if (broke.length) lines.push(`[昨日梯队今日断板/跌停名单] ` + broke.map((r) => `${r.name}(${r.code}) 昨${r.yLadder}板→${r.status}`).join("；"));
+  }
+  // 龙头低吸候选池: 昨日连板≥2 且 今日未涨停(断板/炸板/跌停), 供「龙头低吸」模块综合分析
+  if (Array.isArray(ctx.lowAbsorbPool) && ctx.lowAbsorbPool.length) {
+    const pool = ctx.lowAbsorbPool.slice(0, 12);
+    lines.push(`[龙头低吸候选池] 筛选条件=昨日连板≥2 且 今日未涨停(断板/炸板/跌停); 共${ctx.lowAbsorbPool.length}只候选`);
+    lines.push(`[龙头低吸候选TOP] ` + pool.map((x) => `${x.name}(${x.code}) 昨${x.yLadder}板 今日${x.todayStatus}${x.todayLadder ? `(${x.todayLadder}板)` : ""} 板块:${x.board || "—"} 昨封单:${x.yestSeal || "—"}`).join("；"));
+    lines.push(`提示: 龙头低吸(leaderLowAbsorb)的候选标的必须严格从上述「龙头低吸候选池」中挑选, 不得包含今日仍涨停(晋级/维持)的个股。`);
+  } else {
+    lines.push(`[龙头低吸候选池] 无满足「昨日连板≥2 且 今日未涨停」的候选, 请如实标注并跳过龙头低吸分析。`);
   }
   // 核心标的参考池(市场实时热点 → 龙头股): 供 LLM 从中挑选核心标的
   if (ctx.leaderPool && Array.isArray(ctx.leaderPool.pool) && ctx.leaderPool.pool.length) {
@@ -880,9 +1024,9 @@ function history(limit = 20) {
   return listAiAnalyses(limit).map((a) => ({ ...a, fromCache: false }));
 }
 
-/* ---------------- 龙头情绪复盘(4 模块) ---------------- */
+/* ---------------- 龙头情绪复盘(5 模块) ---------------- */
 
-/** 4 模块复盘 prompt: 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险 */
+/** 5 模块复盘 prompt: 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险 / 昨日连板梯队·今日实盘对照验证 */
 function buildMarketPrompt(ctx, skills) {
   const sys = `
 你是一位深耕A股超短线的资深市场分析师, 擅长以游资视角做「龙头 + 情绪周期」结构化复盘。
@@ -893,18 +1037,43 @@ function buildMarketPrompt(ctx, skills) {
     "summary": "龙头梯队结构、市场共识与带动性的详细分析",
     "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ]
   },
+  "leaderLowAbsorb": {
+    "title": "龙头低吸一句话概括(候选池总览与今日低吸机会总判断)",
+    "summary": "低吸逻辑总述: 候选个股共性、分歧转一致机会、风险总提示",
+    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 昨日连板高度数字, "seal": "今日状态与昨日封单描述(如 今日断板·昨封4.82亿)", "note": "低吸点评(辩证分析投资机会与潜在风险)", "skill": "参考思路名称(如 炒股养家·买入分歧)", "tactic": "对应战法编号(如 模型4)", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ]
+  },
   "sentimentCycle": { "stage": "冰点/回暖/高潮/退潮阶段", "indicators": "涨停家数/连板/炸板率等关键情绪指标", "analysis": "情绪周期阶段研判", "suggestion": "整体操作建议(如 谨慎乐观建议控制仓位/市场情绪低迷建议观望为主)" },
   "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "targets": ["涉及的具体标的名, 如 翔鹭钨业"], "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ],
-  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "targets": ["涉及的具体标的名"], "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ]
+  "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "targets": ["涉及的具体标的名"], "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ],
+  "marketValidation": {
+    "yesterdaySummary": "昨日连板梯队复盘摘要(昨日涨停/连板家数、最高高度、总龙头与分支龙头, 必须标注日期与数据来源)",
+    "todayPerformance": "昨日梯队个股今日实盘表现(晋级/维持/断板/炸板/跌停概况, 总龙头今日命运)",
+    "comparison": "双日对照(今日最高板高度较昨日打开或压制、新老梯队交替、主线延续或切换)",
+    "conclusionCheck": [ { "conclusion": "昨日结论项(如 判定的龙头/情绪周期阶段/机会方向/风险信号)", "verification": "今日实盘验证情况", "result": "命中/偏差/失准", "reason": "偏差或失准的原因说明" } ]
+  }
 }
 要求:
 - leaderCore.leaders 3-5 只(今日龙头核心), ladder 为数字。
+- leaderLowAbsorb(龙头低吸) 为「今日龙头核心」的右侧并列模块, 输出格式与 leaderCore 完全一致:
+  * 候选标的必须严格从数据白皮书「龙头低吸候选池」中挑选, 数量 3-5 只。
+  * 筛选条件已在候选池中保证: 昨日连板≥2(表现亮眼/龙头梯队成员) 且 今日未处于涨停状态(断板/炸板/跌停)。
+  * 严禁把今日仍涨停(晋级/维持)的个股放入龙头低吸; 若候选池数据缺失或无候选, 如实标注「无满足条件的龙头低吸候选」。
+  * note 必须辩证分析: 左侧写投资机会(分歧转一致/弱转强/资金承接), 右侧写潜在风险(高位见顶/断板闷杀/题材退潮), 二者缺一不可。
+  * position 依据低吸时机与情绪阶段给出四档分类之一「小/中/大/满」(参考: 冰点/退潮→小或空仓、回暖→中、分歧转一致确认→大、高潮一致后→小), 切实把握/无把握时输出「小」。
+  * ladder 填昨日连板高度; seal 描述今日状态与昨日封单(如「今日断板 · 昨封4.82亿」)。
+  * skill/tactic 必须引用下方「游资交易思维」中的低吸/分歧相关思路(如 炒股养家·买入分歧、退学炒股·弱转强、陈小群·预期差)。
 - opportunities 至少 3 个, risks 至少 3 个。
 - 每个 opportunity / risk 的 targets 必须列出该条涉及的全部具体标的名(股票公司名, 不含代码), 与 description/analysis 中提到的标的一一对应。
 - sentimentCycle.stage 必须明确给出情绪周期阶段。
 - skill 必须引用下方「游资交易思维」中的具体思路名称, tactic 给出该思路下对应战法编号。
 - position 必须严格输出四档分类之一「小/中/大/满」(不得输出数字或百分比), 依据下方技能中的仓位规则并结合当前情绪阶段给出(参考: 冰点→小、回暖→大、高潮→中、退潮→小), 切实把握/无把握时输出「小」。
 - sentimentCycle.suggestion 必须严格采用该技能的语气风格, 基于当前情绪阶段给出明确操作方向指引。
+- marketValidation 必须基于数据白皮书中的「昨日连板梯队」「昨日梯队今日表现」字段, 逐一核验昨日结论在今日实盘中的应对状况:
+  * yesterdaySummary 必须标注昨日日期(如 2026-08-06)。
+  * todayPerformance 逐项描述晋级/维持/断板/炸板/跌停数量与代表个股, 特别说明昨日总龙头今日命运。
+  * comparison 说明今日最高板高度较昨日是打开还是压制、今日梯队中哪些为昨日延续标的、哪些为新晋标的、主线是延续还是切换。
+  * conclusionCheck 至少 3 条, result 必须严格取「命中/偏差/失准」之一; 命中说明验证充分, 偏差/失准须给出 reason 说明原因(如情绪切换、资金分歧、题材退潮)。
+  * 若白皮书中昨日连板梯队数据缺失, 如实标注「昨日数据缺失, 无法进行对照验证」, 不得编造。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
 - 当前仅作研究参考, 不构成投资建议。`;
   let user = `以下是当前市场数据白皮书:\n${contextToText(ctx)}`;
@@ -927,7 +1096,7 @@ function buildMarketPrompt(ctx, skills) {
   return { system: sys, user };
 }
 
-/** 4 模块结果校验与规范化(容错) */
+/** 5 模块结果校验与规范化(容错) */
 function normalizeMarketResult(raw) {
   const num = (v, lo = 0, hi = 999) => {
     const n = Number(v);
@@ -973,6 +1142,24 @@ function normalizeMarketResult(raw) {
       sourceRef: resolveSkillSource(str(x.skill), str(x.tactic)),
     })),
   };
+  // 龙头低吸(今日龙头核心右侧并列模块): 与 leaderCore 结构完全一致
+  const la = raw?.leaderLowAbsorb || {};
+  const leaderLowAbsorb = {
+    title: str(la.title),
+    summary: str(la.summary),
+    leaders: (Array.isArray(la.leaders) ? la.leaders : []).slice(0, 6).map((x) => ({
+      name: str(x.name),
+      code: str(x.code),
+      board: str(x.board),
+      ladder: num(x.ladder, 0, 99),
+      seal: str(x.seal),
+      note: str(x.note),
+      skill: str(x.skill),
+      tactic: str(x.tactic),
+      position: pos(x.position),
+      sourceRef: resolveSkillSource(str(x.skill), str(x.tactic)),
+    })),
+  };
   const sc = raw?.sentimentCycle || {};
   const sentimentCycle = {
     stage: str(sc.stage) || "未知",
@@ -1003,20 +1190,34 @@ function normalizeMarketResult(raw) {
       tactic: str(r.tactic),
       sourceRef: resolveSkillSource(str(r.skill), str(r.tactic)),
     }));
-  // 汇总全部标的名称(龙头 + 机会 + 风险), 供前端蓝色高亮标注
+  // 汇总全部标的名称(龙头 + 龙头低吸 + 机会 + 风险), 供前端蓝色高亮标注
   const targets = [...new Set(
     [...(Array.isArray(lc.leaders) ? lc.leaders : []).map((x) => str(x.name)),
+     ...(Array.isArray(la.leaders) ? la.leaders : []).map((x) => str(x.name)),
      ...opportunities.flatMap((o) => o.targets),
      ...risks.flatMap((r) => r.targets)].filter(Boolean)
   )];
-  return { leaderCore, sentimentCycle, opportunities, risks, targets };
+  // 第 5 模块: 昨日连板梯队 · 今日实盘对照验证(双日对照)
+  const mv = raw?.marketValidation || {};
+  const marketValidation = {
+    yesterdaySummary: str(mv.yesterdaySummary),
+    todayPerformance: str(mv.todayPerformance),
+    comparison: str(mv.comparison),
+    conclusionCheck: (Array.isArray(mv.conclusionCheck) ? mv.conclusionCheck : []).slice(0, 8).map((c) => ({
+      conclusion: str(c.conclusion),
+      verification: str(c.verification),
+      result: ["命中", "偏差", "失准"].includes(c.result) ? c.result : str(c.result) || "—",
+      reason: str(c.reason),
+    })),
+  };
+  return { leaderCore, leaderLowAbsorb, sentimentCycle, opportunities, risks, marketValidation, targets };
 }
 
-/** 龙头情绪复盘(4 模块): 复用 LLM 管线与降频缓存 */
+/** 龙头情绪复盘(5 模块): 复用 LLM 管线与降频缓存 */
 async function analyzeMarket({ model, skills = [], force = false }) {
   const tracer = createTracer();
   const tStart = Date.now();
-  tracer.add({ type: "agent", name: "启动龙头情绪复盘", status: "ok", startedAt: tStart, durationMs: 0, params: { force: !!force, 模块数: 4 }, summary: "今日龙头核心 / 情绪周期 / 机会 / 风险" });
+  tracer.add({ type: "agent", name: "启动龙头情绪复盘", status: "ok", startedAt: tStart, durationMs: 0, params: { force: !!force, 模块数: 5 }, summary: "今日龙头核心 / 情绪周期 / 机会 / 风险 / 昨日梯队双日对照" });
   // 未显式指定模型时, 取已配置模型或默认模型(前端 config/skills 接口可能未启用)
   if (!model) model = getAiKey()?.model || DEFAULT_MODELS.find((m) => m.default)?.id || "";
   if (!MODEL_WHITELIST.has(model)) {
@@ -1030,7 +1231,7 @@ async function analyzeMarket({ model, skills = [], force = false }) {
   const date = dashToday();
   const sorted = [...skills].sort();
   const cacheKey = crypto.createHash("sha256")
-    .update(`market4|${date}|${model}|${sorted.join(",")}`)
+    .update(`market5-lowabs|${date}|${model}|${sorted.join(",")}`)
     .digest("hex");
 
   // 命中缓存(未强制刷新) -> 直接返回, 不重复计费
@@ -1061,7 +1262,7 @@ async function analyzeMarket({ model, skills = [], force = false }) {
   tracer.add({ type: "tool", name: "调用 LLM(推理模型)", status: "ok", startedAt: llmT0, durationMs: Date.now() - llmT0, params: { 模型: model }, summary: "已返回结构化 JSON 结果" });
   const result = normalizeMarketResult(raw);
   result.sources = (ctx.sources || []).map((s) => ({ name: s.name, fetchedAt: s.fetchedAt }));
-  tracer.add({ type: "tool", name: "结果规范化", status: "ok", startedAt: Date.now(), durationMs: 0, params: {}, summary: "4 模块结果校验与字段规范化" });
+  tracer.add({ type: "tool", name: "结果规范化", status: "ok", startedAt: Date.now(), durationMs: 0, params: {}, summary: "5 模块结果校验与字段规范化(含双日对照验证)" });
 
   upsertAiAnalysis({ cacheKey, date, model, skillsHash: sorted.join(","), result });
   return { cacheKey, date, model, skillsHash: sorted.join(","), result, createdAt: Date.now(), updatedAt: Date.now(), fromCache: false, trace: tracer.steps };

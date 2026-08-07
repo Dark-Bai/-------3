@@ -2586,7 +2586,7 @@ const routes = {
   "/api/philia/leader-pool": async (q) => getLeaderPool(q.get("force") === "1", parseLeaderWeights(q.get("weights"))),
   // 龙头池与龙头股数据源一致性校验(强制取最新数据源全量比对, 供巡检/手动验证)
   "/api/philia/leader-pool/validate": async () => validateLeaderPoolEndpoint(),
-  // 龙头情绪复盘(4 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险; force=1 强制重算
+  // 龙头情绪复盘(5 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险/昨日梯队双日对照; force=1 强制重算
   "/api/philia/market-analyze": async (q, body) => philia.analyzeMarket({ model: body?.model, skills: body?.skills, force: !!body?.force }),
   // 最小 key 接口: GET 读配置(不含明文 key); POST 带 key 先校验再保存, validateOnly=1 仅校验不保存
   "/api/philia/key": async (q, body) => {
@@ -2836,7 +2836,9 @@ const server = http.createServer(async (req, res) => {
     if (routes[u.pathname]) {
       const cors = corsHeadersFor(req);
       // 按 IP 限流(先于缓存命中判断, 防唯一 key 旋转造成的上游请求放大)
-      const limiter = u.pathname === "/api/philia/analyze" ? philiaLimiter : (PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter);
+      // LLM 计费端点(/api/philia/analyze 与 /api/philia/market-analyze)共用 philiaLimiter(5 次/分钟)严控并发
+      const isLlmbilling = u.pathname === "/api/philia/analyze" || u.pathname === "/api/philia/market-analyze";
+      const limiter = isLlmbilling ? philiaLimiter : (PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter);
       const allowed = limiter(clientIp(req));
       if (!allowed) {
         send(res, 429, { ok: false, error: "too many requests" }, cors);
