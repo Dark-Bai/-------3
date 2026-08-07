@@ -516,6 +516,8 @@ export const api = {
   stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`),
   /** 唤起同花顺客户端: 后台启动 hexin.exe 并输入股票代码跳转(本机 Windows) */
   launchHexin: (code: string) => get<{ ok: boolean; error?: string }>(`/api/launch-hexin?code=${encodeURIComponent(code)}`),
+  /** 浮窗系统级置顶: 将 CockpitFloat 独立小窗置顶到其他应用上方(Windows HWND_TOPMOST) */
+  topmost: (on: boolean) => get<{ ok: boolean; on?: boolean; error?: string }>(`/api/topmost?on=${on ? 1 : 0}`),
   financeMain: (code: string) => get<FinanceMain>(`/api/finance-main?code=${encodeURIComponent(code)}`),
   financeBoard: (period = "") => get<FinanceBoard>(`/api/finance-board${period ? `?period=${encodeURIComponent(period)}` : ""}`),
   financeForecast: (period = "") => get<FinanceForecast>(`/api/finance-forecast${period ? `?period=${encodeURIComponent(period)}` : ""}`),

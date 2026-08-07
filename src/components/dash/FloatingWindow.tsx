@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Minus, Square, X, Maximize2, RotateCcw } from "lucide-react";
+import { Minus, Square, X, Maximize2, RotateCcw, Pin, PinOff } from "lucide-react";
+import { api } from "@/lib/api";
 
 /* ---------------- 小窗尺寸/位置记忆 ----------------
  * 每次拖拽移动或调整大小结束后, 将 {x,y,w,h} 持久化到 localStorage(按窗口 id 分键),
@@ -157,6 +158,33 @@ export function FloatingWindow({
     setPos({ x: defaultX ?? (window.innerWidth - defW) / 2, y: defaultY ?? 80 });
   }, [id, defaultWidth, defaultHeight, defaultX, defaultY]);
 
+  /* ---------------- 系统级置顶 ----------------
+   * 打开一个独立小窗(/float?panel=id)并调后端 SetWindowPos(HWND_TOPMOST) 置顶:
+   * 即使浏览器主页被缩小/遮挡, 该小窗仍显示在其他应用上方。
+   * 窗口标题固定含 CockpitFloat 前缀, 供后端按标题匹配窗口句柄。 */
+  const [pinned, setPinned] = useState(false);
+  const [pinning, setPinning] = useState(false);
+  const handlePin = useCallback(async () => {
+    if (pinning) return;
+    setPinning(true);
+    try {
+      if (!pinned) {
+        const w = Math.min(size.w, window.screen.availWidth - 60);
+        const h = Math.min(size.h, window.screen.availHeight - 80);
+        const left = Math.min(Math.max(0, pos.x), Math.max(0, window.screen.availWidth - w - 20));
+        const top = Math.min(Math.max(0, pos.y), Math.max(0, window.screen.availHeight - h - 40));
+        const url = `/float?panel=${encodeURIComponent(id)}&t=${encodeURIComponent(title)}`;
+        window.open(url, `float-${id}`, `popup=yes,width=${Math.round(w)},height=${Math.round(h)},left=${Math.round(left)},top=${Math.round(top)}`);
+        await api.topmost(true); // 等独立窗口出现后置顶
+        setPinned(true);
+      } else {
+        await api.topmost(false); // 取消置顶(小窗仍保留, 可正常操作)
+        setPinned(false);
+      }
+    } catch { /* 置顶失败静默: 独立窗口已打开, 不阻塞 */ }
+    finally { setPinning(false); }
+  }, [pinned, pinning, id, title, pos, size]);
+
   /** 鼠标拖拽 - 窗口移动 */
   const onMouseDownTitle = useCallback((e: React.MouseEvent) => {
     if (isMaximized) return;
@@ -249,6 +277,23 @@ export function FloatingWindow({
         {icon && <span className="text-[13px] leading-none" style={{ color: accent }}>{icon}</span>}
         <h2 className="text-[13px] font-bold tracking-wide text-[#6b5b3e] font-newspaper-heading">{title}</h2>
         <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handlePin}
+            disabled={pinning}
+            title={
+              pinned
+                ? "已置顶: 独立小窗显示在其他应用上方(点击取消)"
+                : "置顶: 打开独立小窗并置顶, 主页缩小/被遮挡时仍显示在其他应用上方"
+            }
+            className={`flex h-[26px] w-[26px] items-center justify-center rounded transition-colors ${
+              pinned
+                ? "bg-[#d4943a]/20 text-[#d4943a]"
+                : "text-[#8b7a5e] hover:bg-[#ede4d4] hover:text-[#6b5b3e]"
+            }`}
+          >
+            {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+          </button>
           <button
             type="button"
             onClick={minimize}

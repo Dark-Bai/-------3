@@ -345,6 +345,55 @@ async function handleLaunchHexin(code6) {
   return hexinSendKeys(code6);
 }
 
+/* ---------------- 浮窗系统级置顶(CockpitFloat) ----------------
+ * 面板放大镜 → FloatingWindow「置顶」按钮 → 前端 window.open 打开独立小窗(/float 页, 标题含 CockpitFloat 前缀)
+ * → 本函数枚举全部顶层窗口, 按标题前缀找到该小窗, SetWindowPos(HWND_TOPMOST) 置顶。
+ * 效果: 浏览器主页被缩小/遮挡时, 该小窗仍显示在其他应用上方。 */
+function setFloatTopmost(on) {
+  const KW = "CockpitFloat";
+  const script = [
+    'Add-Type -TypeDefinition @"',
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "using System.Text;",
+    "public class FloatWin {",
+    "  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);",
+    '  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);',
+    '  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);',
+    '  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);',
+    '  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);',
+    "}",
+    '"@',
+    "$script:found = [IntPtr]::Zero",
+    "$deadline = (Get-Date).AddSeconds(20)",
+    "do {",
+    "  $cb = [FloatWin+EnumWindowsProc]{ param($h, $l)",
+    "    $len = [FloatWin]::GetWindowTextLength($h)",
+    "    if ($len -gt 0) {",
+    "      $sb = New-Object System.Text.StringBuilder ($len + 1)",
+    "      [FloatWin]::GetWindowTextW($h, $sb, $sb.Capacity) | Out-Null",
+    `      if ($sb.ToString() -like '*${KW}*') { $script:found = $h; return $false }`,
+    "    }",
+    "    return $true",
+    "  }",
+    "  [FloatWin]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null",
+    "  if ($script:found -ne [IntPtr]::Zero) { break }",
+    "  Start-Sleep -Milliseconds 500",
+    "} while ((Get-Date) -lt $deadline)",
+    "if ($script:found -eq [IntPtr]::Zero) { Write-Output 'NO_WINDOW'; exit 1 }",
+    `$after = if (${on}) { [IntPtr](-1) } else { [IntPtr](-2) }`,
+    "[FloatWin]::SetWindowPos($script:found, $after, 0, 0, 0, 0, 0x0001 -bor 0x0002) | Out-Null",
+    "Write-Output 'OK'",
+  ].join("\n");
+  return new Promise((resolve, reject) => {
+    execFile("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", script], { maxBuffer: 1024 * 1024, timeout: 30000, windowsHide: true }, (err, stdout, stderr) => {
+      const out = String(stdout || "").trim();
+      if (err || out === "NO_WINDOW") return reject(new Error(out || String(stderr || "").slice(0, 200) || err?.message));
+      resolve(out);
+    });
+  });
+}
+
 function send(res, code, obj, extra = {}) {
   const body = typeof obj === "string" ? obj : JSON.stringify(obj);
   const headers = {
@@ -2913,6 +2962,16 @@ const routes = {
     try {
       await handleLaunchHexin(code);
       return { ok: true, code };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e).slice(0, 200) };
+    }
+  },
+  // 浮窗系统级置顶: on=1 将 CockpitFloat 独立小窗置顶到其他应用上方, on=0 取消(仅本机 Windows)
+  "/api/topmost": async (q) => {
+    const on = q.get("on") !== "0";
+    try {
+      await setFloatTopmost(on);
+      return { ok: true, on };
     } catch (e) {
       return { ok: false, error: String(e?.message || e).slice(0, 200) };
     }

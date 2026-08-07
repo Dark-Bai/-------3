@@ -158,6 +158,44 @@ function DashboardApp() {
   );
 }
 
+/** 独立置顶浮窗页(/float?panel=xxx&t=xxx): 由 FloatingWindow「置顶」键打开。
+ *  仅渲染单个面板, 无仪表盘 chrome; 窗口标题含固定前缀 CockpitFloat, 供后端置顶脚本按标题匹配窗口句柄。 */
+function FloatPage() {
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const panelId = params.get("panel") || "";
+  useEffect(() => {
+    // 窗口标题固定前缀, 后端 setFloatTopmost 按 CockpitFloat 匹配顶层窗口
+    document.title = `CockpitFloat-${panelId}`;
+  }, [panelId]);
+  const def = useMemo(() => {
+    for (const row of PANEL_ROWS) {
+      const p = row.panels.find((x) => x.id === panelId);
+      if (p) return p;
+    }
+    return null;
+  }, [panelId]);
+  if (!def) {
+    return (
+      <div className="flex h-screen items-center justify-center text-[12px] text-[#a8987e]">
+        面板不存在: {panelId}
+      </div>
+    );
+  }
+  const Comp = def.component;
+  return (
+    <StockDetailProvider>
+      <PhiliaProvider>
+        <WatchlistProvider>
+          <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#f5f0e6] p-2">
+            <Comp className="flex-1" />
+          </div>
+          <StockDetailWindows />
+        </WatchlistProvider>
+      </PhiliaProvider>
+    </StockDetailProvider>
+  );
+}
+
 export default function App() {
   return (
     <Routes>
@@ -165,6 +203,7 @@ export default function App() {
       <Route path="/ai" element={<AiDashboard />} />
       <Route path="/fin" element={<FinDashboard />} />
       <Route path="/philia" element={<PhiliaPage />} />
+      <Route path="/float" element={<FloatPage />} />
     </Routes>
   );
 }
