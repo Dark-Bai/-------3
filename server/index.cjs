@@ -3231,10 +3231,21 @@ function pct(arr, q) {
  *   - cache:     {Object} 内存缓存条目数: entries=内存缓存 Map 当前大小。
  * @note 无输入参数; 每次调用都实时读取内存指标与进程状态, 开销极小。
  */
+/** 系统监控忽略列表: 已清空/废弃接口, 不再计入监控统计(路由保留, 避免误伤调用方) */
+const MONITOR_IGNORE = new Set([
+  "/api/news",          // 快讯已清空(预留人工添加内容)
+  "/api/boards",        // 板块排行已清空(预留新功能)
+  "/api/board-stocks",  // 板块成分股已清空(预留新功能)
+  "/api/rank",          // 个股榜单已清空(预留新功能)
+  "/api/moneyflow",     // 资金流排行已清空(预留新功能)
+  "/api/stock-flow",    // 单只资金流已清空(批量版 stock-flows 在用)
+]);
+
 function buildMonitorData() {
   const now = Date.now();
   const endpoints = [];
   for (const [path, m] of API_METRICS) {
+    if (MONITOR_IGNORE.has(path)) continue;
     endpoints.push({
       path,                                  // 接口路径
       count: m.count,                        // 累计调用次数(进程启动以来)
