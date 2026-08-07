@@ -37,6 +37,24 @@ const CONTEXT_CACHE_TTL = 5 * 60 * 1000; // 数据白皮书缓存 5min
 const ANALYSIS_CACHE_TTL = 30 * 60 * 1000; // 分析结果降频缓存 30min
 const MAX_PROMPT_SKILL_CHARS = 20000; // 注入技能提示词上限(容纳全部技能+全览, SKILL.md 全文约 13K 字符)
 
+/* ---------------- 大盘/板块因子(今日+昨日) 数据源 ----------------
+ * 将「大盘因子(涨跌幅/量能) 与 板块因子(板块/概念 涨跌幅/主力净额)」的今日+昨日数据
+ * 融入 PHILIA 分析条件, 供 LLM 判断大盘环境与板块资金合力。
+ *  - 今日大盘: push2delay ulist(指数实时: 点位/涨跌幅/成交额)
+ *  - 昨日大盘: push2his 日K(倒数第2根 = 上一交易日收盘/涨跌幅/量能)
+ *  - 今日板块: push2delay clist(行业 m:90+t:2 / 概念 m:90+t:3, 涨跌幅TOP + 主力净额TOP)
+ *  - 昨日板块: push2his 板块日K(涨跌幅) + 板块资金流日K(主力净额)
+ * 注: push2his 对本机 IPv6 不稳定, 已在文件顶部 setDefaultResultOrder("ipv4first");
+ *     且 push2his 走 fetch 重试即可, 不回退 curl(schannel 在 push2his 上握手失败)。
+ */
+const EM_HIS_BASE = "https://push2his.eastmoney.com/api/qt/stock";
+const UT_EM = "fa5fd1943c7b386f172d6893dbfba10b"; // push2his kline 校验码(客户端固定)
+const INDEX_SECIDS = "1.000001,0.399001,0.399006"; // 上证指数/深证成指/创业板指
+const BOARD_FS = { 行业: "m:90+t:2", 概念: "m:90+t:3" };
+const BOARD_PICK_N = 8; // 板块涨跌幅/主力净额各取前 N
+const BOARD_YEST_MAX = 12; // 拉取昨日数据的板块数量上限(控制请求量)
+const KLINE_FIELDS2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61";
+
 /* ---------------- 思考过程追踪器 ----------------
  * 记录一次分析中「加载的资源」与「调用的工具/函数」, 含时间戳、耗时与执行状态,
  * 随结果返回前端「查看思考过程」弹窗展示。
@@ -115,6 +133,28 @@ async function emGet(url) {
     } catch (e) {
       lastErr = e;
       await sleep(250);
+    }
+  }
+  throw lastErr;
+}
+
+/** push2his 历史接口(fetch + 重试, 不回退 curl: schannel 在此域名握手失败) */
+async function emGetHis(url, tries = 3) {
+  let lastErr = new Error("em his request failed");
+  for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const resp = await fetch(url, {
+        headers: { "User-Agent": UA, Accept: "*/*", Referer: "https://quote.eastmoney.com/" },
+        signal: ctrl.signal,
+      });
+      return JSON.parse(Buffer.from(await resp.arrayBuffer()).toString("utf-8"));
+    } catch (e) {
+      lastErr = e;
+      await sleep(400);
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastErr;
@@ -231,6 +271,102 @@ async function fetchBreadth() {
   const diff = j?.data?.diff || [];
   const sum = (f) => diff.reduce((a, b) => a + (Number(b[f]) || 0), 0);
   return { up: sum("f104"), down: sum("f105"), flat: sum("f106") };
+}
+
+/* ---------------- 大盘因子(今日/昨日): 指数涨跌幅 + 量能 ---------------- */
+
+/** 今日大盘因子: 三大指数实时点位/涨跌幅/涨跌额/成交量/成交额(push2delay ulist) */
+async function fetchIndexToday() {
+  const url = `https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${INDEX_SECIDS}&fields=f2,f3,f4,f5,f6,f12,f14&np=1&fltt=2&invt=2`;
+  const j = await emGet(url).catch((e) => { console.error("[philia] fetchIndexToday failed:", e.message); return null; });
+  const diff = j?.data?.diff || [];
+  return diff.map((d) => ({
+    name: d.f14 || "", code: d.f12 || "",
+    point: Number(d.f2) || null, pct: Number(d.f3) || null, change: Number(d.f4) || null,
+    vol: Number(d.f5) || null, amount: Number(d.f6) || null, // 量能: 成交量(手)/成交额(元)
+  }));
+}
+
+/** 昨日大盘因子: 三大指数上一交易日收盘/涨跌幅/量能(push2his 日K, 取倒数第2根) */
+async function fetchIndexYesterday() {
+  const out = [];
+  for (const secid of INDEX_SECIDS.split(",")) {
+    try {
+      const url = `${EM_HIS_BASE}/kline/get?secid=${secid}&ut=${UT_EM}&klt=101&fqt=1&end=20500101&lmt=3&fields1=f1,f2,f3,f4,f5,f6&fields2=${KLINE_FIELDS2}`;
+      const j = await emGetHis(url);
+      const klines = j?.data?.klines || [];
+      if (klines.length >= 2) {
+        const y = klines[klines.length - 2].split(","); // 倒数第2根 = 上一交易日
+        out.push({
+          name: j.data.name || "", date: y[0], close: Number(y[2]) || null,
+          vol: Number(y[5]) || null, amount: Number(y[6]) || null, pct: Number(y[8]) || null, change: Number(y[9]) || null,
+        });
+      }
+    } catch (e) { console.error(`[philia] fetchIndexYesterday ${secid} failed:`, e.message); }
+  }
+  return out;
+}
+
+/* ---------------- 板块因子(今日/昨日): 板块/概念 涨跌幅 + 主力净额 ---------------- */
+
+/** 今日板块因子: 行业/概念 涨跌幅TOP + 主力净额TOP(push2delay clist, 去重合并) */
+async function fetchBoardToday() {
+  const result = {};
+  for (const [type, fs] of Object.entries(BOARD_FS)) {
+    const pick = async (fid) => {
+      const url = `https://push2delay.eastmoney.com/api/qt/clist/get?fid=${fid}&po=1&pz=${BOARD_PICK_N}&pn=1&np=1&fltt=2&invt=2&fs=${encodeURIComponent(fs)}&fields=f12,f14,f3,f62,f8`;
+      const j = await emGet(url).catch(() => null);
+      return (j?.data?.diff || []).map((b) => ({
+        code: b.f12, name: b.f14, pct: Number(b.f3) || null, netIn: Number(b.f62) || null, turnover: Number(b.f8) || null,
+      }));
+    };
+    const [byPct, byNet] = await Promise.all([pick("f3"), pick("f62")]);
+    result[type] = [...byPct, ...byNet.filter((b) => !byPct.some((x) => x.code === b.code))];
+  }
+  return result;
+}
+
+/** 昨日板块因子: 对今日TOP板块拉上一交易日涨跌幅(push2his 日K)与主力净额(push2his 资金流日K), 并发受限 */
+async function fetchBoardYesterday(boardToday) {
+  // 行业/概念各取一半名额, 保证两类都有昨日数据(避免行业独占)
+  const perType = Math.ceil(BOARD_YEST_MAX / 2);
+  const entries = [];
+  for (const [type, list] of Object.entries(boardToday || {})) {
+    let n = 0;
+    for (const b of list || []) {
+      if (n >= perType) break;
+      if (entries.some((e) => e[0] === b.code)) continue;
+      entries.push([b.code, { name: b.name, type }]);
+      n++;
+    }
+  }
+  entries.length = Math.min(entries.length, BOARD_YEST_MAX);
+  if (!entries.length) return [];
+  const out = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < entries.length) {
+      const [code, meta] = entries[cursor++];
+      const rec = { code, name: meta.name, type: meta.type, date: null, pct: null, netIn: null };
+      try {
+        const [kl, fl] = await Promise.allSettled([
+          emGetHis(`${EM_HIS_BASE}/kline/get?secid=90.${code}&ut=${UT_EM}&klt=101&fqt=1&end=20500101&lmt=3&fields1=f1,f2,f3,f4,f5,f6&fields2=${KLINE_FIELDS2}`),
+          emGetHis(`${EM_HIS_BASE}/fflow/daykline/get?secid=90.${code}&ut=${UT_EM}&klt=101&lmt=3&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65`),
+        ]);
+        if (kl.status === "fulfilled") {
+          const kls = kl.value?.data?.klines || [];
+          if (kls.length >= 2) { const y = kls[kls.length - 2].split(","); rec.date = y[0]; rec.pct = Number(y[8]) || null; }
+        }
+        if (fl.status === "fulfilled") {
+          const fls = fl.value?.data?.klines || [];
+          if (fls.length >= 2) { const y = fls[fls.length - 2].split(","); if (!rec.date) rec.date = y[0]; rec.netIn = Number(y[1]) || null; }
+        }
+      } catch (e) { /* 单板块失败降级为空, 不影响整体 */ }
+      out.push(rec);
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker)); // 并发 4, 控制 push2his 请求量
+  return out;
 }
 
 /** 由涨停池按行业板块聚合「热门题材」(按涨停家数降序) */
@@ -423,6 +559,7 @@ const LUOTOU_KEEP_HEADERS = [
   "一·补、数据采集完整性要求",
   "一·补2、数据提取要点",
   "一·补3、昨日连板梯队复盘与今日实盘对照验证",
+  "一·补4、大盘与板块因子",
 ];
 // 主观/情绪/结论性词汇(命中即整行过滤)
 const LUOTOU_SUBJECTIVE_RE =
@@ -549,19 +686,27 @@ async function assembleContext(tracer) {
   }
   const today = dashToday();
   const yestCompact = yesterdayCompact(); // 上一交易日 YYYYMMDD(双日对照用)
-  // 并行抓取 5 路网页数据源(含昨日涨停池用于双日对照), 任一失败不影响整体(Promise.allSettled)
+  // 并行抓取网页数据源(含昨日涨停池用于双日对照; 大盘/板块因子含今日+昨日), 任一失败不影响整体(Promise.allSettled)
   const results = await Promise.allSettled([
     fetchTopicPool("ZTPool"),            // 今日涨停池
     fetchTopicPool("ZBPool"),            // 今日炸板池
     fetchTopicPool("DTPool"),            // 今日跌停池
     fetchBreadth(),                      // 全市场涨跌家数
     fetchTopicPool("ZTPool", yestCompact), // 昨日涨停池(双日对照验证数据源)
+    fetchIndexToday(),                   // 大盘因子·今日(指数涨跌幅/量能)
+    fetchIndexYesterday(),               // 大盘因子·昨日(指数涨跌幅/量能)
+    fetchBoardToday(),                   // 板块因子·今日(行业/概念 涨跌幅+主力净额)
   ]);
   const zt = results[0].status === "fulfilled" ? results[0].value : null;
   const zb = results[1].status === "fulfilled" ? results[1].value : null;
   const dt = results[2].status === "fulfilled" ? results[2].value : null;
   const breadth = results[3].status === "fulfilled" ? results[3].value : null;
   const yestZt = results[4].status === "fulfilled" ? results[4].value : null;
+  const indexToday = results[5].status === "fulfilled" ? results[5].value : null;
+  const indexYesterday = results[6].status === "fulfilled" ? results[6].value : null;
+  const boardToday = results[7].status === "fulfilled" ? results[7].value : null;
+  // 昨日板块因子: 依赖今日板块TOP名单, 单独并行拉取(失败降级为空, 不影响整体)
+  const boardYesterday = boardToday ? await fetchBoardYesterday(boardToday).catch((e) => { console.error("[philia] fetchBoardYesterday failed:", e?.message); return []; }) : null;
 
   // 记录 4 路网页数据源加载步骤(并行, 统一使用本次组装起点时间戳)
   const srcMeta = [
@@ -583,6 +728,39 @@ async function assembleContext(tracer) {
     startedAt: t0, durationMs: Date.now() - t0,
     params: { 范围: "上证 + 深证聚合" },
     summary: breadth ? `上涨${breadth.up} 下跌${breadth.down} 平${breadth.flat}` : "获取失败",
+  });
+  // 大盘因子(今日/昨日): 指数涨跌幅 + 量能
+  tracer?.add({
+    type: "resource", name: "大盘因子·今日(三大指数)", status: indexToday?.length ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 指数: indexToday?.map((x) => x.name).join("/") || "—" },
+    summary: indexToday?.length
+      ? indexToday.map((x) => `${x.name} ${x.pct}%`).join("；")
+      : "获取失败(已降级, 不影响整体)",
+  });
+  tracer?.add({
+    type: "resource", name: "大盘因子·昨日(三大指数)", status: indexYesterday?.length ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 日期: indexYesterday?.[0]?.date || "—" },
+    summary: indexYesterday?.length
+      ? indexYesterday.map((x) => `${x.name} ${x.pct}%`).join("；")
+      : "获取失败(已降级, 不影响整体)",
+  });
+  // 板块因子(今日/昨日): 行业/概念 涨跌幅 + 主力净额
+  const boardCnt = Object.values(boardToday || {}).reduce((a, l) => a + (l?.length || 0), 0);
+  tracer?.add({
+    type: "resource", name: "板块因子·今日(行业/概念)", status: boardCnt ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 行业: boardToday?.["行业"]?.length ?? 0, 概念: boardToday?.["概念"]?.length ?? 0 },
+    summary: boardCnt ? `行业+概念 共 ${boardCnt} 个(涨跌幅TOP + 主力净额TOP)` : "获取失败",
+  });
+  tracer?.add({
+    type: "resource", name: "板块因子·昨日(TOP板块)", status: boardYesterday?.length ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 板块数: boardYesterday?.length ?? 0 },
+    summary: boardYesterday?.length
+      ? `已拉取 ${boardYesterday.length} 个TOP板块的昨日涨跌幅/主力净额`
+      : "无板块数据或获取失败(已降级)",
   });
   // 昨日涨停池(双日对照): 独立记录加载结果
   const yestPool = yestZt?.pool || null;
@@ -654,6 +832,10 @@ async function assembleContext(tracer) {
   if (trends.length) sources.push({ name: "本地情绪趋势", fetchedAt: fetchedMin });
   if (ladder.length) sources.push({ name: "本地连板梯队", fetchedAt: fetchedMin });
   if (yestPool) sources.push({ name: `东方财富·昨日涨停池(${yestCompact})`, fetchedAt: fetchedMin });
+  if (indexToday?.length) sources.push({ name: "东方财富·大盘指数(今日)", fetchedAt: fetchedMin });
+  if (indexYesterday?.length) sources.push({ name: `东方财富·大盘指数(${indexYesterday[0].date})`, fetchedAt: fetchedMin });
+  if (boardCnt) sources.push({ name: "东方财富·板块涨跌与主力资金(今日)", fetchedAt: fetchedMin });
+  if (boardYesterday?.length) sources.push({ name: `东方财富·板块涨跌与主力资金(${boardYesterday.find((b) => b.date)?.date || "昨日"})`, fetchedAt: fetchedMin });
 
   // 核心标的参考池(主板热点 → 龙头股): 由 index.cjs 注入的 getter 获取, 失败不影响整体分析
   let leaderPool = null;
@@ -685,6 +867,10 @@ async function assembleContext(tracer) {
     yesterdayLadder,  // 昨日连板梯队(双日对照)
     yesterdayMatch,   // 昨日梯队个股今日实盘对照(双日对照)
     lowAbsorbPool,    // 龙头低吸候选池(昨日连板≥2 且 今日未涨停)
+    indexToday,       // 大盘因子·今日(指数点位/涨跌幅/量能)
+    indexYesterday,   // 大盘因子·昨日(指数收盘/涨跌幅/量能)
+    boardToday,       // 板块因子·今日(行业/概念 涨跌幅+主力净额)
+    boardYesterday,   // 板块因子·昨日(TOP板块 涨跌幅+主力净额)
     sources,      // 数据源清单(名称 + 获取时间)
   };
   contextCache = { ts: Date.now(), data: ctx };
@@ -724,6 +910,32 @@ function contextToText(ctx) {
   if (ctx.trends && ctx.trends.length) {
     const recent = ctx.trends.slice(-5).map((t) => `${t.date} 涨停${t.limitUp}/跌停${t.limitDown}/炸板率${t.blownRate}%`).join("；");
     lines.push(`[近5日情绪趋势] ${recent}`);
+  }
+  // 大盘因子(今日/昨日): 指数涨跌幅 + 量能 —— 融入大盘环境研判
+  const fmtYi = (v) => (v == null ? "—" : `${(v / 1e12).toFixed(2)}万亿`); // 成交额(元)
+  const fmtYi2 = (v) => (v == null ? "—" : `${(v / 1e8).toFixed(1)}亿`);   // 主力净额(元)
+  if (Array.isArray(ctx.indexToday) && ctx.indexToday.length) {
+    lines.push(`[大盘因子·今日] ` + ctx.indexToday.map((x) => `${x.name} ${x.point}点 涨跌幅${x.pct}% 涨跌${x.change} 成交额${fmtYi(x.amount)}`).join("；"));
+  } else {
+    lines.push(`[大盘因子·今日] 数据缺失, 请如实标注。`);
+  }
+  if (Array.isArray(ctx.indexYesterday) && ctx.indexYesterday.length) {
+    lines.push(`[大盘因子·昨日(${ctx.indexYesterday[0].date})] ` + ctx.indexYesterday.map((x) => `${x.name} 收${x.close} 涨跌幅${x.pct}% 涨跌${x.change} 成交额${fmtYi(x.amount)}`).join("；"));
+  } else {
+    lines.push(`[大盘因子·昨日] 数据缺失(历史接口不可用), 请如实标注。`);
+  }
+  // 板块因子(今日/昨日): 行业/概念 涨跌幅 + 主力净额 —— 融入板块资金合力研判
+  if (ctx.boardToday) {
+    for (const [type, list] of Object.entries(ctx.boardToday)) {
+      if (!Array.isArray(list) || !list.length) continue;
+      lines.push(`[${type}板块·今日涨幅TOP] ` + list.slice(0, BOARD_PICK_N).map((b) => `${b.name} ${b.pct}% 主力${fmtYi2(b.netIn)} 换手${b.turnover}%`).join("；"));
+    }
+  }
+  if (Array.isArray(ctx.boardYesterday) && ctx.boardYesterday.length) {
+    const date = ctx.boardYesterday.find((b) => b.date)?.date || "昨日";
+    lines.push(`[板块因子·昨日(${date}) 今日TOP板块对照] ` + ctx.boardYesterday.slice(0, BOARD_YEST_MAX).map((b) => `${b.name}(${b.type}) 昨日涨跌幅${b.pct ?? "—"}% 昨日主力${fmtYi2(b.netIn)}`).join("；"));
+  } else if (ctx.boardToday) {
+    lines.push(`[板块因子·昨日] 历史数据缺失(接口不可用), 仅提供今日板块数据, 请如实标注。`);
   }
   // 昨日连板梯队 + 今日实盘对照(双日对照验证): 供 LLM 验证昨日结论在今日市场的应对状况
   if (ctx.yesterdayLadder) {
