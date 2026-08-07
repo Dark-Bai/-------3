@@ -600,6 +600,14 @@ export const api = {
     marketAnalyze: (cfg: { model?: string; skills?: string[]; force?: boolean }) =>
       post<PhiliaMarketAnalysis>(`/api/philia/market-analyze`, cfg, 180000),
   },
+  /* ---------- 同花顺 THS 网关账号 ---------- */
+  thsAccount: {
+    /** 读取账号配置(GET 不回传明文密码) */
+    get: () => get<ThsAccountInfo>(`/api/ths/account`),
+    /** 保存账号配置并热重连网关; password 留空则保留原密码 */
+    save: (cfg: { username: string; password?: string; mac?: string }) =>
+      post<ThsAccountInfo>(`/api/ths/account`, cfg),
+  },
 };
 
 /**
@@ -815,6 +823,15 @@ export interface PhiliaValidateResult {
   valid: boolean;
   label?: string | null;
   error?: string | null;
+}
+
+/** 同花顺 THS 网关账号配置(GET 不含明文密码) */
+export interface ThsAccountInfo {
+  configured: boolean;
+  username: string;
+  mac: string;
+  /** THS 数据网关是否在线(前端展示连接状态) */
+  gatewayAlive: boolean;
 }
 
 /** 单条投资机会 */

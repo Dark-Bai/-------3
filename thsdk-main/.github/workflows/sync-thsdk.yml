@@ -1,0 +1,143 @@
+name: Sync thsdk from PyPI
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install deps
+        run: pip install requests
+
+      # ✅ 获取版本 + 下载（无中间文件）
+      - name: Download latest thsdk
+        run: |
+          python - << 'EOF'
+          import requests
+          import os
+
+          url = "https://pypi.org/pypi/thsdk/json"
+          data = requests.get(url).json()
+
+          version = data["info"]["version"]
+
+          # 找 sdist（源码包）
+          tar_url = None
+          for file in data["urls"]:
+              if file["packagetype"] == "sdist":
+                  tar_url = file["url"]
+                  break
+
+          if not tar_url:
+              raise Exception("No sdist found!")
+
+          print("Version:", version)
+          print("Downloading:", tar_url)
+
+          # ✅ 直接写入 GITHUB_ENV
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"VERSION={version}\n")
+
+          # 下载
+          r = requests.get(tar_url)
+          with open("package.tar.gz", "wb") as f:
+              f.write(r.content)
+          EOF
+
+      # ✅ 解压（幂等）
+      - name: Extract package
+        run: |
+          rm -rf extracted
+          mkdir -p extracted
+          tar -xzf package.tar.gz -C extracted
+
+      - name: Sync README
+        run: |
+          PACKAGE_ROOT=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
+
+          if [ -z "$PACKAGE_ROOT" ] || [ ! -f "$PACKAGE_ROOT/README.md" ]; then
+            echo "❌ README.md not found in extracted package root!"
+            exit 1
+          fi
+
+          echo "Syncing README from: $PACKAGE_ROOT/README.md"
+          cp "$PACKAGE_ROOT/README.md" README.md
+
+          # Fix Markdown asset paths copied from the PyPI package so they render on GitHub.
+          sed -i \
+            's|!\[证券搜索页面截图\](thsdk/examples/webapp/screenshots/case_search_symbols.png)|![证券搜索页面截图](src/thsdk/examples/webapp/screenshots/case_search_symbols.png)|' \
+            README.md
+
+      # ✅ 清空 src
+      - name: Clean src directory
+        run: |
+          rm -rf src
+          mkdir -p src
+
+      # ✅ 复制 thsdk
+      - name: Copy thsdk
+        run: |
+          THSDK_DIR=$(find extracted -type d -name "thsdk" | head -n 1)
+
+          if [ -z "$THSDK_DIR" ]; then
+            echo "❌ thsdk directory not found!"
+            exit 1
+          fi
+
+          echo "Found: $THSDK_DIR"
+          cp -r "$THSDK_DIR" src/
+
+      # ✅ 删除动态库
+      - name: Remove dynamic libs
+        run: |
+          if [ -d "src/thsdk/libs" ]; then
+            find src/thsdk/libs -type f \( \
+              -name "*.dll" -o \
+              -name "*.so" -o \
+              -name "*.dylib" \
+            \) -delete
+          fi
+
+      # ✅ 删除空目录
+      - name: Remove empty dirs
+        run: |
+          find src -type d -empty -delete || true
+
+      # ✅ 删除所有临时文件
+      - name: Cleanup temp files
+        run: |
+          rm -rf extracted package.tar.gz
+
+      # ✅ 提交
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            echo "Committing version: $VERSION"
+            git commit -m "Auto sync thsdk ${VERSION}"
+            git push
+          fi
+

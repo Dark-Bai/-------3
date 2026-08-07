@@ -1,0 +1,49 @@
+name: Industry Constituents Data Update
+
+on:
+  schedule:
+    - cron: '15 0 * * *'    # 北京时间每天 08:15
+    - cron: '35 7 * * *'    # 北京时间每天 15:35
+  workflow_dispatch:
+
+jobs:
+  update-industry-constituents-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python environment
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install thsdk
+
+      - name: Run script
+        run: |
+          python industry_constituents.py
+
+      - name: Commit and push changes
+        env:
+          TZ: 'Asia/Shanghai'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if [ -n "$(git status --porcelain data/)" ]; then
+            echo "Detected changes in data/ directory, preparing to commit..."
+            git add data/
+            git commit -m "自动更新: $(date +'%Y-%m-%d %H:%M:%S') - 行业成分股数据" || true
+            git push
+          else
+            echo "No changes in data/ directory, skipping commit"
+          fi
+

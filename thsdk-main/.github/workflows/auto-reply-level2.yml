@@ -1,0 +1,120 @@
+name: Auto Reply Unsupported Level2 Issues
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  auto-reply-level2:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Match Level2 keywords and auto reply
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const issue_number = issue.number
+
+            const title = issue.title || ''
+            const body = issue.body || ''
+            const text = `${title}\n${body}`
+
+            // 关键词匹配：
+            // level2 / Level2 / l2数据 / L2数据 / l2行情 / L2行情
+            // 同时兼容 level 2 / level-2 / l2 数据 / l2 行情 / 二档行情 / 深度行情
+            const keywordRegexes = [
+              /\blevel[\s-]?2\b/i,
+              /\bl2[\s-]*数据\b/i,
+              /\bl2[\s-]*行情\b/i,
+              /二档行情/i,
+              /深度行情/i
+            ]
+
+            const matched = keywordRegexes.some((re) => re.test(text))
+            if (!matched) {
+              core.info('No Level2-related keyword matched.')
+              return
+            }
+
+            const replyBody = [
+              '感谢反馈。',
+              '',
+              '当前项目**暂不支持 Level2 / L2 行情数据展示与订阅**。',
+              '',
+              '主要原因如下：',
+              '1. **交易所展示限制**：不同交易所对 Level2 / 深度行情数据的展示、使用与分发范围有不同要求，当前项目暂不提供相关展示能力；',
+              '2. **平台能力调整**：THS 平台侧相关能力已做调整，当前本项目中不再提供 Level2 / L2 行情数据服务；',
+              '3. **服务入口区分**：如需使用 Level2 / L2 行情能力，请前往指定平台申请和使用对应服务，当前项目暂不承载该类能力。',
+              '',
+              '当前项目暂不支持的范围包括：',
+              '- Level2 / L2 行情展示',
+              '- Level2 / L2 行情订阅',
+              '- 个人用户侧深度行情数据接入',
+              '',
+              '如你的需求涉及基础行情、K 线、普通盘口或其他公开可用能力，欢迎补充具体场景，我们会继续协助确认。'
+            ].join('\n')
+
+            // 防止重复评论
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            })
+
+            const alreadyReplied = comments.data.some((comment) => {
+              const content = comment.body || ''
+              return (
+                content.includes('当前项目**暂不支持 Level2 / L2 行情数据展示与订阅**') ||
+                content.includes('THS 平台侧相关能力已做调整') ||
+                content.includes('https://quant.10jqka.com.cn/')
+              )
+            })
+
+            if (!alreadyReplied) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: replyBody
+              })
+              core.info('Reply comment created.')
+            } else {
+              core.info('Matched, but reply already exists. Skip creating comment.')
+            }
+
+            // 自动打标签
+            const labelName = 'unsupported-level2'
+
+            try {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number,
+                labels: [labelName]
+              })
+              core.info(`Label added: ${labelName}`)
+            } catch (error) {
+              core.warning(`Failed to add label "${labelName}": ${error.message}`)
+            }
+
+            // 如需自动关闭，把 false 改成 true
+            if (false) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number,
+                state: 'closed'
+              })
+              core.info('Issue closed automatically.')
+            }

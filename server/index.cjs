@@ -9,6 +9,9 @@ const path = require("path");
 const iconv = require("iconv-lite");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
+const dns = require("dns");
+// push2his.eastmoney.com 对本机 IPv6 连接不稳定, 强制优先 IPv4 以保证历史K线等网页数据源稳定抓取
+dns.setDefaultResultOrder("ipv4first");
 const { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, DB_PATH } = require("./stock-db.cjs");
 const philia = require("./philia-ai.cjs");
 
@@ -70,7 +73,9 @@ async function fetchTextAny(url, { referer, gbk = false, timeout = 8000 } = {}) 
   }
 }
 
-/* ---------------- 开盘啦 API 客户端 (kpl.liuhepc.cn) ---------------- */
+/* ---------------- 开盘啦 API 客户端 (kpl.liuhepc.cn) ----------------
+ * 注: 该数据源 API Key 已失效(401), 各业务已陆续切换至 东方财富网页 / 腾讯 / 同花顺THS网关。
+ *     保留 kplFetch 仅为兼容遗留路径, 失效时返回 null, 由各业务的新数据源接管。 */
 const KPL_BASE = "https://kpl.liuhepc.cn";
 const KPL_API_KEY = process.env.KPL_API_KEY || "kpl-4ed522163bf8dad3aeb1d9613791661eb62ed88ed6e82067";
 
@@ -79,14 +84,13 @@ async function kplFetch(path, params = {}, timeout = 8000) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  // node fetch 对 kpl.liuhepc.cn 有间歇性 TLS 断连; fetch 失败时回退 curl 兜底, 保证市场情绪等模块稳定
   try {
     const resp = await fetch(url.toString(), {
       headers: { "X-API-Key": KPL_API_KEY, "User-Agent": UA },
       signal: AbortSignal.timeout(timeout),
     });
-    const json = await resp.json();
-    return json;
+    if (!resp.ok) return null; // 401 Key 失效等: 直接降级, 交由新数据源接管
+    return await resp.json();
   } catch (e) {
     console.error(`[kplFetch] ${path} fetch failed, fallback curl:`, e.message);
     try {
@@ -101,6 +105,64 @@ async function kplFetch(path, params = {}, timeout = 8000) {
       return null;
     }
   }
+}
+
+/* ---------------- 同花顺 THS 数据网关客户端(替代 KPL 底层行情部分) ----------------
+ * 网关: server/ths-gateway.py(同花顺 thsdk 封装, 提供实时行情/分时/板块列表/成分股/资讯)。
+ * A股代码映射: 沪(6/9)→USHA, 深(0/2/3)→USZA, 北交所(4/8)→USTM。 */
+const THS_GATEWAY = process.env.THS_GATEWAY || "http://127.0.0.1:9877";
+
+async function thsFetch(path, params = {}, timeout = 8000) {
+  const url = new URL(path, THS_GATEWAY);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  try {
+    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(timeout) });
+    return await resp.json();
+  } catch (e) {
+    return { success: false, error: e?.message || "ths gateway unavailable", data: null, extra: {} };
+  }
+}
+
+/** 裸 6 位 A股代码 → THS 完整代码(USHA/USZA/USTM 前缀) */
+function thsCodeOf(code6) {
+  const c = String(code6 || "").replace(/^[a-z]{2}/i, "");
+  if (!/^\d{6}$/.test(c)) return "";
+  if (c[0] === "6" || c[0] === "9") return `USHA${c}`;
+  if (c[0] === "4" || c[0] === "8") return `USTM${c}`;
+  return `USZA${c}`;
+}
+
+/* ---------------- 东方财富 F10 抓取(替代 KPL f10 系列) ---------------- */
+const F10_HOST = "https://emweb.securities.eastmoney.com";
+const DC_HOST = "https://datacenter-web.eastmoney.com";
+
+/** f10 公司概况(survey): 返回 jbzl[0], 含主营业务 BUSINESS_SCOPE / 公司简介 ORG_PROFILE / 行业 */
+async function emF10Survey(code) {
+  const c = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(c)) return null;
+  const market = /^6|^9/.test(c) ? "SH" : "SZ";
+  try {
+    const text = await fetchTextAny(`${F10_HOST}/PC_HSF10/CompanySurvey/PageAjax?code=${market}${c}`, {
+      referer: F10_HOST, timeout: 6000,
+    });
+    const j = JSON.parse(text);
+    return j?.jbzl?.[0] || null;
+  } catch { return null; }
+}
+
+/** f10 业绩报表(datacenter): 最新一期主要财务指标 */
+async function emF10MainTarget(code) {
+  const c = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
+  if (!/^\d{6}$/.test(c)) return null;
+  const market = /^6|^9/.test(c) ? "SH" : "SZ";
+  try {
+    const url = `${DC_HOST}/api/data/v1/get?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=${encodeURIComponent(`(SECUCODE="${c}.${market}")`)}&pageNumber=1&pageSize=3&sortTypes=-1&sortColumns=REPORT_DATE`;
+    const text = await fetchTextAny(url, { referer: "https://data.eastmoney.com/", timeout: 6000 });
+    const j = JSON.parse(text);
+    return j?.result?.data?.[0] || null;
+  } catch { return null; }
 }
 
 function todayStr() {
@@ -221,48 +283,44 @@ async function handleQuotes(codes) {
       }
     }
   }
-  // 腾讯缺失的 A股核心指数(上证/深证/创业板/科创50): 回退开盘啦 KPL 兜底
-  const KPL_INDEX_MAP = { sh000001: "SH000001", sz399001: "SZ399001", sz399006: "SZ399006", sh000688: "SH000688" };
-  const kplIndexCodes = missing.filter((c) => KPL_INDEX_MAP[c] && !out[c]);
-  if (kplIndexCodes.length) {
+  // 腾讯缺失的 A股核心指数(上证/深证/创业板/科创50): 回退东方财富 ulist 兜底
+  const KPL_INDEX_MAP = { sh000001: "1.000001", sz399001: "0.399001", sz399006: "0.399006", sh000688: "1.000688" };
+  const emIndexCodes = missing.filter((c) => KPL_INDEX_MAP[c] && !out[c]);
+  if (emIndexCodes.length) {
     try {
-      const kplData = await kplFetch("/api/advanced/zs-real", { date: todayStr() });
-      const list = kplData?.data || [];
-      if (list.length) {
-        const ts = Date.now();
-        for (const item of list) {
-          const sid = String(item.stock_id || "").toLowerCase();
-          const symbol = kplIndexCodes.find(c => c === sid);
-          if (!symbol || out[symbol]) continue;
-          const price = parseFloat(item.last_px);
-          const change = parseFloat(item.increase_amount) || 0;
-          const pctStr = String(item.increase_rate || "0%").replace("%", "");
-          const pct = parseFloat(pctStr) || 0;
-          const prev = price - change;
-          if (!isNaN(price) && !isNaN(prev)) {
-            const q = {
-              symbol,
-              name: String(item.name || ""),
-              price,
-              prev,
-              change: +change.toFixed(2),
-              pct: +pct.toFixed(2),
-              open: prev,
-              high: price,
-              low: price,
-              amount: Math.round(parseFloat(item.turnover) / 10000) || 0,
-              turnover: 0,
-              time: kplData.date || "",
-            };
-            if (saneQuote(q)) {
-              out[symbol] = q;
-              cacheSet(`q:${symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
-            }
+      const secids = emIndexCodes.map((c) => KPL_INDEX_MAP[c]).join(",");
+      const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f2,f3,f4,f5,f6,f12,f14&np=1&fltt=2&invt=2`);
+      const diff = j?.data?.diff || [];
+      const ts = Date.now();
+      const byCode = { "1.000001": "sh000001", "0.399001": "sz399001", "0.399006": "sz399006", "1.000688": "sh000688" };
+      for (const d of diff) {
+        const symbol = byCode[d.f12];
+        if (!symbol || out[symbol]) continue;
+        const price = num(d.f2);
+        const prev = price - num(d.f4);
+        if (price > 0 && prev > 0) {
+          const q = {
+            symbol,
+            name: String(d.f14 || ""),
+            price,
+            prev,
+            change: +num(d.f4).toFixed(2),
+            pct: +num(d.f3).toFixed(2),
+            open: prev,
+            high: num(d.f2),
+            low: num(d.f2),
+            amount: Math.round(num(d.f6) / 10000) || 0,
+            turnover: 0,
+            time: "",
+          };
+          if (saneQuote(q)) {
+            out[symbol] = q;
+            cacheSet(`q:${symbol}`, { ts, data: q, inflight: null, ttl: QUOTE_CACHE_TTL });
           }
         }
       }
     } catch (e) {
-      console.error("[kpl-index] zs-real fetch error:", e?.message || e);
+      console.error("[em-index] ulist fetch error:", e?.message || e);
     }
   }
   // usVIX 腾讯数据已停更，从新浪期货获取实时值覆盖(仅缓存过期时重取)
@@ -362,7 +420,7 @@ async function handleQuotes(codes) {
 }
 
 /* ---------------- 腾讯分钟线(指数/个股 日内走势) ---------------- */
-/* ---------------- A股个股分时: 主备健康切换(KPL主 / 腾讯备) ----------------
+/* ---------------- A股个股分时: 主备健康切换(腾讯主 / 同花顺THS备) ----------------
  * 不再"KPL优先、失败才回退", 而是维护每只股票的当前主源并轮流使用:
  *  - 主源连续失败 N 次 → 切换为备源(本轮回退备源取数, 保证有数据)
  *  - 备源连续成功 M 次 → 探测一次主源, 恢复则切回主源
@@ -374,21 +432,25 @@ const minuteSrcState = new Map();  // code -> { primary, fail, okOnBackup }
 
 function minuteState(code) {
   let s = minuteSrcState.get(code);
-  if (!s) { s = { primary: "kpl", fail: 0, okOnBackup: 0 }; minuteSrcState.set(code, s); }
+  if (!s) { s = { primary: "tencent", fail: 0, okOnBackup: 0 }; minuteSrcState.set(code, s); }
   return s;
 }
 
-/** KPL 个股分时; 成功返回 {code,prec,points}, 失败/空返回 null */
-async function kplMinuteFetch(code) {
+/** 同花顺 THS 个股分时(备源); 成功返回 {code,prec,points}, 失败/空返回 null */
+async function thsMinuteFetch(code) {
   const stockCode = code.replace(/^s[hz]/, "");
-  const kplData = await kplFetch("/api/v2/stock/intraday", { code: stockCode });
-  const trend = kplData?.trend;
-  if (trend && Array.isArray(trend) && trend.length) {
-    const prec = parseFloat(kplData.preclose_px) || 0;
-    const pts = trend.filter(p => String(p[0]).includes(":")).map(p => ({ t: p[0], p: parseFloat(p[1]) }));
-    return { code, prec, points: pts };
-  }
-  return null;
+  const thsCode = thsCodeOf(stockCode);
+  if (!thsCode) return null;
+  const j = await thsFetch("/api/ths/minute", { code: thsCode });
+  const rows = j?.data || [];
+  if (!j?.success || !rows.length) return null;
+  let prec = 0;
+  try {
+    const q = await thsFetch("/api/ths/quote", { code: thsCode });
+    if (q?.success && q.data?.[0]) prec = num(q.data[0]["昨收价"]);
+  } catch { /* prec 保持 0 */ }
+  const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]) }));
+  return { code, prec, points: pts };
 }
 
 /** 腾讯 A股个股分时; 成功返回 {code,prec,points}, 失败/空返回 null */
@@ -415,81 +477,68 @@ async function handleMinute(code) {
     else if (c === "4" || c === "8") code = `bj${code}`;
   }
   // 美股指数(us*)只有 usMinute 接口返回全日序列, minute/query 只给最后一个点
-  // usN225(日经225) 和 usKS11(韩国KOSPI) 从新浪全球指数分钟线获取
-  const SINA_INDEX_MAP = { usn225: "N225", usks11: "KS11" };
+  // usN225(日经225) 和 usKS11(韩国KOSPI): 东方财富全球指数分时(新浪全球期货分钟线已失效,
+  // 腾讯 usMinute 也不支持, 改走 push2his trends2, secid=100.N225 / 100.KS11)
+  const EM_GLOBAL_INDEX = { usn225: "100.N225", usks11: "100.KS11" };
   // 国际(港股/美股)指数代码上游对大小写敏感: 小写(hkhsi/usixic)会返回空数据,
   // 必须用规范大小写(hkHSI/hkHSTECH/usIXIC)才能取到完整分时序列
   const INT_INDEX_CASE = { hkhsi: "hkHSI", hkhstech: "hkHSTECH", usixic: "usIXIC", usn225: "usN225", usks11: "usKS11" };
   const urlCode = INT_INDEX_CASE[code] || code;
-  if (SINA_INDEX_MAP[code]) {
+  if (EM_GLOBAL_INDEX[code]) {
     try {
-      const symbol = SINA_INDEX_MAP[code];
-      const text = await curlText(
-        `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/GlobalFuturesService.getGlobalFuturesMinLine?symbol=${symbol}`,
-        { referer: `https://finance.sina.com.cn/futures/quotes/${symbol}.shtml`, encoding: "utf-8", timeout: 5000 }
-      );
-      const arr = parseJsonp(text)?.minLine_1d || [];
-      const pts = arr.filter((f) => String(f[0]).includes(":")).map((f) => ({ t: f[0], p: num(f[1]) }));
-      // 从新浪日线API获取昨收作为prec(hq.sinajs.cn不支持全球指数)
-      let prec = 0;
-      try {
-        const dailyText = await fetchTextAny(`https://gi.finance.sina.com.cn/hq/daily?symbol=${symbol}&num=2`, { referer: "https://finance.sina.com.cn/", timeout: 4000 });
-        let dailyJson;
-        try {
-          dailyJson = parseJsonp(dailyText);
-        } catch {
-          dailyJson = JSON.parse(dailyText);
-        }
-        const dailyRows = dailyJson?.result?.data || dailyJson?.data || [];
-        if (dailyRows.length >= 2) {
-          const prev = parseFloat(dailyRows[dailyRows.length - 2].c);
-          if (!isNaN(prev)) prec = prev;
-        }
-      } catch { /* prec remains 0 */ }
+      const secid = EM_GLOBAL_INDEX[code];
+      const j = await emGetHis(`${EM_HIS}/trends2/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f53,f56,f58&iscr=0&ndays=1`);
+      const d = j?.data;
+      const trends = Array.isArray(d?.trends) ? d.trends : [];
+      const prec = num(d?.preClose || d?.preSettlement);
+      // "2026-08-07 08:00,6365.07,0,6365.070" -> {t:"08:00", p:6365.07}
+      const pts = trends
+        .map((s) => { const f = String(s).split(","); return { t: String(f[0]).slice(11, 16), p: num(f[1]) }; })
+        .filter((p) => p.t.includes(":"));
       return { code, prec, points: pts };
     } catch (e) {
-      console.error(`[sina-minute] ${code} error:`, e?.message || e);
+      console.error(`[em-global-minute] ${code} error:`, e?.message || e);
       return { code, prec: 0, points: [] };
     }
   }
-  // A股个股分时: 主备健康切换(KPL主 / 腾讯备), 轮流使用保证数据平滑与容错
+  // A股个股分时: 主备健康切换(腾讯主 / 同花顺THS备), 轮流使用保证数据平滑与容错
   if (/^s[hz]\d{6}$/.test(code) && !code.startsWith("sh000") && !code.startsWith("sz399")) {
     const st = minuteState(code);
-    if (st.primary === "kpl") {
-      // 主源 = KPL
-      try {
-        const k = await kplMinuteFetch(code);
-        if (k) { st.fail = 0; return { ...k, source: "kpl" }; }
-      } catch (e) { console.error(`[kpl-minute] ${code} error:`, e?.message || e); }
-      // 主源失败(返回null或抛异常均落到此): 累计失败, 达到阈值切换为备源
-      st.fail++;
-      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "tencent"; st.fail = 0; st.okOnBackup = 0; console.log(`[minute-src] ${code} -> tencent (kpl x${MINUTE_SWITCH_THRESHOLD} fail)`); }
-      // 本轮回退腾讯, 保证有数据
-      try { return { ...(await tencentMinuteFetch(code) || { code, prec: 0, points: [] }), source: "tencent" }; }
-      catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "tencent" }; }
-    } else {
-      // 主源 = 腾讯(备源)
+    if (st.primary === "tencent") {
+      // 主源 = 腾讯
       try {
         const t = await tencentMinuteFetch(code);
+        if (t && t.points.length) { st.fail = 0; return { ...t, source: "tencent" }; }
+      } catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); }
+      // 主源失败: 累计失败, 达到阈值切换为备源
+      st.fail++;
+      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "ths"; st.fail = 0; st.okOnBackup = 0; console.log(`[minute-src] ${code} -> ths (tencent x${MINUTE_SWITCH_THRESHOLD} fail)`); }
+      // 本轮回退 thsdk, 保证有数据
+      try { return { ...(await thsMinuteFetch(code) || { code, prec: 0, points: [] }), source: "ths" }; }
+      catch (e) { console.error(`[ths-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "ths" }; }
+    } else {
+      // 主源 = thsdk(备源)
+      try {
+        const t = await thsMinuteFetch(code);
         if (t && t.points.length) {
           st.fail = 0; st.okOnBackup++;
-          // 备源连续成功若干次后, 探测一次主源(KPL)以判断是否恢复, 恢复则切回
+          // 备源连续成功若干次后, 探测一次主源(腾讯)以判断是否恢复, 恢复则切回
           if (st.okOnBackup >= MINUTE_RECOVER_PROBE) {
             st.okOnBackup = 0;
             try {
-              const k = await kplMinuteFetch(code);
-              if (k) { st.primary = "kpl"; console.log(`[minute-src] ${code} -> kpl (recovered)`); return { ...k, source: "kpl" }; }
-            } catch (e) { console.error(`[kpl-minute] ${code} recover probe error:`, e?.message || e); }
+              const tc = await tencentMinuteFetch(code);
+              if (tc && tc.points.length) { st.primary = "tencent"; console.log(`[minute-src] ${code} -> tencent (recovered)`); return { ...tc, source: "tencent" }; }
+            } catch (e) { console.error(`[tencent-minute] ${code} recover probe error:`, e?.message || e); }
           }
-          return { ...t, source: "tencent" };
+          return { ...t, source: "ths" };
         }
-      } catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); }
+      } catch (e) { console.error(`[ths-minute] ${code} error:`, e?.message || e); }
       // 备源失败: 累计失败, 达到阈值切回主源
       st.fail++;
-      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "kpl"; st.fail = 0; console.log(`[minute-src] ${code} -> kpl (tencent x${MINUTE_SWITCH_THRESHOLD} fail)`); }
-      // 本轮回退 KPL
-      try { return { ...(await kplMinuteFetch(code) || { code, prec: 0, points: [] }), source: "kpl" }; }
-      catch (e) { console.error(`[kpl-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "kpl" }; }
+      if (st.fail >= MINUTE_SWITCH_THRESHOLD) { st.primary = "tencent"; st.fail = 0; console.log(`[minute-src] ${code} -> tencent (ths x${MINUTE_SWITCH_THRESHOLD} fail)`); }
+      // 本轮回退腾讯
+      try { return { ...(await tencentMinuteFetch(code) || { code, prec: 0, points: [] }), source: "tencent" }; }
+      catch (e) { console.error(`[tencent-minute] ${code} error:`, e?.message || e); return { code, prec: 0, points: [], source: "tencent" }; }
     }
   }
   const url = urlCode.startsWith("us")
@@ -637,30 +686,35 @@ function emEnqueue(fn) {
   return p;
 }
 
-/* ---------------- 个股所属板块/概念(F10概念, KPL) ---------------- */
-// 从 kpl-api-docs 的 /api/v2/f10-concept 聚合: 行业/地域/概念(替代原东财 f58/f127/f128/f129)
+/* ---------------- 个股所属板块/概念(东财 f127/f128/f129, 替代 KPL f10-concept) ---------------- */
 async function handleStockBoards(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return { code: String(code || ""), industry: "", area: "", concepts: [] };
-  const data = await kplFetch("/api/v2/f10-concept", { code: stockCode });
-  const list = data?.List || [];
-  const names = list.map((x) => String(x.CName || "").trim()).filter(Boolean);
-  const area = names.find((n) => /(省|市|自治区|特别行政区)$/.test(n)) || "";
-  const industry = names[0] || "";
-  const concepts = names.filter((n) => n !== area && n !== industry);
-  return { code: String(code || ""), industry, area, concepts };
+  // 北交所(4/8)与深市同用 market=0; 沪市(6/9)用 market=1
+  const market = /^6|^9/.test(stockCode) ? 1 : 0;
+  try {
+    const j = await emGet(`https://push2delay.eastmoney.com/api/qt/stock/get?secid=${market}.${stockCode}&fields=f127,f128,f129&np=1&fltt=2&invt=2`);
+    const d = j?.data || {};
+    return {
+      code: String(code || ""),
+      industry: String(d.f127 || "").trim(),
+      area: String(d.f128 || "").trim(),
+      concepts: String(d.f129 || "").split(",").map((s) => s.trim()).filter(Boolean),
+    };
+  } catch {
+    return { code: String(code || ""), industry: "", area: "", concepts: [] };
+  }
 }
 
-/** 个股主营业务/公司信息(KPL company-info, 24h 缓存) */
+/** 个股主营业务/公司信息(东财 F10 survey, 24h 缓存) */
 async function handleStockProfile(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return { code: String(code || ""), mainBusiness: "" };
-  const data = await kplFetch("/api/stock/company-info", { code: stockCode });
-  const info = data?.data?.List?.XXList?.[0];
+  const info = await emF10Survey(stockCode);
   return {
     code: String(code || ""),
-    mainBusiness: info?.MainSale || "",
-    name: data?.data?.Name || info?.CName || "",
+    mainBusiness: info?.BUSINESS_SCOPE || info?.ORG_PROFILE || "",
+    name: info?.SECURITY_NAME_ABBR || "",
   };
 }
 
@@ -783,66 +837,65 @@ function scheduleDailyBoardsRefresh() {
   timer.unref();
 }
 
-/* ---------------- 个股实时行情(KPL 盘口 pankou, 5s 缓存) ---------------- */
-// 从 kpl-api-docs 的 /api/v2/stock/pankou 聚合: 最新价/涨跌/换手/振幅/量比/PE/PB/市值/成交额
+/* ---------------- 个股实时行情(东财 ulist, 替代 KPL 盘口 pankou) ----------------
+ * f2最新价 f3涨跌幅 f4涨跌额 f5成交量(手) f6成交额(元) f8换手率 f9市盈率 f10量比
+ * f14名称 f15最高 f16最低 f17今开 f18昨收 f20总市值 f23市净率
+ * 振幅 = (最高-最低)/昨收×100%(ulist 的 f43 语义异常, 不采用) */
 async function handleStockQuote(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return null;
-  const data = await kplFetch("/api/v2/stock/pankou", { code: stockCode });
-  const r = data?.real;
-  if (!r) return null;
-  return {
-    code: String(code || ""),
-    name: data.name || "",
-    price: num(r.last_px),
-    prev: num(data.preclose_px),
-    change: num(r.px_change),
-    pct: num(r.px_change_rate),
-    open: num(r.open_px),
-    high: num(r.high_px),
-    low: num(r.low_px),
-    amount: Math.round(num(r.total_turnover) / 10000), // 成交额(万元) = total_turnover(元)/10000
-    vol: num(r.total_amount), // 成交量(手) = total_amount(手)
-    turnover: num(r.turnover_ratio), // 换手率(%)
-    amplitude: num(r.amplitude), // 振幅(%)
-    volRatio: num(r.vol_ratio), // 量比
-    pe: num(r.pe_rate), // 市盈率
-    pb: num(r.dyn_pb_rate), // 市净率
-    marketValue: num(r.market_value), // 总市值(元)
-    time: String(data.day || ""),
-  };
+  const market = /^6|^9/.test(stockCode) ? 1 : 0; // 沪=1, 深/北=0
+  try {
+    const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${market}.${stockCode}&fields=f2,f3,f4,f5,f6,f8,f9,f10,f12,f14,f15,f16,f17,f18,f20,f23&np=1&fltt=2&invt=2`);
+    const d = j?.data?.diff?.[0];
+    if (!d) return null;
+    const price = num(d.f2);
+    const prev = num(d.f18);
+    const amplitude = prev > 0 ? ((num(d.f15) - num(d.f16)) / prev) * 100 : 0; // 振幅(%)
+    return {
+      code: String(code || ""),
+      name: d.f14 || "",
+      price,
+      prev,
+      change: num(d.f4),
+      pct: num(d.f3),
+      open: num(d.f17),
+      high: num(d.f15),
+      low: num(d.f16),
+      amount: Math.round(num(d.f6) / 10000), // 成交额(万元)
+      vol: num(d.f5), // 成交量(手)
+      turnover: num(d.f8), // 换手率(%)
+      amplitude, // 振幅(%)
+      volRatio: num(d.f10), // 量比
+      pe: num(d.f9), // 市盈率
+      pb: num(d.f23), // 市净率
+      marketValue: num(d.f20), // 总市值(元)
+      time: "",
+    };
+  } catch { return null; }
 }
 
-/* ---------------- 个股财务指标(KPL F10财务摘要, 24h 缓存) ---------------- */
-// 从 kpl-api-docs 的 /api/v2/f10-finance-info 聚合: 营收/净利/ROE/毛利率/负债率等
+/* ---------------- 个股财务指标(东财 datacenter 业绩报表, 替代 KPL F10财务摘要, 24h 缓存) ---------------- */
 async function handleStockFinance(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return null;
-  const data = await kplFetch("/api/v2/f10-finance-info", { code: stockCode });
-  const key = data?.key || [];
-  const rows = (data?.List || []).filter((r) => Array.isArray(r) && r.length >= key.length);
-  if (!rows.length) return null;
-  const latest = rows[0]; // 最新一期(接口按日期降序)
-  const idx = (name) => key.indexOf(name);
-  const get = (name) => {
-    const i = idx(name);
-    return i >= 0 ? String(latest[i] || "").replace(/[元%]/g, "") : "";
-  };
+  const r = await emF10MainTarget(stockCode);
+  if (!r) return null;
   return {
     code: String(code || ""),
-    date: get("ShowDate") || get("Date") || "",
-    revenue: get("GJZB_YYSR"),
-    netProfit: get("GJZB_JLR"),
-    dedProfit: get("GJZB_KFJLR"),
-    eps: get("MGZB_MGSY"),
-    bvps: get("MGZB_MGJZC"),
-    roe: get("YLNL_JZCSYL"),
-    roeYoY: get("YLNL_JZCSYLTB"),
-    grossMargin: get("YLNL_XSMLL"),
-    inventoryTurnover: get("YLNL_CHZZL"),
-    debtRatio: get("ZBJG_ZCFZL"),
-    profitYoY: get("CZNL_JLRTBZZL"),
-    revenueYoY: get("CZNL_YYSRTBZZL"),
+    date: String(r.REPORT_DATE || "").slice(0, 10),
+    revenue: r.TOTALOPERATEREVE ?? r.OPERATE_INCOME_PK ?? "",     // 营业总收入
+    netProfit: r.PARENTNETPROFIT ?? "",                          // 归母净利润
+    dedProfit: r.KCFJCXSYJLR ?? "",                              // 扣非净利润
+    eps: r.EPSJB ?? "",                                          // 基本每股收益
+    bvps: r.BPS ?? "",                                           // 每股净资产
+    roe: r.ROEJQ ?? "",                                          // 加权净资产收益率(%)
+    roeYoY: r.ROEJQTZ ?? "",                                     // ROE 同比
+    grossMargin: r.XSMLL ?? "",                                  // 销售毛利率(%)
+    inventoryTurnover: r.CHZZL ?? "",                            // 存货周转率
+    debtRatio: r.ZCFZL ?? "",                                    // 资产负债率(%)
+    profitYoY: r.PARENTNETPROFITTZ ?? "",                        // 净利同比
+    revenueYoY: r.TOTALOPERATEREVETZ ?? "",                      // 营收同比
   };
 }
 
@@ -911,26 +964,31 @@ async function handleStockFlows(codesParam) {
   return list.map((c) => out[c]).filter(Boolean);
 }
 
-/* ---------------- 个股主力净额(KPL 主力资金 main-forces) ---------------- */
-// 从 kpl-api-docs 的 /api/stock/main-forces 聚合: 主力净额/主动买卖/成交(主动口径)
+/* ---------------- 个股主力净额(东财 ulist f62/f184, 替代 KPL 主力资金 main-forces) ---------------- */
 async function handleStockMainForces(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
   if (!/^\d{6}$/.test(stockCode)) return Promise.reject(new Error("invalid stock code"));
-  const data = await kplFetch("/api/stock/main-forces", { code: stockCode });
-  if (!data || !data.summary) return null;
-  const buy = data.buy || {};
-  const sell = data.sell || {};
-  return {
-    code,
-    day: data.day || "",
-    netAmount: num(data.summary.net_amount) * 10000, // 主力净额(元) = 万元×10000
-    totalAmount: num(data.summary.total_amount) * 10000, // 主动买卖成交额(元) = 万元×10000
-    buyAmount: num(buy.amount) * 10000,
-    sellAmount: num(sell.amount) * 10000,
-    buyRatio: num(buy.ratio),
-    sellRatio: num(sell.ratio),
-    mainForce: String(data.summary.main_force || ""),
-  };
+  const market = /^6|^9/.test(stockCode) ? 1 : 0;
+  try {
+    const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${market}.${stockCode}&fields=f12,f14,f62,f184,f6,f5&np=1&fltt=2&invt=2`);
+    const d = j?.data?.diff?.[0];
+    if (!d) return null;
+    const netIn = num(d.f62); // 主力净流入(元)
+    const totalAmt = num(d.f6); // 成交额(元)
+    return {
+      code,
+      day: dashToday(),
+      netAmount: netIn,
+      totalAmount: totalAmt,
+      buyAmount: netIn > 0 ? netIn : 0,
+      sellAmount: netIn < 0 ? -netIn : 0,
+      buyRatio: netIn > 0 ? Math.abs(num(d.f184)) : 0,
+      sellRatio: netIn < 0 ? Math.abs(num(d.f184)) : 0,
+      mainForce: netIn >= 0 ? "流入" : "流出",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** 板块实时资金流向图: 流入/流出各取前N/2, 拉取分钟级累计主力净流入 */
@@ -1500,11 +1558,106 @@ const MS_RISE_FALL_TTL = 5 * 60 * 1000; // 5 分钟
 // 实时炸板(ladder/broken): 日度聚合关闭盘中, 需按较短 TTL 轮询才能随涨停/炸板变化
 const MS_BROKEN_TTL = 20 * 1000; // 20 秒
 
-/* ---------------- 连板梯队(limit-up-ladder): 取代原 sentiment-indicator 多空模块 ----------------
- * 上游 /api/market/limit-up-ladder 为"日度历史+实时"数据: 每次调用仅返回指定 date 的 1 条记录,
- * 且当日盘中 data 常为空(完整梯队需待当日收盘后产出, 与 rise-fall 同口径)。
- * 设计: 端点按交易日持久化到 SQLite ladder_trend 表(趋势图数据), 汇总卡展示最新可用日期;
- *       历史日仅在首次/过期时回源, 之后走 DB, 避免对慢速上游的高频拉取。 */
+/* ---------------- 连板梯队(东财涨停池): 取代原 kpl limit-up-ladder ----------------
+ * 数据源: 东方财富涨停/炸板池(push2ex.getTopicZTPool/ZBPool), 支持历史日期 YYYYMMDD,
+ * 按日统计连板梯队(一板/二板/三板/高度板/连板率/炸板率), 落库 ladder_trend 表供趋势图。
+ * 注: 「昨日涨停今表现」等日度聚合口径东财不直接提供, 置空(0), 不影响梯队结构展示。 */
+const EM_UT = "7eea3edcaed734bea9cbfc24409ed989"; // push2ex 校验码(客户端固定)
+const EM_HIS = "https://push2his.eastmoney.com/api/qt/stock"; // 历史K线(需 ipv4first + fetch重试)
+const UT_KLINE = "fa5fd1943c7b386f172d6893dbfba10b"; // push2his kline 校验码
+
+/** push2his 历史接口(fetch + 重试, 不回退 curl: schannel 在此域名握手失败) */
+async function emGetHis(url, tries = 5) {
+  let lastErr = new Error("em his request failed");
+  for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const resp = await fetch(url, {
+        headers: { "User-Agent": UA, Accept: "*/*", Referer: "https://quote.eastmoney.com/" },
+        signal: ctrl.signal,
+      });
+      return JSON.parse(Buffer.from(await resp.arrayBuffer()).toString("utf-8"));
+    } catch (e) {
+      lastErr = e;
+      await sleep(500 * (i + 1)); // 递增退避, 兼容 push2his 间歇性断连
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr;
+}
+
+/** 全市场涨跌家数(上证+深证聚合 f104/f105/f106) */
+async function emBreadthNow() {
+  const j = await emGet("https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=1.000001,0.399001&fields=f104,f105,f106&np=1&fltt=2&invt=2");
+  const diff = j?.data?.diff || [];
+  const sum = (f) => diff.reduce((a, b) => a + (Number(b[f]) || 0), 0);
+  return { up: sum("f104"), down: sum("f105"), flat: sum("f106") };
+}
+
+/** 两市成交额(万元): 前端 fmtTurnover 按"万"口径显示(v/10000=亿)。
+ *  今日+昨日: push2his 指数日K 一次取两根(口径一致, 元/10000=万);
+ *  push2his 全挂时回退 ulist 今日成交额(元/10000=万)。 */
+async function emTurnoverPair() {
+  let today = 0, yesterday = 0;
+  for (const secid of ["1.000001", "0.399001"]) {
+    try {
+      const kj = await emGetHis(`${EM_HIS}/kline/get?secid=${secid}&ut=${UT_KLINE}&klt=101&fqt=1&end=20500101&lmt=3&fields1=f1,f2,f3&fields2=f51,f53,f57`);
+      const klines = kj?.data?.klines || [];
+      if (klines.length >= 1) today += (Number(klines[klines.length - 1].split(",")[2]) || 0) / 10000; // 今日 f57(元)→万
+      if (klines.length >= 2) yesterday += (Number(klines[klines.length - 2].split(",")[2]) || 0) / 10000; // 昨日
+    } catch (e) { /* 单指数失败降级 */ }
+  }
+  if (!today) {
+    try {
+      const j = await emGet("https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=1.000001,0.399001&fields=f6,f12&np=1&fltt=2&invt=2");
+      today = (j?.data?.diff || []).reduce((a, b) => a + (Number(b.f6) || 0), 0) / 10000;
+    } catch { today = 0; }
+  }
+  return { today, yesterday };
+}
+
+/** 行业板块主力净额榜(clist f62 降序, 前 20) → [[name, netIn]] */
+async function emBoardFlowList() {
+  const url = `https://push2delay.eastmoney.com/api/qt/clist/get?fid=f62&po=1&pz=20&pn=1&np=1&fltt=2&invt=2&fs=${encodeURIComponent("m:90+t:2")}&fields=f12,f14,f62`;
+  const j = await emGet(url).catch(() => null);
+  return (j?.data?.diff || []).map((b) => [b.f14, num(b.f62)]);
+}
+
+/** 概念板块涨幅榜(clist f3 降序, 前 20) → [{name, pct}](位置越靠前越热) */
+async function emConceptRiseList() {
+  const url = `https://push2delay.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=20&pn=1&np=1&fltt=2&invt=2&fs=${encodeURIComponent("m:90+t:3")}&fields=f12,f14,f3`;
+  const j = await emGet(url).catch(() => null);
+  return (j?.data?.diff || []).map((b) => ({ name: b.f14, pct: num(b.f3) }));
+}
+
+/** 抓取东财涨停/炸板/跌停池; kind ∈ {ZTPool, ZBPool, DTPool}; ymd = YYYYMMDD(支持历史日期) */
+async function emTopicPool(kind, ymd) {
+  const url = `https://push2ex.eastmoney.com/getTopic${kind}?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${ymd}`;
+  const j = await emGet(url).catch((e) => { console.error(`[philia] emTopicPool ${kind}(${ymd}) failed:`, e.message); return null; });
+  if (!j || !j.data) return null;
+  const pool = Array.isArray(j.data.pool) ? j.data.pool : [];
+  return { count: typeof j.data.tc === "number" ? j.data.tc : pool.length, pool };
+}
+
+/** 从涨停池统计连板梯队(一板/二板/三板/高度板/最高连板/连板率) */
+function ladderFromPool(pool) {
+  const counts = new Map();
+  for (const s of pool || []) {
+    const l = s.lbc || s.zttj?.days || 1;
+    counts.set(l, (counts.get(l) || 0) + 1);
+  }
+  const get = (n) => counts.get(n) || 0;
+  const total = (pool || []).length || 1;
+  const highBoard = [...counts.entries()].reduce((a, b) => (a > b[0] ? a : b[0]), 1);
+  return {
+    firstBoard: get(1), secondBoard: get(2), thirdBoard: get(3),
+    highBoard: get(highBoard), 最高连板: highBoard,
+    ladderRate: Math.round(((total - get(1)) / total) * 1000) / 10,
+  };
+}
+
 const MS_LADDER_TTL = 5 * 60 * 1000; // 日度数据低频, 5min 缓存
 const LADDER_BACKFILL_DAYS = 12;      // 趋势图回填最近交易日数
 const LADDER_CONCURRENCY = 3;         // 回源并发上限, 控制慢速上游压力
@@ -1521,11 +1674,32 @@ function lastTradingDays(n) {
   return days;
 }
 
-/** 拉取单日连板梯队记录, 无数据返回 null */
+/** 拉取单日连板梯队记录(东财涨停池+炸板池统计), 无数据返回 null */
 async function fetchLadderDay(date, { timeout = 15000 } = {}) {
-  const j = await kplFetch("/api/market/limit-up-ladder", { date }, timeout);
-  const d = Array.isArray(j?.data) ? j.data : [];
-  return d && d.length ? d[0] : null;
+  const ymd = String(date).replace(/-/g, "");
+  const [zt, zb] = await Promise.allSettled([
+    emTopicPool("ZTPool", ymd),
+    emTopicPool("ZBPool", ymd),
+  ]);
+  const ztPool = zt.status === "fulfilled" ? zt.value?.pool : null;
+  const zbPool = zb.status === "fulfilled" ? zb.value?.pool : null;
+  if (!Array.isArray(ztPool)) return null;
+  const lad = ladderFromPool(ztPool);
+  const zbN = Array.isArray(zbPool) ? zbPool.length : 0;
+  const blownRate = ztPool.length + zbN > 0 ? Math.round((zbN / (ztPool.length + zbN)) * 1000) / 10 : 0;
+  return {
+    "日期": date,
+    "一板": lad.firstBoard,
+    "二板": lad.secondBoard,
+    "三板": lad.thirdBoard,
+    "高度板": lad.highBoard,
+    "连板率(%)": lad.ladderRate,
+    "今日涨停破板率(%)": blownRate,
+    "昨日涨停今表现(%)": "",
+    "昨日连板今表现(%)": "",
+    "昨日破板今表现(%)": "",
+    "市场评价": `最高${lad.最高连板}板`,
+  };
 }
 
 /** 上游原始字段 -> 归一化记录(供 DB 落库与前端) */
@@ -1589,6 +1763,7 @@ async function buildLadder() {
 // 市场情绪轮询时段: 每日 08:59 - 15:00(收盘)。15:00 后停止轮询并定格数据, 次日 08:59 自动恢复。
 // 返回 { active, state, label } state = "polling" | "stopped"
 function marketSentimentPollState(now = new Date()) {
+  if (process.env.MS_FORCE_ACTIVE === "1") return { active: true, state: "polling", label: "轮询中(强制)" }; // 运维/测试: 强制走实时轮询
   const m = now.getHours() * 60 + now.getMinutes();
   const start = 8 * 60 + 59; // 08:59
   const end = 15 * 60;       // 15:00
@@ -1624,38 +1799,45 @@ async function handleMarketSentimentV2() {
     return { ...msFallbackPayload(), pollState: "stopped" };
   }
   try {
-    // 使用 allSettled 防止单个API失败拖垮整体; rise-fall 走 5min 缓存降低调用频率
-    // 实时炸板(ladder/broken)走 20s 缓存, 与 rise-fall 日度值解耦, 保证盘中随涨停/炸板变化
-    // 连板梯队(limit-up-ladder)走 buildLadder: 内部按日持久化到 DB, 历史日走 DB 不再回源
+    // 东财数据源(替代原 kpl mood/rise-fall/ladder-broken):
+    //   - 涨跌家数: 上证+深证聚合 f104/f105/f106
+    //   - 涨停/跌停/炸板: push2ex 涨停池/跌停池/炸板池(实时)
+    //   - 量能: 两市成交额 今日 ulist + 昨日 push2his 日K(5min 缓存)
+    //   - 连板梯队: buildLadder(东财涨停池统计, 落库 ladder_trend)
+    const todayYmd = todayStr();
     const results = await Promise.allSettled([
-      kplFetch("/api/market/mood"),
+      emBreadthNow(),
+      emTopicPool("ZTPool", todayYmd),
+      emTopicPool("DTPool", todayYmd),
+      emTopicPool("ZBPool", todayYmd),
       buildLadder(),
-      cached("kpl-rise-fall", MS_RISE_FALL_TTL, () => kplFetch("/api/market/rise-fall")),
-      cached(`kpl-ladder-broken:${dashToday()}`, MS_BROKEN_TTL, () => kplFetch("/api/ladder/broken", { date: dashToday() }, 15000)),
+      cached("em-turnover", 5 * 60 * 1000, () => emTurnoverPair()),
     ]);
 
-    const mood = results[0].status === "fulfilled" ? results[0].value : null;
-    const ladder = results[1].status === "fulfilled" ? results[1].value : { current: null, trend: [] };
-    const riseFall = results[2].status === "fulfilled" ? results[2].value : null;
-    const broken = results[3].status === "fulfilled" ? results[3].value : null;
+    const breadth = results[0].status === "fulfilled" ? results[0].value : null;
+    const ztPool = results[1].status === "fulfilled" ? results[1].value : null;
+    const dtPool = results[2].status === "fulfilled" ? results[2].value : null;
+    const zbPool = results[3].status === "fulfilled" ? results[3].value : null;
+    const ladder = results[4].status === "fulfilled" ? results[4].value : { current: null, trend: [] };
+    const turnoverPair = results[5].status === "fulfilled" ? results[5].value : null;
 
-    // 如果 mood 接口失败: 回退到日内最后一次成功快照; 无快照则返回兜底结构
-    if (!mood) {
-      console.error("[market-sentiment-v2] mood API failed, results:", results.map(r => r.status));
+    // 核心数据(涨跌家数/涨停池)全部失败时: 回退到日内最后一次成功快照
+    if (!breadth && !ztPool) {
+      console.error("[market-sentiment-v2] em data failed, results:", results.map(r => r.status));
       const snap = loadMsSnapshot();
       if (snap) return { ...snap, fromCache: true, refetch: "fallback-snapshot" };
       return msFallbackPayload();
     }
 
     // --- mood ---
-    const upCount = mood?.上涨家数 ?? 0;
-    const downCount = mood?.下跌家数 ?? 0;
-    const limitUp = mood?.涨停家数 ?? 0;
-    const limitDown = mood?.跌停家数 ?? 0;
-    const turnover = mood?.全市场流通量 ?? 0;
-    const prevTurnover = mood?.前日流通量 ?? 0;
-    const ratio = mood?.涨跌比 ?? 1;
-    const marketColor = mood?.市场颜色 ?? 0;
+    const upCount = breadth?.up ?? 0;
+    const downCount = breadth?.down ?? 0;
+    const limitUp = ztPool?.count ?? (ztPool?.pool ? ztPool.pool.length : 0);
+    const limitDown = dtPool?.count ?? (dtPool?.pool ? dtPool.pool.length : 0);
+    const turnover = turnoverPair?.today ?? 0;
+    const prevTurnover = turnoverPair?.yesterday ?? 0;
+    const ratio = downCount > 0 ? (upCount / downCount) : 1;
+    const marketColor = upCount >= downCount ? 1 : 0;
     const totalCount = upCount + downCount;
     const upRatio = totalCount > 0 ? (upCount / totalCount * 100) : 50;
 
@@ -1677,43 +1859,19 @@ async function handleMarketSentimentV2() {
     else if (turnoverChange >= -20) volLevel = "温和缩量";
     else volLevel = "缩量";
 
-    // --- rise-fall ---
-    const rf = riseFall || {};
-    const rawData = Array.isArray(rf?.raw_data) ? rf.raw_data : [];
-    // 合并进本地存储(实时更新当天数据, 新增替换最旧; 当日数据实时落盘)
-    const stored = mergeMsTrend(rawData);
-    // 从本地存储取最近半年趋势数据(最新在前), 供图表使用
+    // 今日实时趋势点写入 market_trend(积累趋势; 炸板率 = 炸板/(涨停+炸板))
+    const blownLimitUpCount = zbPool?.pool ? zbPool.pool.length : 0;
+    const blownLimitUpRate = (limitUp + blownLimitUpCount) > 0 ? Math.round((blownLimitUpCount / (limitUp + blownLimitUpCount)) * 1000) / 10 : 0;
+    const today = dashToday();
+    upsertTrends([{ date: today, limitUp, limitDown, brokenUp: blownLimitUpCount, blownUp: blownLimitUpCount, blownRate: blownLimitUpRate }]);
     const trendData = msTrendFromStore();
-
-    // 实时炸板: rise-fall 的 blown_limit_up_rate 是日度聚合值, 盘中冻结不动;
-    // 改从 ladder/broken 当日炸板列表计数(日内实时), 与 mood 的实时涨停家数合成炸板率,
-    //   炸板率 = 炸板/(当前涨停 + 炸板), 口径与上游自洽。失败/为空时回退 rise-fall 的日度值。
-    let blownLimitUpCount = rawData[0] ? (rawData[0][5] || 0) : (rf?.blown_limit_up_count ?? 0);
-    let blownLimitUpRate = rf?.blown_limit_up_rate ?? 0;
-    const list = Array.isArray(broken) ? broken : Array.isArray(broken?.data) ? broken.data : null;
-    if (list && list.length) {
-      blownLimitUpCount = list.length;
-      const denom = limitUp + blownLimitUpCount;
-      blownLimitUpRate = denom > 0 ? Math.round((blownLimitUpCount / denom) * 1000) / 10 : 0;
-    }
-
-    // 合成"今日实时点": market_trend 表中的最新一条来自日度接口 rise-fall, 盘中不更新,
-    // 导致趋势图最后一点停留在昨日。此处用 mood + ladder/broken 的实时值覆写/插入今日点,
-    // 使趋势图当日即随涨停/炸板变化, 消除"延后一天"的感知。
+    // 覆写今日实时点(消除"延后一天"感知)
     if (Array.isArray(trendData)) {
-      const today = dashToday();
-      const realtime = {
-        limitUp: mood?.涨停家数 ?? limitUp,
-        limitDown: mood?.跌停家数 ?? limitDown,
-        blownUp: blownLimitUpCount,
-        blownRate: blownLimitUpRate,
-      };
+      const realtime = { limitUp, limitDown, blownUp: blownLimitUpCount, blownRate: blownLimitUpRate };
       const first = trendData[0];
       if (first && first.date === today) {
-        // 今日点已存在(日度值): 用实时值覆写
         trendData[0] = { ...first, ...realtime, date: today };
       } else {
-        // 无今日点(最新为昨日): 插入今日实时点在最前
         trendData.unshift({ date: today, ...realtime });
       }
     }
@@ -1746,15 +1904,14 @@ async function handleMarketSentimentV2() {
         trend: ladder?.trend || [],
       },
       riseFall: {
-        limitUpCount: rf?.limit_up_count ?? 0,
-        limitDownCount: rf?.limit_down_count ?? 0,
-        // 炸板 = 当日 ladder/broken 计数(日内实时); 失败回退 raw_data 最新 r[5] / rise-fall 字段
+        limitUpCount: limitUp,
+        limitDownCount: limitDown,
         blownLimitUpCount,
-        brokenLimitUpCount: rf?.broken_limit_up_count ?? 0,
+        brokenLimitUpCount: blownLimitUpCount,
         blownLimitUpRate,
-        yesterdayLimitUpPerf: rf?.yesterday_limit_up_performance ?? 0,
-        yesterdayBrokenPerf: rf?.yesterday_broken_performance ?? 0,
-        date: rf?.date ?? "",
+        yesterdayLimitUpPerf: 0,
+        yesterdayBrokenPerf: 0,
+        date: today,
         trendData,
       },
     };
@@ -1772,11 +1929,11 @@ async function handleMarketSentimentV2() {
   }
 }
 
-/* ---------------- 市场情绪新闻: 基于 kpl.liuhepc.cn API (替代原Python插件) ---------------- */
+/* ---------------- 市场情绪新闻: 基于同花顺 THS 网关 news (替代原 kpl news-flash) ---------------- */
 async function handleNewsAnalystKPL() {
   try {
-    const news = await kplFetch("/api/advanced/news-flash", { page_size: 30 });
-    const items = news?.data || [];
+    const j = await thsFetch("/api/ths/news", {}, 10000);
+    const items = j?.success ? (j.data || []) : [];
     if (!items.length) {
       return { success: true, fetchTime: new Date().toISOString(), platformStats: { success: 0, total: 0 }, flowData: null, sentimentData: null, hotTopics: [], stockNews: [] };
     }
@@ -1786,14 +1943,16 @@ async function handleNewsAnalystKPL() {
     let posCount = 0, negCount = 0;
     const stockNews = items.map(item => {
       const title = item.Title || "";
+      // 来源: thsdk news 的 Properties 中 source=xxx
+      const src = (String(item.Properties || "").match(/source=([^\n]+)/) || [])[1] || "同花顺";
       let score = 0;
       for (const kw of positiveKw) { if (title.includes(kw)) score += 10; }
       for (const kw of negativeKw) { if (title.includes(kw)) score -= 10; }
       if (score > 0) posCount++;
       else if (score < 0) negCount++;
       return {
-        platform: item.Source || "开盘啦",
-        category: item.ZSName || "",
+        platform: src.trim(),
+        category: "",
         title,
         content: title,
         matchedKeywords: [],
@@ -1803,18 +1962,16 @@ async function handleNewsAnalystKPL() {
     const total = items.length;
     const sentimentIndex = total > 0 ? Math.round((posCount / total) * 100) : 50;
     const sentimentClass = sentimentIndex >= 60 ? "乐观" : sentimentIndex >= 40 ? "中性" : "悲观";
-    // 提取热门话题 (按板块名聚类)
+    // 提取热门话题(按标题关键词聚类, thsdk news 无板块字段, 按证券代码聚类兜底)
     const topicMap = {};
     for (const item of items) {
-      const name = item.ZSName || "";
-      if (name) {
-        topicMap[name] = (topicMap[name] || 0) + 1;
-      }
+      const name = String(item.Stock || item.Code || "").trim();
+      if (name) topicMap[name] = (topicMap[name] || 0) + 1;
     }
     const hotTopics = Object.entries(topicMap)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
-      .map(([topic, count]) => ({ topic, count, heat: Math.round(count / total * 100), crossPlatform: 1, sources: ["开盘啦"] }));
+      .map(([topic, count]) => ({ topic, count, heat: Math.round(count / total * 100), crossPlatform: 1, sources: ["同花顺"] }));
     return {
       success: true,
       fetchTime: new Date().toISOString(),
@@ -1827,14 +1984,14 @@ async function handleNewsAnalystKPL() {
         techScore: Math.round(hotTopics.length * 15 + 50),
         level: sentimentClass,
         analysis: `共${total}条快讯，积极${posCount}条，消极${negCount}条`,
-        platformDetails: [{ platform: "kpl", name: "开盘啦快讯", category: "快讯", count: total, score: sentimentIndex }],
+        platformDetails: [{ platform: "ths", name: "同花顺快讯", category: "快讯", count: total, score: sentimentIndex }],
       },
       sentimentData: { sentimentIndex, sentimentClass, flowFactor: 0, financeFactor: 0, keywordFactor: sentimentIndex, positiveCount: posCount, negativeCount: negCount },
       hotTopics,
       stockNews,
     };
   } catch (e) {
-    console.error("[news-analyst] kpl error:", e.message);
+    console.error("[news-analyst] ths error:", e.message);
     return { success: false, error: e.message };
   }
 }
@@ -1998,66 +2155,61 @@ function getFengFrontBase(date) {
   return cached(`fengk-front:${date}`, 15000, () => handleFengFrontBase(date));
 }
 
-// 聚合各 kpl 接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
+// 聚合各东财网页接口的"维度原始分", 归一化到 0-100 的 dims; 不在此处算最终分(权重由前端决定)
 async function handleFengFrontBase(date) {
-  // 6 个上游各自限时 8s(与 kplFetch 内部 8s 超时一致): kpl.liuhepc.cn 实测单接口 4.4-6.7s,
-  // 此前 3s 限时导致 6 个上游全部超时 → windList 恒为空(风口/龙头股无法加载)。
-  // 各上游仍并行(Promise.allSettled), 慢接口独立超时不阻塞其他字段; 外层的 15s 缓存保证刷新时秒回。
-  const FENG_UPSTREAM_TTL = 8000;
+  // 东财数据源(替代原 kpl 6 上游):
+  //   - 涨停个股+连板高度: 东财涨停池 ZTPool(含连板 lbc / 行业 hybk / 封单 fund)
+  //   - 板块资金: 东财行业板块主力净额榜 clist f62
+  //   - 热门题材: 东财概念板块涨幅榜 clist f3
+  //   - 题材新闻: 同花顺 THS news
+  // 各上游并行(Promise.allSettled), 单源失败不影响其他字段; 外层的 15s 缓存保证刷新时秒回。
+  const todayYmd = todayStr();
   const results = await Promise.allSettled([
-    withTimeout(kplFetch("/api/ladder/realtime-boards"), FENG_UPSTREAM_TTL, "realtime-boards"),
-    withTimeout(kplFetch("/api/ladder/sector", date ? { date } : {}), FENG_UPSTREAM_TTL, "sector"),
-    withTimeout(kplFetch("/api/fengk/yd-plate", date ? { date } : {}), FENG_UPSTREAM_TTL, "yd-plate"),
-    withTimeout(kplFetch("/api/theme/hot"), FENG_UPSTREAM_TTL, "theme-hot"),
-    withTimeout(kplFetch("/api/news/theme"), FENG_UPSTREAM_TTL, "theme-news"),
-    withTimeout(kplFetch("/api/advanced/fengk-best"), FENG_UPSTREAM_TTL, "fengk-best"),
+    emTopicPool("ZTPool", todayYmd),
+    emTopicPool("ZBPool", todayYmd),
+    emBoardFlowList(),
+    emConceptRiseList(),
+    thsFetch("/api/ths/news", {}, 10000),
   ]);
 
-  const [boardsRes, ladderSecRes, ydRes, themeRes, newsRes, fengBestRes] = results;
+  const [ztRes, zbRes, flowRes, concRes, newsRes] = results;
 
-  // 涨停个股: 优先 realtime-boards, 为空用 fengk-best 兜底
-  let boardList = [];
-  if (boardsRes.status === "fulfilled") {
-    const b = boardsRes.value || [];
-    boardList = Array.isArray(b) ? b : b?.data || [];
-  }
-  if (!boardList.length && fengBestRes.status === "fulfilled") {
-    const fb = fengBestRes.value || [];
-    const raw = Array.isArray(fb) ? fb : fb?.data || [];
-    boardList = raw.map((it) => ({
-      stock_code: it.stock_code || it.code,
-      stock_name: it.stock_name || it.name,
-      limit_up_reason: it.limit_up_reason || it.reason || it.name || "",
-      concepts: it.concepts || it.concept || "",
-      consecutive_days: it.consecutive_days || it.days || 0,
-      seal_amount: it.seal_amount || it.seal || 0,
-      limit_up_price: it.limit_up_price || it.price || 0,
-      change_pct: it.change_pct || it.pct || 0,
-    }));
-  }
+  // 涨停个股(东财涨停池): 统一字段映射; 无数据时留空(不兜底, 如实标注)
+  const ztPool = ztRes.status === "fulfilled" ? ztRes.value?.pool : null;
+  const boardList = (ztPool || []).map((s) => ({
+    stock_code: s.c,
+    stock_name: s.n,
+    limit_up_reason: s.hybk || s.zttj?.name || "",
+    concepts: s.hybk || "",
+    consecutive_days: s.lbc || s.zttj?.days || 1,
+    seal_amount: s.fund || 0,
+    limit_up_price: num(s.zttj?.price || s.p || 0) / 1000, // 东财涨停池价格单位为厘(1元=1000厘), ÷1000 换为元
+    change_pct: s.zdp || 0,
+  }));
 
-  // 板块资金 [["芯片",858.32], ...]
-  let ydList = [];
-  if (ydRes.status === "fulfilled") {
-    const yd = ydRes.value || {};
-    const list = Array.isArray(yd) ? yd : yd.list;
-    if (Array.isArray(list)) ydList = list;
-  }
+  // 板块资金 [[name, netIn], ...](行业板块主力净额榜)
+  const ydList = flowRes.status === "fulfilled" ? (flowRes.value || []) : [];
 
-  // 热门题材(位置越靠前越热)
-  let themeList = [];
-  if (themeRes.status === "fulfilled") {
-    const th = themeRes.value || {};
-    const themes = Array.isArray(th) ? th : th.themes;
-    if (Array.isArray(themes)) themeList = themes;
-  }
+  // 热门题材(位置越靠前越热): 概念板块涨幅榜
+  const themeList = concRes.status === "fulfilled" ? (concRes.value || []) : [];
 
-  // 题材新闻
-  let newsList = [];
-  if (newsRes.status === "fulfilled") {
-    const ns = newsRes.value || {};
-    const list = Array.isArray(ns) ? ns : ns.List;
-    if (Array.isArray(list)) newsList = list;
+  // 题材新闻(thsdk news → 兼容原 Title/ZSName 结构)
+  const newsList = (newsRes.status === "fulfilled" && newsRes.value?.success)
+    ? (newsRes.value.data || []).map((n) => ({ Title: n.Title || "", ZSName: String(n.Stock || n.Code || "") }))
+    : [];
+
+  // 板块连板梯队(替代原 ladder/sector): 从涨停池按行业聚合连板高度
+  const ladderSectors = [];
+  {
+    const byBoard = new Map();
+    for (const s of boardList) {
+      const b = s.limit_up_reason || "其他";
+      if (!byBoard.has(b)) byBoard.set(b, []);
+      byBoard.get(b).push(s);
+    }
+    for (const [bname, stocks] of byBoard) {
+      ladderSectors.push({ sector_name: bname, stocks: stocks.map((s) => ({ consecutive_days: s.consecutive_days })) });
+    }
   }
 
   const windMap = new Map();
@@ -2094,13 +2246,7 @@ async function handleFengFrontBase(date) {
     });
   }
 
-  // 板块连板: 实时连板梯队(权威连板来源, 含真实 consecutive_days ≥ 2)
-  let ladderSectors = [];
-  if (ladderSecRes.status === "fulfilled") {
-    const ls = ladderSecRes.value || {};
-    const sectors = Array.isArray(ls) ? ls : ls.sectors;
-    if (Array.isArray(sectors)) ladderSectors = sectors;
-  }
+  // 板块连板: 从东财涨停池按行业聚合的连板梯队(含真实 consecutive_days ≥ 2)
   for (const sec of ladderSectors) {
     const name = canonFeng(sec.sector_name);
     if (!name) continue;
@@ -2195,14 +2341,14 @@ async function handleFengFrontBase(date) {
   }));
 
   return {
-    date: date || (ydRes.status === "fulfilled" ? ydRes.value?.plate || "" : ""),
+    date: date || (ztRes.status === "fulfilled" ? ztRes.value?.date || "" : ""),
     updatedAt: Date.now(), // 龙头股数据源构建时间戳(供追溯)
     source: {
-      boards: boardsRes.status === "fulfilled" && boardList.length > 0,
-      ydPlate: ydRes.status === "fulfilled",
-      theme: themeRes.status === "fulfilled",
+      boards: ztRes.status === "fulfilled" && boardList.length > 0,
+      ydPlate: flowRes.status === "fulfilled",
+      theme: concRes.status === "fulfilled",
       news: newsRes.status === "fulfilled",
-      fengBest: fengBestRes.status === "fulfilled",
+      fengBest: false, // 原 kpl fengk-best 已由东财涨停池接管
     },
     windList: enriched.slice(0, 30),
   };
@@ -2553,6 +2699,59 @@ const routes = {
   "/api/treasury-history": async () => cached("treasury-history", 6 * 3600 * 1000, () => handleTreasuryHistory()),
   "/api/health": async () => ({ status: "up", ts: Date.now(), cache: cache.size }),
   /* --------------------------------------------------------------------------
+   * GET/POST /api/ths/account — 同花顺 THS 网关账号配置
+   * GET:  读 server/ths-account.json, 返回 {configured, username, mac, gatewayAlive}(不回传明文密码)
+   * POST: body {username, password, mac} 写文件并同步网关内存账号热重连; password 留空则保留原密码
+   * ------------------------------------------------------------------------ */
+  "/api/ths/account": async (q, body) => {
+    const file = path.join(__dirname, "ths-account.json");
+    const alive = async () => {
+      try {
+        const r = await fetch(`${THS_GATEWAY}/api/ths/account`, { signal: AbortSignal.timeout(1500) });
+        return r.ok;
+      } catch { return false; }
+    };
+    if (body === undefined) {
+      let configured = false, username = "", mac = "";
+      try {
+        if (fs.existsSync(file)) {
+          const acc = JSON.parse(fs.readFileSync(file, "utf-8"));
+          configured = !!(acc.username && acc.password);
+          username = acc.username || "";
+          mac = acc.mac || "";
+        }
+      } catch (e) { console.error("[ths-account] read error:", e?.message || e); }
+      return { configured, username, mac, gatewayAlive: await alive() };
+    }
+    const username = String(body?.username || "").trim();
+    const password = String(body?.password || "").trim();
+    const mac = String(body?.mac || "").trim();
+    if (!username) throw Object.assign(new Error("账号不能为空"), { status: 400 });
+    // 密码留空则保留原密码(避免每次保存都需重输)
+    let finalPwd = password;
+    if (!finalPwd) {
+      try {
+        if (fs.existsSync(file)) {
+          const acc = JSON.parse(fs.readFileSync(file, "utf-8"));
+          finalPwd = acc.password || "";
+        }
+      } catch { finalPwd = ""; }
+    }
+    if (!finalPwd) throw Object.assign(new Error("密码不能为空(首次配置需填写)"), { status: 400 });
+    fs.writeFileSync(file, JSON.stringify({ username, password: finalPwd, mac }, null, 2), "utf-8");
+    console.log("[ths-account] saved", username);
+    // 同步网关内存账号并热重连(网关在线时); 失败不影响文件已保存
+    try {
+      await fetch(`${THS_GATEWAY}/api/ths/account`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password: finalPwd, mac }),
+        signal: AbortSignal.timeout(3000),
+      });
+    } catch (e) { console.error("[ths-account] gateway sync failed:", e?.message || e); }
+    return { configured: true, username, mac, gatewayAlive: true };
+  },
+  /* --------------------------------------------------------------------------
    * GET /api/monitor — 系统监控接口(供前端"系统监控"面板)
    * 功能: 汇总各 API 接口的调用性能指标、服务端内存状态与本地数据库状态。
    * 输入: 无(不受用户输入影响, 亦不参与限流 IP 计数)。
@@ -2646,6 +2845,8 @@ const PROTECTED_ROUTES = new Set([
   // PHILIA AI: 涉及私有密钥与 LLM 调用, 仅允许同源访问
   "/api/philia/market-analyze",
   "/api/philia/key",
+  // 同花顺账号凭据, 仅允许同源访问
+  "/api/ths/account",
 ]);
 
 // 环回地址互认: 开发期 vite 代理(:3000→:3001)跨端口转发, Origin/Host 端口必然不同, 视为同源
@@ -2932,4 +3133,28 @@ server.listen(PORT, () => {
   if (typeof philia.setLeaderPoolGetter === "function") philia.setLeaderPoolGetter(getLeaderPool);
   scheduleDailyBoardsRefresh(); // 每日行业/概念批量刷新(启动后立即检查一次, 之后每小时)
   scheduleMsDaily(); // 市场情绪收盘定格(15:00后保存离线快照, 每30s检查)
+  ensureThsGateway(); // 确保 THS 数据网关运行(未启动则自动拉起)
 });
+
+/* ---------------- THS 数据网关自动拉起 ----------------
+ * 个股分时/新闻等依赖同花顺 thsdk, 由 server/ths-gateway.py 提供。
+ * Node 服务启动时探测网关, 不可达则后台拉起 Python 进程, 避免手动启动。 */
+function ensureThsGateway() {
+  const probe = async () => {
+    try {
+      const r = await fetch(`${THS_GATEWAY}/api/ths/industry`, { signal: AbortSignal.timeout(1500) });
+      if (r.ok) { console.log("[ths-gateway] 已连接:", THS_GATEWAY); return; }
+    } catch { /* 不可达, 拉起 */ }
+    try {
+      const py = process.platform === "win32" ? "python" : "python3";
+      const { spawn } = require("child_process");
+      const p = spawn(py, [path.join(__dirname, "ths-gateway.py"), "--port", "9877"], { detached: true, stdio: "ignore", windowsHide: true });
+      p.unref();
+      console.log(`[ths-gateway] 未检测到网关, 已自动拉起 THS 数据网关(port 9877)`);
+    } catch (e) {
+      console.error("[ths-gateway] 拉起失败:", e?.message || e);
+    }
+  };
+  probe();
+  setTimeout(probe, 3000).unref(); // 3s 后再确认一次(网关启动需连接 THS)
+}

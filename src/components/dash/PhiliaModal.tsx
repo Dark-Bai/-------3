@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Sparkles, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { usePhilia } from "./PhiliaContext";
-import { api, type PhiliaModel, type PhiliaConfig } from "@/lib/api";
+import { api, type PhiliaModel, type PhiliaConfig, type ThsAccountInfo } from "@/lib/api";
 
 /** 后端模型接口未就绪/空时的兜底模型列表(含 deepseek-v4-flash 正式版) */
 const DEFAULT_MODELS: PhiliaModel[] = [
@@ -46,6 +46,14 @@ export function PhiliaModal() {
   const [saved, setSaved] = useState(false);
   /* 防止 config 引用变化(后台刷新)时重置用户正在编辑的表单 */
   const initializedRef = useRef<PhiliaConfig | null>(null);
+  /* 分页: config=分析配置, ths=同花顺账号 */
+  const [tab, setTab] = useState<"config" | "ths">("config");
+  /* 同花顺 THS 账号表单(密码不回显, 仅展示已配置状态) */
+  const [thsInfo, setThsInfo] = useState<ThsAccountInfo | null>(null);
+  const [thsUsername, setThsUsername] = useState("");
+  const [thsPassword, setThsPassword] = useState("");
+  const [thsMac, setThsMac] = useState("");
+  const [thsError, setThsError] = useState<string | null>(null);
 
   /* 合并模型列表: 后端优先, 空则用兜底 */
   const modelOptions = useMemo(() => {
@@ -78,6 +86,20 @@ export function PhiliaModal() {
     return () => window.removeEventListener("keydown", onKey);
   }, [closeModal]);
 
+  /* 弹窗打开时读取已保存的同花顺账号(后端不回传明文密码) */
+  useEffect(() => {
+    let on = true;
+    api.thsAccount.get().then((info) => {
+      if (!on) return;
+      setThsInfo(info);
+      setThsUsername(info.username || "");
+      setThsMac(info.mac || "");
+    }).catch(() => {
+      if (on) setThsInfo({ configured: false, username: "", mac: "", gatewayAlive: false });
+    });
+    return () => { on = false; };
+  }, []);
+
   /* 是否需要 Key: 仅当尚未配置(hasKey=false)时强制填写 */
   const needKey = !config?.hasKey;
 
@@ -108,8 +130,18 @@ export function PhiliaModal() {
     }
   }
 
-  /** 保存配置(含 key 时一并加密存储), 成功后展示反馈再关闭 */
+  /** 切换分页时清理提交状态, 避免残留成功/错误反馈跨页展示 */
+  function switchTab(t: "config" | "ths") {
+    if (t === tab) return;
+    setTab(t);
+    setSubmitError(null);
+    setSaved(false);
+    setThsError(null);
+  }
+
+  /** 保存配置(含 key 时一并加密存储), 成功后展示反馈再关闭; 当前在「同花顺账号」页则保存 THS 账号 */
   async function handleSave() {
+    if (tab === "ths") return handleSaveThs();
     if (needKey && !key.trim()) {
       setKeyError("请先填写 API Key");
       setKeyValidated("invalid");
@@ -120,6 +152,35 @@ export function PhiliaModal() {
     setSaved(false);
     try {
       await saveSettings({ key: key.trim() || undefined, model, skills: selectedSkills });
+      setSaved(true);
+      setSubmitting(false);
+      // 短暂展示成功反馈后自动关闭
+      setTimeout(closeModal, 700);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "保存失败");
+      setSubmitting(false);
+    }
+  }
+
+  /** 保存同花顺账号: 写本地配置并热重连 THS 网关; 密码留空则保留原密码 */
+  async function handleSaveThs() {
+    const u = thsUsername.trim();
+    if (!u) {
+      setThsError("请输入同花顺账号");
+      return;
+    }
+    if (!thsInfo?.configured && !thsPassword.trim()) {
+      setThsError("首次配置需填写密码");
+      return;
+    }
+    setThsError(null);
+    setSubmitError(null);
+    setSubmitting("saving");
+    setSaved(false);
+    try {
+      const info = await api.thsAccount.save({ username: u, password: thsPassword.trim() || undefined, mac: thsMac.trim() });
+      setThsInfo(info);
+      setThsPassword("");
       setSaved(true);
       setSubmitting(false);
       // 短暂展示成功反馈后自动关闭
@@ -158,8 +219,33 @@ export function PhiliaModal() {
           </div>
         </header>
 
+        {/* 分页: 分析配置 / 同花顺账号 */}
+        <nav className="flex shrink-0 border-b border-[#e0d5c0] bg-[#f5f0e6]/60 px-2">
+          {(
+            [
+              ["config", "分析配置"],
+              ["ths", "同花顺账号"],
+            ] as const
+          ).map(([t, label]) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => switchTab(t)}
+              className={`-mb-px border-b-2 px-4 py-2 text-[12px] font-semibold transition-colors ${
+                tab === t
+                  ? "border-[#d4943a] text-[#6b5b3e]"
+                  : "border-transparent text-[#a8987e] hover:text-[#6b5b3e]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
         {/* 内容区 */}
         <div className="max-h-[70vh] min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-[#6b5b3e]">
+          {tab === "config" ? (
+            <>
           {/* API Key */}
           <div>
             <label className="mb-1 flex items-center gap-1 text-[12px] font-semibold text-[#8b7a5e]">
@@ -281,6 +367,70 @@ export function PhiliaModal() {
               </div>
             )}
           </div>
+            </>
+          ) : (
+            <>
+              {/* 网关状态条 */}
+              <div className="flex items-center gap-2 rounded border border-[#e0d5c0] bg-[#f5f0e6]/60 px-3 py-2 text-[11px]">
+                <span className={`h-2 w-2 rounded-full ${thsInfo == null ? "bg-[#c9b99a]" : thsInfo.gatewayAlive ? "bg-[#4a6b3f]" : "bg-[#b8533a]"}`} />
+                <span>
+                  THS 数据网关 {thsInfo == null ? "检测中…" : thsInfo.gatewayAlive ? "在线" : "离线"}
+                </span>
+                <span className="ml-auto">账号 {thsInfo?.configured ? "已配置" : "未配置"}</span>
+              </div>
+
+              {/* 同花顺账号 */}
+              <div>
+                <label className="mb-1 flex items-center gap-1 text-[12px] font-semibold text-[#8b7a5e]">
+                  同花顺账号
+                  {!thsInfo?.configured && <span className="rounded bg-[#b8533a]/15 px-1 text-[10px] text-[#b8533a]">必填</span>}
+                </label>
+                <input
+                  type="text"
+                  value={thsUsername}
+                  disabled={!!submitting}
+                  onChange={(e) => { setThsUsername(e.target.value); setThsError(null); }}
+                  placeholder="请输入同花顺账号"
+                  className="w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] text-[#6b5b3e] outline-none transition-colors placeholder:text-[#c9b99a] focus:border-[#d4943a]/70"
+                />
+              </div>
+
+              {/* 密码 */}
+              <div>
+                <label className="mb-1 flex items-center gap-1 text-[12px] font-semibold text-[#8b7a5e]">
+                  密码
+                  {!thsInfo?.configured && <span className="rounded bg-[#b8533a]/15 px-1 text-[10px] text-[#b8533a]">必填</span>}
+                </label>
+                <input
+                  type="password"
+                  value={thsPassword}
+                  disabled={!!submitting}
+                  onChange={(e) => { setThsPassword(e.target.value); setThsError(null); }}
+                  placeholder={thsInfo?.configured ? "已配置，留空保持不变" : "请输入同花顺登录密码"}
+                  className="w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] text-[#6b5b3e] outline-none transition-colors placeholder:text-[#c9b99a] focus:border-[#d4943a]/70"
+                />
+              </div>
+
+              {/* MAC 地址 */}
+              <div>
+                <label className="mb-1 block text-[12px] font-semibold text-[#8b7a5e]">MAC 地址</label>
+                <input
+                  type="text"
+                  value={thsMac}
+                  disabled={!!submitting}
+                  onChange={(e) => { setThsMac(e.target.value); setThsError(null); }}
+                  placeholder="如 FC:9D:05:26:42:EF"
+                  className="w-full rounded border border-[#e0d5c0] bg-[#f5f0e6] px-3 py-2 text-[13px] text-[#6b5b3e] outline-none transition-colors placeholder:text-[#c9b99a] focus:border-[#d4943a]/70"
+                />
+              </div>
+
+              {thsError && <p className="text-[11px] text-[#b8533a]">{thsError}</p>}
+
+              <p className="text-[10px] text-[#a8987e]">
+                账号凭据仅保存于本机 server/ths-account.json，供 THS 数据网关连接使用，密码不会回传前端。
+              </p>
+            </>
+          )}
 
           {submitError && (
             <div className="rounded border border-[#b8533a]/40 bg-[#b8533a]/10 px-3 py-2 text-[12px] text-[#b8533a]">
@@ -301,7 +451,11 @@ export function PhiliaModal() {
             type="button"
             disabled={!!submitting || saved}
             onClick={handleSave}
-            title="保存当前配置：将所选技能与模型持久化保存到本机，供「启动 AI 综合分析」使用"
+            title={
+              tab === "config"
+                ? "保存当前配置：将所选技能与模型持久化保存到本机，供「启动 AI 综合分析」使用"
+                : "保存同花顺账号配置并热重连 THS 数据网关"
+            }
             className="flex items-center gap-1.5 rounded border border-[#4a6b3f]/60 bg-[#4a6b3f] px-5 py-2 text-[13px] font-bold text-[#faf6ee] shadow-sm transition-colors hover:bg-[#3d5a35] hover:shadow disabled:opacity-50"
           >
             {submitting ? (
@@ -319,7 +473,9 @@ export function PhiliaModal() {
             )}
           </button>
           <span className="ml-auto text-[10px] text-[#a8987e]">
-            保存后请前往主面板点击「启动 AI 综合分析」
+            {tab === "config"
+              ? "保存后请前往主面板点击「启动 AI 综合分析」"
+              : "保存后将立即生效并重连 THS 数据网关"}
           </span>
         </footer>
       </div>
