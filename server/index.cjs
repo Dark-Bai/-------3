@@ -559,7 +559,7 @@ async function thsMinuteFetch(code) {
     const q = await thsThrottled("/api/ths/quote", { code: thsCode }, { timeout: 8000, retries: 1 });
     if (q?.success && q.data?.[0]) prec = num(q.data[0]["昨收价"]);
   } catch { /* prec 保持 0 */ }
-  const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]) }));
+  const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]), v: num(r["成交量"]) }));
   return { code, prec, points: pts };
 }
 
@@ -572,7 +572,7 @@ async function tencentMinuteFetch(code) {
   const arr = d?.data?.data || [];
   if (!arr.length) return null;
   const prec = num(d?.data?.prec || d?.qt?.[code]?.[4] || 0);
-  const pts = arr.map((s) => { const p = s.split(" "); return { t: p[0], p: num(p[1]) }; });
+  const pts = arr.map((s) => { const p = s.split(" "); return { t: p[0], p: num(p[1]), v: num(p[2]) }; });
   return { code, prec, points: pts };
 }
 
@@ -601,9 +601,9 @@ async function handleMinute(code) {
       const d = j?.data;
       const trends = Array.isArray(d?.trends) ? d.trends : [];
       const prec = num(d?.preClose || d?.preSettlement);
-      // "2026-08-07 08:00,6365.07,0,6365.070" -> {t:"08:00", p:6365.07}
+      // "2026-08-07 08:00,6365.07,0,6365.070" -> {t:"08:00", p:6365.07}(全球指数无成交量, v=0)
       const pts = trends
-        .map((s) => { const f = String(s).split(","); return { t: String(f[0]).slice(11, 16), p: num(f[1]) }; })
+        .map((s) => { const f = String(s).split(","); return { t: String(f[0]).slice(11, 16), p: num(f[1]), v: 0 }; })
         .filter((p) => p.t.includes(":"));
       return { code, prec, points: pts };
     } catch (e) {
@@ -659,10 +659,10 @@ async function handleMinute(code) {
   const d = json?.data?.[urlCode];
   const arr = d?.data?.data || [];
   const prec = num(d?.data?.prec || d?.qt?.[urlCode]?.[4] || 0);
-  // 返回 "HHMM price vol" -> [分钟索引, 价格]
+  // 返回 "HHMM price vol" -> [分钟索引, 价格, 成交量]
   const pts = arr.map((s) => {
     const p = s.split(" ");
-    return { t: p[0], p: num(p[1]) };
+    return { t: p[0], p: num(p[1]), v: num(p[2]) };
   });
   return { code, prec, points: pts };
 }

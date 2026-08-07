@@ -7,7 +7,7 @@ import { IndexPanel } from "@/components/dash/IndexPanel";
 import { SectorPanel } from "@/components/dash/SectorPanel";
 import { BoardFlowPanel } from "@/components/dash/BoardFlowPanel";
 import { NewsPanel } from "@/components/dash/NewsPanel";
-import { MarketSentimentPanel } from "@/components/dash/MarketSentimentPanel";
+import { WatchlistPanel } from "@/components/dash/WatchlistPanel";
 import { PhiliaPanel } from "@/components/dash/PhiliaPanel";
 import PhiliaPage from "@/components/dash/PhiliaPage";
 import { StockDetailProvider, useStockDetail } from "@/components/dash/StockDetailContext";
@@ -76,8 +76,8 @@ const PANEL_ROWS: PanelRowDef[] = [
   {
     defaultH: 0.22,
     panels: [
-      // 自选股已移除, 市场情绪独占整行(宽度 1.0), 在保持功能完整性的前提下降低 UI 高度占用(0.28→0.22)
-      { id: "marketSentiment", component: MarketSentimentPanel, defaultW: 1, mobileH: "h-[560px]", colStart: 1, colSpan: 3 },
+      // 自选股多股同列(替代原市场情绪, 独占整行): 实时行情/分时/大单净额/市值 + 拖动排序
+      { id: "watchlist", component: WatchlistPanel, defaultW: 1, mobileH: "h-[560px]", colStart: 1, colSpan: 3 },
     ],
   },
 ];

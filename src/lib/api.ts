@@ -209,8 +209,9 @@ export interface OrUsageDay {
 export interface MinuteData {
   code: string;
   prec: number;
-  points: { t: string; p: number }[];
-  /** 实际数据源: "kpl" | "tencent" | "sina"(美债等) */
+  /** v = 当分钟成交量(股, A股个股/指数; 全球指数为 0) */
+  points: { t: string; p: number; v?: number }[];
+  /** 实际数据源: "kpl" | "tencent" | "ths" | "sina"(美债等) */
   source?: string;
 }
 
@@ -538,6 +539,9 @@ export const api = {
   stockBoards: (code: string) => get<StockBoards>(`/api/stock-boards?code=${encodeURIComponent(code)}`),
   stockProfile: (code: string) => get<{ code: string; mainBusiness: string }>(`/api/stock-profile?code=${encodeURIComponent(code)}`),
   stockFlow: (code: string) => flowLoader(code),
+  /** 批量主力资金流(自选股多股同列: 一次拉全部自选股的主力净流入/净占比) */
+  stockFlows: (codes: string[]) =>
+    get<StockFlow[]>(`/api/stock-flows?codes=${codes.join(",")}`),
   /** 个股主力净额(KPL main-forces): 主力净额/主动买卖/成交(主动口径) */
   stockMainForces: (code: string) => get<StockMainForces>(`/api/stock-main-forces?code=${encodeURIComponent(code)}`),
   stockQuote: (code: string) => get<StockQuote>(`/api/stock-quote?code=${encodeURIComponent(code)}`),

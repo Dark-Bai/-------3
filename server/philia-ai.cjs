@@ -273,6 +273,35 @@ async function fetchBreadth() {
   return { up: sum("f104"), down: sum("f105"), flat: sum("f106") };
 }
 
+/** 「昨日涨停今表现」(%): 昨日涨停股今日平均涨跌幅。
+ *  东财不直接提供该日度聚合口径, 由昨日涨停池代码批量拉今日行情(f3)计算;
+ *  均值样本不足时回退「今日仍涨停率(晋级+维持)」近似口径; 仍失败返回 null 由 LLM 如实标注。 */
+async function calcYestLimitUpPerformance(yestPool, yesterdayMatch) {
+  const codes = (yestPool || []).map((s) => String(s.c)).filter((c) => /^\d{6}$/.test(c)).slice(0, 300);
+  if (!codes.length) return null;
+  const emMarket = (c) => (/^6|^9/.test(c) ? 1 : 0);
+  const pcts = [];
+  try {
+    for (let i = 0; i < codes.length; i += 50) {
+      const chunk = codes.slice(i, i + 50);
+      const secids = chunk.map((c) => `${emMarket(c)}.${c}`).join(",");
+      const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f2,f3,f12&np=1&fltt=2&invt=2`).catch(() => null);
+      for (const d of j?.data?.diff || []) {
+        const pct = Number(d.f3);
+        if (Number.isFinite(pct) && Number(d.f2) > 0) pcts.push(pct);
+      }
+    }
+  } catch { /* 走回退口径 */ }
+  if (pcts.length >= 10) return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
+  // 回退口径: 今日仍涨停(晋级+维持)占昨日涨停总数比例(%), 近似反映昨日涨停股今日承接强度
+  const st = yesterdayMatch?.stats;
+  if (st) {
+    const total = (st.晋级 || 0) + (st.维持 || 0) + (st.断板 || 0) + (st.炸板 || 0) + (st.跌停 || 0);
+    if (total > 0) return Math.round(((st.晋级 || 0) + (st.维持 || 0)) / total * 1000) / 10;
+  }
+  return null;
+}
+
 /* ---------------- 大盘因子(今日/昨日): 指数涨跌幅 + 量能 ---------------- */
 
 /** 今日大盘因子: 三大指数实时点位/涨跌幅/涨跌额/成交量/成交额(push2delay ulist) */
@@ -783,6 +812,14 @@ async function assembleContext(tracer) {
   const yestPool = yestZt?.pool || null;
   const yesterdayLadder = yestPool ? yestLadderFromPool(yestPool, yestCompact) : null;
   const yesterdayMatch = yestPool ? matchYesterdayLadder(yestPool, zt?.pool, zb?.pool, dt?.pool) : null;
+  // 「昨日涨停今表现」(%): 昨日涨停股今日平均涨跌幅; 失败回退今日仍涨停率口径(见 calcYestLimitUpPerformance)
+  const yestLimitUpPerf = yestPool ? await calcYestLimitUpPerformance(yestPool, yesterdayMatch).catch(() => null) : null;
+  tracer?.add({
+    type: "resource", name: "昨日涨停今表现", status: yestLimitUpPerf != null ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 昨日涨停数: yestPool?.length ?? 0 },
+    summary: yestLimitUpPerf != null ? `昨日涨停股今日平均${yestLimitUpPerf}%` : "东财行情获取失败(如实标注数据缺失)",
+  });
   // 龙头低吸候选池: 昨日连板≥2 且 今日未涨停(断板/炸板/跌停)的个股, 供「龙头低吸」模块分析
   const lowAbsorbPool = yestPool ? buildLowAbsorbPool(yestPool, yesterdayMatch) : [];
   tracer?.add({
@@ -823,7 +860,7 @@ async function assembleContext(tracer) {
     limit_down_count: dtCount,
     broken_limit_up_count: zbCount,
     blown_limit_up_rate: ztCount + zbCount > 0 ? Math.round((zbCount / (ztCount + zbCount)) * 1000) / 10 : 0,
-    yesterday_limit_up_performance: null,
+    yesterday_limit_up_performance: yestLimitUpPerf, // 昨日涨停股今日平均涨跌幅(%)(原为 null 导致「数据缺失」)
   };
   const themeHot = hotThemesFromPool(zt?.pool);
   const youzi = leaderMomentumFromPool(zt?.pool);
