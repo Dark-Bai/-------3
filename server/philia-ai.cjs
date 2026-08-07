@@ -369,6 +369,21 @@ async function fetchBoardYesterday(boardToday) {
   return out;
 }
 
+/** 大盘量能客观评估: 两市总成交额(上证+深证) 今日 vs 昨日 → 放量/缩量客观信号 */
+function calcVolumeSignal(indexToday, indexYesterday) {
+  const pick = (list, kw) => (list || []).find((x) => String(x.name || "").includes(kw));
+  const todayAmt = (pick(indexToday, "上证")?.amount || 0) + (pick(indexToday, "深证")?.amount || 0);
+  const yestAmt = (pick(indexYesterday, "上证")?.amount || 0) + (pick(indexYesterday, "深证")?.amount || 0);
+  if (!todayAmt || !yestAmt) return null;
+  const diffPct = Math.round(((todayAmt - yestAmt) / yestAmt) * 1000) / 10;
+  return {
+    todayAmount: todayAmt,   // 元
+    yesterdayAmount: yestAmt, // 元
+    diffPct,                 // 今日较昨日量能变化 %
+    level: diffPct >= 10 ? "明显放量" : diffPct >= 3 ? "温和放量" : diffPct <= -10 ? "明显缩量" : diffPct <= -3 ? "温和缩量" : "量能持平",
+  };
+}
+
 /** 由涨停池按行业板块聚合「热门题材」(按涨停家数降序) */
 function hotThemesFromPool(pool) {
   const boardMap = new Map();
@@ -707,6 +722,8 @@ async function assembleContext(tracer) {
   const boardToday = results[7].status === "fulfilled" ? results[7].value : null;
   // 昨日板块因子: 依赖今日板块TOP名单, 单独并行拉取(失败降级为空, 不影响整体)
   const boardYesterday = boardToday ? await fetchBoardYesterday(boardToday).catch((e) => { console.error("[philia] fetchBoardYesterday failed:", e?.message); return []; }) : null;
+  // 大盘量能客观评估(两市总成交额 今日 vs 昨日): 作为个股判断的客观环境约束
+  const volumeSignal = calcVolumeSignal(indexToday, indexYesterday);
 
   // 记录 4 路网页数据源加载步骤(并行, 统一使用本次组装起点时间戳)
   const srcMeta = [
@@ -871,6 +888,7 @@ async function assembleContext(tracer) {
     indexYesterday,   // 大盘因子·昨日(指数收盘/涨跌幅/量能)
     boardToday,       // 板块因子·今日(行业/概念 涨跌幅+主力净额)
     boardYesterday,   // 板块因子·昨日(TOP板块 涨跌幅+主力净额)
+    volumeSignal,     // 大盘量能客观评估(放量/缩量, 个股判断的环境约束)
     sources,      // 数据源清单(名称 + 获取时间)
   };
   contextCache = { ts: Date.now(), data: ctx };
@@ -923,6 +941,13 @@ function contextToText(ctx) {
     lines.push(`[大盘因子·昨日(${ctx.indexYesterday[0].date})] ` + ctx.indexYesterday.map((x) => `${x.name} 收${x.close} 涨跌幅${x.pct}% 涨跌${x.change} 成交额${fmtYi(x.amount)}`).join("；"));
   } else {
     lines.push(`[大盘因子·昨日] 数据缺失(历史接口不可用), 请如实标注。`);
+  }
+  // 大盘量能客观评估: 两市总成交额今日 vs 昨日 → 放量/缩量(作为个股/机会判断的客观环境约束)
+  if (ctx.volumeSignal) {
+    const v = ctx.volumeSignal;
+    lines.push(`[大盘量能评估] 两市总成交 ${fmtYi(v.todayAmount)}(今日) vs ${fmtYi(v.yesterdayAmount)}(昨日) → ${v.level}(${v.diffPct >= 0 ? "+" : ""}${v.diffPct}%)`);
+  } else {
+    lines.push(`[大盘量能评估] 量能数据缺失(历史接口不可用), 请如实标注。`);
   }
   // 板块因子(今日/昨日): 行业/概念 涨跌幅 + 主力净额 —— 融入板块资金合力研判
   if (ctx.boardToday) {
@@ -989,11 +1014,13 @@ function buildPrompt(ctx, skills) {
   "stocks": [ { "name": "公司名", "code": "带交易所前缀代码如sh600519", "reason": "推荐依据", "target": "目标价区间", "weight": 0-1权重数字 } ]
 }
 要求:
+- **必须将「大盘因子」与「板块因子」纳入研判依据**: 结合大盘因子(今日/昨日指数涨跌幅、成交额量能对比)判断大盘强弱与放量/缩量; 结合板块因子(行业/概念 今日/昨日涨跌幅与主力净额)判断主线资金持续性(持续流入=主线确立 / 由负转正=资金回流 / 连续流出=退潮), 并在机会/风险/核心标的的分析文本中体现依据。
+- **大盘量能作为个股判断的客观环境约束**: 结合「大盘量能评估」(放量/缩量) 校准对个股与机会的判断口径——放量环境资金充裕、龙头溢价更充分、可适度关注板块内中位补涨; 缩量环境资金抱团、仅聚焦最强龙头与核心标的、严控扩散度; 判断的客观基准: 个股/机会依据须以客观数据(板块资金、连板、封单、量能环境)为准, 该量能口径仅作内部约束参与判断, 输出文本无需刻意提及量能数字。
 - opportunities 至少 3 个, risks 至少 3 个, stocks 3-5 只。
 - 每个机会/风险/股票必须带 weight(0-1), 且所有 weight 之和应接近 1(归一化)。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据; 目标价为区间估计, 需说明依据逻辑。
 - 当前仅作研究参考, 不含任何投资建议免责条款。`;
-  let user = `以下是当前市场数据白皮书:\n${contextToText(ctx)}`;
+  let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为大盘环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
   if (skills && skills.length) {
     // 注入所选技能原文(截断控制成本)
     let skillText = "";
@@ -1265,6 +1292,8 @@ function buildMarketPrompt(ctx, skills) {
   }
 }
 要求:
+- **必须将「大盘因子」与「板块因子」纳入研判依据**: 结合大盘因子(今日/昨日指数涨跌幅、成交额量能对比)判断大盘强弱与放量/缩量; 结合板块因子(行业/概念 今日/昨日涨跌幅与主力净额)判断主线资金持续性(持续流入=主线确立 / 由负转正=资金回流 / 连续流出=退潮), 并在各模块分析文本中体现依据。
+- **大盘量能作为个股判断的客观环境约束**: 结合「大盘量能评估」(放量/缩量) 校准对个股与机会的判断口径——放量环境资金充裕、龙头溢价更充分、可适度关注板块内中位补涨; 缩量环境资金抱团、仅聚焦最强龙头与核心标的、严控扩散度; 判断的客观基准: 个股/机会依据须以客观数据(板块资金、连板、封单、量能环境)为准, 该量能口径仅作内部约束参与判断, 输出文本无需刻意提及量能数字。
 - leaderCore.leaders 3-5 只(今日龙头核心), ladder 为数字。
 - leaderLowAbsorb(龙头低吸) 为「今日龙头核心」的右侧并列模块, 输出格式与 leaderCore 完全一致:
   * 候选标的必须严格从数据白皮书「龙头低吸候选池」中挑选, 数量 3-5 只。
@@ -1288,7 +1317,7 @@ function buildMarketPrompt(ctx, skills) {
   * 若白皮书中昨日连板梯队数据缺失, 如实标注「昨日数据缺失, 无法进行对照验证」, 不得编造。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
 - 当前仅作研究参考, 不构成投资建议。`;
-  let user = `以下是当前市场数据白皮书:\n${contextToText(ctx)}`;
+  let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为大盘环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
   if (skills && skills.length) {
     let skillText = "";
     for (const s of skills) {
