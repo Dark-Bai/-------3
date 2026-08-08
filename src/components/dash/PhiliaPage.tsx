@@ -17,8 +17,8 @@ function PhiliaPageInner() {
     <div className="flex h-screen flex-col bg-[#f5f0e6] text-[#6b5b3e]">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[#e0d5c0] bg-[#faf6ee] px-3">
         <span className="inline-block h-3.5 w-1 rounded-sm bg-[#d4943a]" />
-        <span className="text-[13px] leading-none" style={{ color: "#d4943a" }}>
-          ◈
+        <span className="inline-flex items-center text-[13px] leading-none">
+          <img src="/hkrpg_cn.ico" alt="PHILIA" className="h-[1em] w-[1em] object-contain" draggable={false} />
         </span>
         <h1 className="text-[14px] font-bold tracking-wide text-[#6b5b3e] font-newspaper-heading">
           PHILIA · 龙头情绪复盘

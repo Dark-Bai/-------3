@@ -521,6 +521,16 @@ function loadSkills() {
   return skills;
 }
 
+/**
+ * 技能去重: 「七大游资全览」的 content 即 SKILL.md 全文(含各单项小节),
+ * 同时勾选「全览 + 单项」会导致全文与单项重复注入。已选全览时只保留全览,
+ * 避免重复内容占用 prompt 空间并触发 MAX_PROMPT_SKILL_CHARS 截断。
+ */
+function dedupeSkills(selected) {
+  const hasAll = selected.some((s) => s.slug === "all");
+  return hasAll ? selected.filter((s) => s.slug === "all") : selected;
+}
+
 /* ---------------- 观点来源解析 ----------------
  * 将 LLM 输出的 skill/tactic 解析为 SKILL.md 中的精确条目,
  * 使每条主观观点可追溯至「文件名 + 具体章节编号 + 模型/条目编号」。
@@ -1296,7 +1306,7 @@ async function analyze({ model, skills = [], force = false }) {
   // 组数据白皮书 + 技能内容 + 调 LLM
   const ctx = await assembleContext(tracer);
   const skillList = loadSkills();
-  const selected = skillList.filter((s) => sorted.includes(s.name));
+  const selected = dedupeSkills(skillList.filter((s) => sorted.includes(s.name)));
   tracer.add({ type: "resource", name: "技能库(游资交易思维)", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 命中技能: selected.map((s) => s.name) }, summary: `加载 ${selected.length} 项技能注入 prompt` });
   const prompt = buildPrompt(ctx, selected);
   tracer.add({ type: "tool", name: "组装 LLM Prompt", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 模型: model }, summary: "白皮书 + 技能拼接为单轮 prompt" });
@@ -1552,7 +1562,7 @@ async function analyzeMarket({ model, skills = [], force = false }) {
 
   const ctx = await assembleContext(tracer);
   const skillList = loadSkills();
-  const selected = skillList.filter((s) => sorted.includes(s.name));
+  const selected = dedupeSkills(skillList.filter((s) => sorted.includes(s.name)));
   tracer.add({
     type: "resource", name: "技能库(游资交易思维)", status: "ok",
     startedAt: Date.now(), durationMs: 0,

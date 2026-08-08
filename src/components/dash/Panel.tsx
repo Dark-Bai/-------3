@@ -15,7 +15,7 @@ export interface PanelZoomProps {
 
 interface PanelProps extends PanelZoomProps {
   title: string;
-  icon?: string;
+  icon?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
   className?: string;

@@ -33,7 +33,7 @@ function clearLayout(id: string) {
 interface FloatingWindowProps {
   id: string;
   title: string;
-  icon?: string;
+  icon?: ReactNode;
   accent?: string;
   children: ReactNode;
   onClose: () => void;

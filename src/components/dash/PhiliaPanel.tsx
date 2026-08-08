@@ -45,7 +45,14 @@ export function PhiliaPanel({ className = "", ...zoomProps }: { className?: stri
       className={className}
       {...zoomProps}
       title="PHILIA"
-      icon="◈"
+      icon={
+        <img
+          src="/hkrpg_cn.ico"
+          alt="PHILIA"
+          className="h-[1em] w-[1em] object-contain"
+          draggable={false}
+        />
+      }
       accent="#d4943a"
       defaultWidth={1152}
       defaultHeight={768}
