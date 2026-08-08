@@ -17,6 +17,10 @@ server/.env
 server/data/
 server/ths-account.json
 
+# Python 编译缓存(不跟踪, 可随时删除自动重建)
+__pycache__/
+*.pyc
+
 # 敏感凭据(账号/密钥/证书, 防止个人账号与 key 误提交)
 *.env
 .env.*
