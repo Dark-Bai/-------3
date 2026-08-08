@@ -3078,8 +3078,8 @@ const routes = {
   "/api/philia/leader-pool": async (q) => getLeaderPool(q.get("force") === "1", parseLeaderWeights(q.get("weights"))),
   // 龙头池与龙头股数据源一致性校验(强制取最新数据源全量比对, 供巡检/手动验证)
   "/api/philia/leader-pool/validate": async () => validateLeaderPoolEndpoint(),
-  // 龙头情绪复盘(5 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险/昨日梯队双日对照; force=1 强制重算
-  "/api/philia/market-analyze": async (q, body) => philia.analyzeMarket({ model: body?.model, skills: body?.skills, force: !!body?.force }),
+  // 龙头情绪复盘(5 模块)/ 趋势波段复盘(三段式): 技能决定模式; stock 提供时一并输出个股意见; force=1 强制重算
+  "/api/philia/market-analyze": async (q, body) => philia.analyzeMarket({ model: body?.model, skills: body?.skills, force: !!body?.force, stock: body?.stock || null }),
   // 最小 key 接口: GET 读配置(不含明文 key); POST 带 key 先校验再保存, validateOnly=1 仅校验不保存
   "/api/philia/key": async (q, body) => {
     if (body === undefined) return philia.getConfig();

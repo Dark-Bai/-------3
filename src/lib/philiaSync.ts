@@ -8,7 +8,7 @@
  * 只广播结果/加载信号, 接收方仅更新本地状态、不反向广播, 因此不会产生循环。
  */
 export interface PhiliaSyncMessage {
-  type: "philia-loading" | "philia-analysis" | "philia-state" | "philia-toggle" | "philia-sync-request" | "philia-main-beat";
+  type: "philia-loading" | "philia-analysis" | "philia-state" | "philia-toggle" | "philia-sync-request" | "philia-main-beat" | "philia-stock";
   /** loading=true 表示某标签页开始重新分析 */
   loading?: boolean;
   /** 重新分析完成后的完整分析结果 */
@@ -17,6 +17,8 @@ export interface PhiliaSyncMessage {
   state?: unknown;
   /** 自动轮询开关的目标状态 */
   enabled?: boolean;
+  /** 当前个股(主页→/philia 镜像): 输入框值跨标签页保持一致 */
+  stock?: { code?: string; name?: string } | null;
 }
 
 /** 主页面心跳: 主页面(驾驶舱 "/")周期性写入, /philia 新页面据此判断主页面是否仍打开 */

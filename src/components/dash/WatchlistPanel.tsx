@@ -286,11 +286,13 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
   /* ---------------- 拖动排序(HTML5 DnD) ---------------- */
   const dragFrom = useRef<string | null>(null);
   const [dragState, setDragState] = useState<string | null>(null);
-  const handleDragStart = (e: React.DragEvent, code: string) => {
+  const handleDragStart = (e: React.DragEvent, code: string, name?: string) => {
     dragFrom.current = code;
     setDragState(code);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", code);
+    // 附带个股名称(自定义 MIME): 供 PHILIA 搜索框作为放置目标时直接填入名称
+    e.dataTransfer.setData("application/x-stock", JSON.stringify({ code, name: name || "" }));
   };
   const handleDragOver = (e: React.DragEvent, code: string) => {
     e.preventDefault();
@@ -396,7 +398,7 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
                   onSelect={() => { /* 预留: 点击打开个股详情 */ }}
                   onRemove={() => removeCode(code)}
                   onHexin={() => handleHexin(code)}
-                  onDragStart={(e) => handleDragStart(e, code)}
+                  onDragStart={(e) => handleDragStart(e, code, quotes?.[code]?.name)}
                   onDragOver={(e) => handleDragOver(e, code)}
                   onDrop={endDrag}
                   onDragEnd={endDrag}

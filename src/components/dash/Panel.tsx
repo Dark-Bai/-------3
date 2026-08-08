@@ -24,6 +24,8 @@ interface PanelProps extends PanelZoomProps {
   /** 弹出悬浮窗默认尺寸(默认 960x640) */
   defaultWidth?: number;
   defaultHeight?: number;
+  /** 悬浮窗标题栏右侧附加内容(仅小窗渲染, 如 PHILIA 个股搜索栏; 与 right 独立, 不影响其他面板小窗) */
+  floatingRight?: ReactNode;
   /** 点击悬浮窗任意处时的回调(置顶之外的可选副作用, 如 PHILIA 自动触发分析) */
   onWindowClick?: () => void;
 }
@@ -42,6 +44,7 @@ export function Panel({
   onToggleZoom,
   defaultWidth,
   defaultHeight,
+  floatingRight,
   onWindowClick,
 }: PanelProps) {
   const tvOverlay = isTv && isZoomed;
@@ -72,6 +75,7 @@ export function Panel({
       {tvOverlay && <div className="fixed left-0 right-0 top-0 bottom-0 z-[55] bg-black/70" />}
       <section
         ref={measureRef}
+        data-panel={panelId || undefined}
         style={overlayStyle}
         className={`flex min-h-0 flex-col rounded-sm border bg-[#faf6ee] shadow-newspaper transition-all duration-300 ${
           isZoomed ? "border-[#d4943a]/60 shadow-[0_0_24px_rgba(212,148,58,0.15)]" : "border-[#e0d5c0]"
@@ -123,6 +127,7 @@ export function Panel({
           icon={icon}
           accent={accent}
           onClose={handleToggleZoom}
+          right={floatingRight}
           defaultWidth={defaultWidth}
           defaultHeight={defaultHeight}
           onWindowClick={onWindowClick}

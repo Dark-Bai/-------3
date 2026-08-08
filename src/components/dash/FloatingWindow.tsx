@@ -37,6 +37,8 @@ interface FloatingWindowProps {
   accent?: string;
   children: ReactNode;
   onClose: () => void;
+  /** 标题栏右侧附加内容(如 PHILIA 个股搜索栏); 内部交互不触发窗口拖动 */
+  right?: ReactNode;
   /** 点击窗口任意处时的回调(置顶之外的可选副作用, 如 PHILIA 自动触发分析) */
   onWindowClick?: () => void;
   defaultWidth?: number;
@@ -44,6 +46,8 @@ interface FloatingWindowProps {
   /** 初始位置(默认居中); 屏幕分辨率变化时会自适应夹取到视口内 */
   defaultX?: number;
   defaultY?: number;
+  /** 内容自适应高度: 窗口高度随内容自然长度伸缩(一眼看完、长短自适应), 受限在 [360, 视口-60] 内, 超长仍可滚动 */
+  autoHeight?: boolean;
 }
 
 let globalZIndex = 1000;
@@ -55,11 +59,13 @@ export function FloatingWindow({
   accent = "#d4943a",
   children,
   onClose,
+  right,
   onWindowClick,
   defaultWidth = 960,
   defaultHeight = 640,
   defaultX,
   defaultY,
+  autoHeight = false,
 }: FloatingWindowProps) {
   // 初次挂载时读取已记忆的布局(尺寸+位置), 无记忆则用默认值; 均夹取到当前视口内
   const initial = loadLayout(id);
@@ -86,6 +92,26 @@ export function FloatingWindow({
   const resizing = useRef(false);
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, px: 0, py: 0 });
   const windowRef = useRef<HTMLDivElement>(null);
+
+  // 内容自适应高度: 测量内容区自然高度, 窗口高度 = 内容高度 + 标题栏, 约束在 [360, 视口-60], 超长内容仍可滚动
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [autoH, setAutoH] = useState<number | null>(null);
+  useEffect(() => {
+    if (!autoHeight) { setAutoH(null); return; }
+    const el = contentRef.current;
+    if (!el) return;
+    const HEADER_H = 36; // 标题栏 h-9
+    const measure = () => {
+      const h = Math.ceil(el.scrollHeight) + HEADER_H;
+      const maxH = Math.max(400, window.innerHeight - 60);
+      setAutoH(Math.min(Math.max(h, 360), maxH));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, [autoHeight]);
 
   // 最新位置/尺寸引用: 供 resize 自适应夹取使用(避免闭包陈旧值)
   const posRef = useRef(pos);
@@ -258,7 +284,7 @@ export function FloatingWindow({
         left: isMaximized ? 0 : pos.x,
         top: isMaximized ? 0 : pos.y,
         width: isMaximized ? "100vw" : size.w,
-        height: isMaximized ? "100vh" : size.h,
+        height: isMaximized ? "100vh" : autoHeight && autoH ? autoH : size.h,
         zIndex,
         // 最小化时: 内容保持挂载(状态/滚动不丢失), 仅视觉隐藏, 避免重挂载导致空白
         visibility: isMinimized ? "hidden" : "visible",
@@ -276,6 +302,12 @@ export function FloatingWindow({
         <span className="inline-block h-4 w-1.5 rounded-sm" style={{ background: accent }} />
         {icon && <span className="text-[13px] leading-none" style={{ color: accent }}>{icon}</span>}
         <h2 className="text-[13px] font-bold tracking-wide text-[#6b5b3e] font-newspaper-heading">{title}</h2>
+        {/* 标题栏附加内容(如 PHILIA 个股搜索栏): 阻止 mousedown 冒泡, 避免触发窗口拖拽 */}
+        {right && (
+          <div className="ml-2 flex shrink-0 items-center gap-1.5" onMouseDown={(e) => e.stopPropagation()}>
+            {right}
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <button
             type="button"
@@ -329,11 +361,11 @@ export function FloatingWindow({
         </div>
       </header>
       {/* 内容区 */}
-      <div className="min-h-0 flex-1 overflow-auto text-[#6b5b3e]">
+      <div ref={contentRef} className="min-h-0 flex-1 overflow-auto text-[#6b5b3e]">
         {children}
       </div>
-      {/* 右下角拖拽手柄 */}
-      {!isMaximized && (
+      {/* 右下角拖拽手柄(自适应高度模式隐藏, 高度由内容决定) */}
+      {!isMaximized && !autoHeight && (
         <div
           className="absolute bottom-0 right-0 h-4 w-4 cursor-se-resize"
           onMouseDown={onMouseDownResize}

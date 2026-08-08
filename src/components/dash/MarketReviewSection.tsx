@@ -14,7 +14,7 @@
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
-import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isMainPageAlive, onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 import {
   Sparkles,
@@ -34,7 +34,7 @@ import { usePhilia } from "./PhiliaContext";
 import { FloatingWindow } from "./FloatingWindow";
 import { ThinkingProcessButton } from "./ThinkingProcessButton";
 import { usePhiliaPolling } from "@/hooks/usePhiliaPolling";
-import { MirrorContext } from "./Panel";
+import { TrendReviewSection, StockAdviceView } from "./TrendReviewSection";
 
 /* ---------- 设计参数(需求中的占位符取值) ---------- */
 const SPACE_PX = 320; // 为「今日机会/今日风险」预留的最小显示空间(px)
@@ -380,6 +380,8 @@ function RisksBody({
 export interface MarketReviewSectionHandle {
   /** 启动 AI 综合分析; force=true 强制绕过缓存 */
   run: (force?: boolean) => Promise<void>;
+  /** 填写个股后「查收」: 触发带该个股的分析(与启动键共享), 并在独立小窗展示个股意见 */
+  checkStock: (stock: { code?: string; name?: string }) => Promise<void>;
 }
 
 // 模块级共享分析状态(主面板 + 悬浮小窗共用)。
@@ -454,6 +456,13 @@ function setSharedSkills(skills: string[]) {
   sharedSkills = skills;
 }
 
+/** 自动轮询携带的个股(模块级共享, 与实例无关): 由主面板个股输入框实时同步。
+ *  市场实时变动, 轮询时一并带上该个股再判断, 避免结果失去时效性; 未填个股则保持大盘分析。 */
+let sharedPollStock: { code?: string; name?: string } | null = null;
+export function setSharedPollStock(stock: { code?: string; name?: string } | null) {
+  sharedPollStock = stock;
+}
+
 /** 全局 LLM 互斥锁: 手动分析(run) 与 自动轮询(runGlobalPoll) 共享同一把锁,
  *  保证任意时刻至多 1 个 LLM 请求在途, 避免多触发通道(挂载/放大/standalone 兜底/2min 轮询)并行重复计费。
  *  返回 false 表示已有请求在途, 调用方应跳过本轮。 */
@@ -508,7 +517,7 @@ async function runGlobalPoll(): Promise<void> {
   let errMsg: string | undefined;
   let cachedHit = false;
   try {
-    const d = await api.philia.marketAnalyze({ skills: sharedSkills, force: true });
+    const d = await api.philia.marketAnalyze({ skills: sharedSkills, force: true, stock: sharedPollStock || undefined });
     // 仅当本次轮询仍是最新(未被新轮询覆盖)时才写入结果, 避免旧轮询覆盖新轮询
     if (reviewState.refreshingVer === refreshingVer) setReview({ analysis: d }); // setReview 会自动广播完整状态, 同步轮询结果到其他标签页
     cachedHit = d.fromCache === true;
@@ -524,11 +533,12 @@ async function runGlobalPoll(): Promise<void> {
   }
 }
 
-export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { standalone?: boolean }>(
-  function MarketReviewSection({ standalone = false }, ref) {
+export const MarketReviewSection = forwardRef<
+  MarketReviewSectionHandle,
+  { standalone?: boolean; stockInput?: { code?: string; name?: string } | null }
+>(
+  function MarketReviewSection({ standalone = false, stockInput = null }, ref) {
   const { config, configLoaded } = usePhilia();
-  // 是否渲染在悬浮小窗内(纯镜像模式): 小窗断开轮询/启动等交互, 仅实时镜像主面板 PHILIA 数据
-  const isMirror = useContext(MirrorContext);
   // 主页面心跳: 仅 /philia 独立页面(standalone)需要判断主页面是否仍打开。
   // 主页面存在 → 纯镜像其结果, 不独立轮询/自动查询; 主页面关闭 → 独立调取结果。
   const [mainAlive, setMainAlive] = useState(isMainPageAlive);
@@ -576,7 +586,13 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
 
   // 并发防抖: 用 ref 记录是否已在分析中, 防止小窗 onClick 冒泡 + 按钮点击造成重复请求
   const runningRef = useRef(false);
-  const run = async (force = false) => {
+  // 标题栏「查收」填入的个股(与启动键共享: 填了个股后分析一并输出个股意见)
+  const stockRef = useRef<{ code?: string; name?: string } | null>(null);
+  // 个股意见独立小窗开关(查收键触发)
+  const [adviceOpen, setAdviceOpen] = useState(false);
+  // 查收键「仅显示」模式: 缓存无该股结果时的空态(记录查询标的, 不主动触发 LLM)
+  const [adviceEmpty, setAdviceEmpty] = useState<{ code?: string; name?: string } | null>(null);
+  const run = async (force = false, opts: { autoAdvice?: boolean } = {}) => {
     if (runningRef.current) return;
     // 配置未就绪时跳过: 空技能会命中/写入与轮询不同的缓存槽, 导致显示陈旧数据。
     // 首次挂载的场景由 PhiliaPanel 在 configLoaded 后重新触发兜底。
@@ -609,9 +625,14 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
     let errMsg: string | undefined;
     let cachedHit = false;
     try {
-      const d = await api.philia.marketAnalyze({ skills, force });
+      const d = await api.philia.marketAnalyze({ skills, force, stock: stockRef.current || stockInput || undefined });
       // 仅当本次分析仍是最新(未被新分析覆盖)时才写入结果, 避免旧分析覆盖新分析
-      if (reviewState.loadingVer === loadingVer) setReview({ analysis: d });
+      if (reviewState.loadingVer === loadingVer) {
+        setReview({ analysis: d });
+        // 手动「重新分析」且搜索框带个股: 分析返回后自动弹出个股意见小窗,
+        // 使 philia 大盘信息与个股信息同时可见(轮询/启动不弹窗, 避免打扰)
+        if (opts.autoAdvice && (stockRef.current || stockInput) && d?.result?.stockAdvice) setAdviceOpen(true);
+      }
       cachedHit = d.fromCache === true;
     } catch (e) {
       errMsg = (e as Error)?.message || "分析失败";
@@ -625,9 +646,25 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
     }
   };
 
+  // 查收个股(仅显示, 不主动触发分析): 命中缓存则展示个股意见, 无数据时小窗提示为空
+  const checkStock = async (stock: { code?: string; name?: string }) => {
+    stockRef.current = stock;
+    const res = analysis?.result;
+    const curInput = res?.stockInput;
+    // 代码归一化比较(兼容 sh600519 / 600519 / 前端带前缀), 命中即视为已有缓存结果
+    const norm = (c?: string) => String(c || "").replace(/\D/g, "");
+    const sameStock = curInput &&
+      ((stock.code && curInput.code && norm(curInput.code) === norm(stock.code)) ||
+        (stock.name && curInput.name === stock.name));
+    // 查询键去掉主动搜索: 仅展示缓存结果; 缓存无该股数据时显示空态提示(不额外调用 LLM)
+    setAdviceEmpty(sameStock && res?.stockAdvice ? null : stock);
+    setAdviceOpen(true);
+  };
+
   // 暴露给父级(PhiliaPanel)回调的命令式句柄
   useImperativeHandle(ref, () => ({
     run,
+    checkStock,
   }));
 
   // 「日志」小窗展开状态(纯 UI, 各实例独立互不影响)
@@ -661,6 +698,8 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
   }, [standalone, mainAlive, configLoaded]);
 
   const r = analysis?.result;
+  // 趋势波段模式: 后端按「技能全部属于 qushi-boduan」判定并返回 mode=trend, 前端据此切换为三段式 UI
+  const isTrendResult = r?.mode === "trend";
   const sources: PhiliaDataSource[] = r?.sources || [];
   // 蓝色高亮标的名称集合: 优先取后端汇总的 targets(龙头+机会+风险), 兼容旧数据回退到龙头名
   const leaderNames = (r?.leaderCore?.leaders || []).map((l) => l.name).filter(Boolean);
@@ -695,8 +734,7 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5 p-2">
-      {/* 顶部操作区: 启动按钮 + 状态 + 重新分析(主面板显示; 镜像小窗隐藏, 仅镜像数据) */}
-      {!isMirror && (
+      {/* 顶部操作区: 启动按钮 + 状态 + 重新分析 + 轮询开关(主面板与小窗共用; 状态模块级共享, 任一处操作全端同步) */}
       <div className="flex flex-wrap items-center gap-2 rounded border border-[#d4943a]/40 bg-gradient-to-b from-[#faf6ee] to-[#ede4d4] px-3 py-1.5">
         <button
           type="button"
@@ -715,9 +753,9 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
         {analysis && (
           <button
             type="button"
-            onClick={() => run(true)}
+            onClick={() => run(true, { autoAdvice: true })}
             disabled={loading || refreshing}
-            title="强制重新分析(绕过缓存)"
+            title="强制重新分析(绕过缓存); 搜索框带个股时返回 philia 大盘信息 + 个股意见并自动弹出"
             className="flex items-center gap-1 rounded border border-[#d4943a]/40 px-1.5 py-0.5 text-[13px] text-[#8b7a5e] transition-colors hover:border-[#d4943a]/80 hover:text-[#6b5b3e] disabled:opacity-50"
           >
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
@@ -852,7 +890,6 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
           </span>
         </div>
       </div>
-      )}
 
       {error && (
         <p className="rounded border border-[#b8533a]/40 bg-[#b8533a]/8 px-2 py-1 text-[13px] text-[#b8533a]">{error}</p>
@@ -881,6 +918,10 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
       )}
 
       {analysis && r && (
+        isTrendResult ? (
+          /* ===== 趋势波段模式: 三段式 UI(大盘与波段环境 / 主线板块与趋势方向 / 趋势标的池) ===== */
+          <TrendReviewSection result={r} sources={sources} onOpenStock={handleHexin} />
+        ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
           {/* ===== 今日龙头核心 / 今日情绪周期: 全宽紧凑, 充分利用面板宽度 ===== */}
           <div className="flex flex-col gap-1.5">
@@ -1080,7 +1121,46 @@ export const MarketReviewSection = forwardRef<MarketReviewSectionHandle, { stand
             )}
           </div>
         </div>
+        )
       )}
+
+      {/* ===== 独立小窗: 个股意见(查收键触发; 仅显示缓存结果, 无数据时提示为空) ===== */}
+      {adviceOpen && (r?.stockAdvice || adviceEmpty) &&
+        (() => {
+          // 默认位置与「市场板块实时热点(sector)」面板对齐: 顶部与其等高、右侧贴紧页面最右
+          const sectorEl = document.querySelector('[data-panel="sector"]');
+          const defX = window.innerWidth - 400 - 4;
+          const defY = sectorEl ? sectorEl.getBoundingClientRect().top : 70;
+          return (
+            <FloatingWindow
+              id="float-stock-advice"
+              title={`个股意见 · ${r?.stockAdvice?.stock || adviceEmpty?.name || adviceEmpty?.code || r?.stockInput?.name || "标的"}`}
+              icon="◎"
+              accent="#4a6b3f"
+              onClose={() => setAdviceOpen(false)}
+              defaultWidth={400}
+              defaultHeight={560}
+              defaultX={defX}
+              defaultY={defY}
+              autoHeight
+            >
+              <div className="p-2.5">
+                {r?.stockAdvice ? (
+                  <>
+                    <StockAdviceView advice={r.stockAdvice} nameToCode={r.targetCodes} onOpenStock={handleHexin} />
+                    <p className="mt-2 text-[10px] text-[#a8987e]">意见以大局因子(大盘/板块/情绪/竞价)综合给出，仅作研究参考，不构成投资建议。</p>
+                  </>
+                ) : (
+                  <p className="py-4 text-center text-[12px] text-[#a8987e]">
+                    暂无 {adviceEmpty?.name || adviceEmpty?.code || "该股"} 的分析结果。
+                    <br />
+                    查询键仅显示已有数据：请在搜索框保留该股后点击「重新分析」生成个股意见。
+                  </p>
+                )}
+              </div>
+            </FloatingWindow>
+          );
+        })()}
 
       {/* ===== 独立小窗: 今日机会 / 今日风险(可同时显示, 各自支持最小化/最大化/关闭) ===== */}
       {floats.opportunities && r && (

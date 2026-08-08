@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Sparkles, Loader2, CheckCircle2, AlertCircle, ChevronDown } from "lucide-react";
 import { usePhilia } from "./PhiliaContext";
-import { api, type PhiliaModel, type PhiliaConfig, type ThsAccountInfo } from "@/lib/api";
+import { api, type PhiliaModel, type PhiliaConfig, type ThsAccountInfo, type PhiliaSkill } from "@/lib/api";
 
 /** 后端模型接口未就绪/空时的兜底模型列表(含 deepseek-v4-flash 正式版) */
 const DEFAULT_MODELS: PhiliaModel[] = [
@@ -21,6 +21,30 @@ const DEFAULT_MODELS: PhiliaModel[] = [
   { id: "openai/gpt-4o", name: "OpenAI GPT-4o", default: false },
   { id: "anthropic/claude-3.5-sonnet", name: "Anthropic Claude Sonnet", default: false },
 ];
+
+/* ---------------- 技能输入长度预算(防跨组混选超长) ----------------
+ * 后端注入技能提示词上限 MAX_PROMPT_SKILL_CHARS = 20000: 超过后技能内容被截断/后续技能被丢弃。
+ * 实测体量: 短线龙头全览≈13K, 趋势波段全览≈95K, 单个趋势波段 ref 8K~14K, 单个短线小节 0.7K~2.3K。
+ * 前端据此: 标注每个选项字符数 + 已选合计, 当「去重后实际注入合计」超出安全范围时禁止勾选更多。 */
+const SKILL_CHARS_LIMIT = 20000;
+
+/** 字符数 → 紧凑展示(千分位 K) */
+function fmtChars(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`;
+}
+
+/** 按后端 dedupeSkills 逻辑计算「去重后实际注入」的字符合计: 某组已选全览则只计全览, 同组单项被覆盖 */
+function skillTotalChars(names: string[], allSkills: PhiliaSkill[]): number {
+  const set = new Set(names);
+  const allGroups = new Set(allSkills.filter((s) => s.isAll && set.has(s.name)).map((s) => s.group));
+  let sum = 0;
+  for (const s of allSkills) {
+    if (!set.has(s.name)) continue;
+    if (s.isAll) sum += s.chars ?? 0;
+    else if (!allGroups.has(s.group)) sum += s.chars ?? 0;
+  }
+  return sum;
+}
 
 /** API Key 格式: OpenRouter(sk-or-) 或 DeepSeek(sk-) 前缀 + 字母数字 */
 function keyFormatValid(key: string): boolean {
@@ -70,6 +94,11 @@ export function PhiliaModal() {
   const currentGroupName = skillGroups.find((g) => g.slug === currentGroup)?.name ?? "";
   const groupSkills = skills.filter((s) => s.group === currentGroup);
   const groupAllChecked = groupSkills.length > 0 && groupSkills.every((s) => selectedSkills.includes(s.name));
+  // 已选技能「去重后实际注入」字符合计 + 是否超限(防跨组混选超长; 超限后禁止勾选更多)
+  const selectedTotal = skillTotalChars(selectedSkills, skills);
+  const overLimit = selectedTotal > SKILL_CHARS_LIMIT;
+  const groupAllTotal = skillTotalChars([...selectedSkills, ...groupSkills.map((s) => s.name)], skills);
+  const blockGroupAll = groupSkills.some((s) => !selectedSkills.includes(s.name)) && groupAllTotal > SKILL_CHARS_LIMIT && selectedSkills.length > 0;
 
   /* 弹窗打开(挂载): 从已保存配置回填表单。
    * 仅当 config 首次就绪时初始化一次, 之后 config 引用变化不再重置用户编辑中的选择,
@@ -352,14 +381,8 @@ export function PhiliaModal() {
                               onClick={() => {
                                 setActiveGroup(g.slug);
                                 setGroupMenuOpen(false);
-                                // 大 skill 隔离: 切换后清空其他大 skill 的已选技能,
-                                // 确保本次分析只参照当前大 skill 的规则, 不混入其他主题
-                                setSelectedSkills((prev) =>
-                                  prev.filter((n) => {
-                                    const s = skills.find((x) => x.name === n);
-                                    return !s || s.group === g.slug;
-                                  })
-                                );
+                                // 跨战法混选: 切换大 skill 仅切换展示列表, 保留其他大 skill 已选技能,
+                                // 分析时全部注入(支持 短线龙头 + 趋势波段 跨组混选; 混选时后端按短线龙头模式输出)
                               }}
                               className={`block w-full px-2.5 py-1.5 text-left text-[12px] transition-colors ${
                                 currentGroup === g.slug
@@ -379,7 +402,8 @@ export function PhiliaModal() {
                 {groupSkills.length > 0 && (
                   <button
                     type="button"
-                    disabled={!!submitting}
+                    disabled={!!submitting || blockGroupAll}
+                    title={blockGroupAll ? "全选后技能注入字符将超过上限，请先取消部分已选技能" : "全选当前大 skill 下的全部技能"}
                     onClick={() =>
                       setSelectedSkills((prev) => {
                         const names = groupSkills.map((s) => s.name);
@@ -387,14 +411,24 @@ export function PhiliaModal() {
                         return Array.from(new Set([...prev, ...names]));
                       })
                     }
-                    className="text-[11px] text-[#4a6b3f] underline-offset-2 hover:underline"
+                    className={`text-[11px] underline-offset-2 hover:underline ${blockGroupAll ? "cursor-not-allowed text-[#c9b99a] no-underline" : "text-[#4a6b3f]"}`}
                   >
                     {groupAllChecked ? "取消全选" : "全选"}
                   </button>
                 )}
-                <span className="text-[10px] text-[#a8987e]">
-                  {selectedSkills.length > 0 ? `已选 ${selectedSkills.length} 项` : "未选（通用分析）"}
+                <span
+                  className={`tabular-nums text-[10px] ${overLimit ? "text-[#b8533a]" : selectedTotal > SKILL_CHARS_LIMIT * 0.8 ? "text-[#d4943a]" : "text-[#a8987e]"}`}
+                  title={`技能注入字符合计 ${selectedTotal.toLocaleString()} / ${SKILL_CHARS_LIMIT.toLocaleString()}(超限将被后端截断)`}
+                >
+                  {selectedSkills.length > 0
+                    ? `已选 ${selectedSkills.length} 项 · 注入 ${fmtChars(selectedTotal)}/${fmtChars(SKILL_CHARS_LIMIT)}`
+                    : "未选（通用分析）"}
                 </span>
+                {overLimit && (
+                  <span className="text-[10px] font-bold text-[#b8533a]" title="已选技能注入字符超过上限，后端将截断技能内容">
+                    ⚠超限
+                  </span>
+                )}
               </div>
             </div>
             {!skillsLoaded ? (
@@ -411,27 +445,41 @@ export function PhiliaModal() {
               <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-[#e0d5c0] bg-[#f5f0e6]/60 p-1.5">
                 {groupSkills.map((s) => {
                   const checked = selectedSkills.includes(s.name);
+                  // 超限禁用: 已选非空时, 勾选该项后「去重后实际注入」超上限则禁止(首项超长如 全览 允许单选)
+                  const after = skillTotalChars([...selectedSkills, s.name], skills);
+                  const blocked = !checked && selectedSkills.length > 0 && after > SKILL_CHARS_LIMIT;
+                  const covered = !s.isAll && skills.some((x) => x.isAll && x.group === s.group && selectedSkills.includes(x.name));
                   return (
                     <label
                       key={s.slug}
                       onClick={(e) => e.stopPropagation()}
                       className={`flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 transition-colors ${
-                        checked ? "bg-[#4a6b3f]/10" : "hover:bg-[#ede4d4]"
+                        checked ? "bg-[#4a6b3f]/10" : blocked ? "cursor-not-allowed opacity-50" : "hover:bg-[#ede4d4]"
                       }`}
                     >
                       <input
                         type="checkbox"
                         className="mt-0.5 h-3.5 w-3.5 accent-[#4a6b3f]"
                         checked={checked}
-                        disabled={!!submitting}
+                        disabled={!!submitting || blocked}
+                        title={blocked ? `勾选后注入字符将超上限(${fmtChars(SKILL_CHARS_LIMIT)})，请先取消部分已选技能` : undefined}
                         onChange={() => toggleSkill(s.name)}
                       />
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className={`block text-[12px] font-medium ${checked ? "text-[#4a6b3f]" : "text-[#6b5b3e]"}`}>
                           {s.name}
                         </span>
                         <span className="block truncate text-[10px] text-[#a8987e]">{s.description}</span>
                       </span>
+                      <span
+                        className={`shrink-0 tabular-nums text-[9px] ${(s.chars ?? 0) > SKILL_CHARS_LIMIT ? "font-bold text-[#b8533a]" : "text-[#a8987e]"}`}
+                        title={`注入字符 ${(s.chars ?? 0).toLocaleString()}${(s.chars ?? 0) > SKILL_CHARS_LIMIT ? "（超出单次注入上限，将被截断）" : ""}`}
+                      >
+                        {fmtChars(s.chars ?? 0)}
+                      </span>
+                      {covered && (
+                        <span className="shrink-0 text-[9px] text-[#4a6b3f]" title="已选该大 skill 全览，此单项内容已包含其中">含于全览</span>
+                      )}
                     </label>
                   );
                 })}

@@ -29,12 +29,53 @@ const OR_BASE = "https://openrouter.ai/api/v1";
 const DS_BASE = "https://api.deepseek.com";
 
 /**
- * 大 skill 自动发现: skills/ 根目录下每个子文件夹 = 一个大 skill(主题),
- * 内含 SKILL.md, 解析出可勾选的子技能(小节)与「全览」选项。
- * 大 skill 显示名取 SKILL.md front-matter 的 `name` 字段(中文), 缺失时回退为目录名。
+ * 大 skill 自动发现: skills/ 根目录下每个子文件夹 = 一个大 skill(主题)。
+ * 支持两种结构:
+ *  - 经典结构(如 短线龙头): <slug>/SKILL.md, 技能项 = 文件内 "## X、名称" 小节;
+ *  - 知识库结构(如 趋势波段): <slug>/<子目录>/SKILL.md + references/*.md,
+ *    技能项 = references 下每个 md 文件。
+ * 大 skill 显示名取 SKILL.md front-matter 的 `name` 字段, 缺失时回退为目录名。
  * 新增大 skill: 只需在 skills/ 下新建文件夹并放入 SKILL.md, 前后端均无需改注册代码。
  */
 const SKILLS_ROOT = path.join(ROOT, "skills");
+
+/** 递归查找目录下第一个 SKILL.md(支持一级/多级子目录), 未找到返回 null */
+function findSkillFile(dir) {
+  if (!fs.existsSync(dir)) return null;
+  const direct = path.join(dir, "SKILL.md");
+  if (fs.existsSync(direct)) return direct;
+  for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const p = path.join(dir, d.name, "SKILL.md");
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** 读取 SKILL.md 所在目录下 references/ 的全部 md 文件(知识库结构技能项), 未找到返回 [] */
+function listReferenceFiles(skillFileDir) {
+  const refDir = path.join(skillFileDir, "references");
+  if (!fs.existsSync(refDir)) return [];
+  return fs
+    .readdirSync(refDir)
+    .filter((f) => f.endsWith(".md"))
+    .sort()
+    .map((f) => path.join(refDir, f));
+}
+
+/**
+ * 技能项注入内容: references/full/ 下同名「详版」优先(独立因子注入约 4K 详版),
+ * 否则用 references/ 根目录精版。全览仍由根目录精版拼接, 不读取 full/。
+ */
+function readRefContent(group, f) {
+  const base = path.basename(f).replace(/\.md$/, "");
+  const full = path.join(path.dirname(group.skillFile), "references", "full", base + ".md");
+  if (fs.existsSync(full)) {
+    try { return fs.readFileSync(full, "utf-8"); } catch { /* 读取失败时回退精版 */ }
+  }
+  return fs.readFileSync(f, "utf-8");
+}
+
 function loadSkillGroups() {
   const out = [];
   if (!fs.existsSync(SKILLS_ROOT)) return out;
@@ -45,15 +86,15 @@ function loadSkillGroups() {
     .sort();
   for (const slug of dirs) {
     const dir = path.join(SKILLS_ROOT, slug);
-    const file = path.join(dir, "SKILL.md");
-    if (!fs.existsSync(file)) continue;
+    const skillFile = findSkillFile(dir);
+    if (!skillFile) continue;
     let name = slug;
     try {
-      const fm = /^---\n([\s\S]*?)\n---\n/.exec(fs.readFileSync(file, "utf-8"));
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(fs.readFileSync(skillFile, "utf-8"));
       const n = fm?.[1].match(/^name:\s*(.+?)\s*$/m);
-      if (n) name = n[1].trim();
+      if (n) name = n[1].trim().replace(/^["'\s]+|["'\s]+$/g, "");
     } catch { /* 解析失败时保留目录名 */ }
-    out.push({ slug, name, dir });
+    out.push({ slug, name, dir, skillFile, refFiles: listReferenceFiles(path.dirname(skillFile)) });
   }
   return out;
 }
@@ -121,6 +162,120 @@ const MODEL_WHITELIST = new Set(DEFAULT_MODELS.map((m) => m.id));
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989"; // push2ex 校验码(客户端固定, 每日不变)
 const emSymbol = (code6) => `${"689".includes(code6[0]) ? "sh" : code6[0] === "4" || code6[0] === "8" ? "bj" : "sz"}${code6}`;
 
+/** 同花顺数据网关(ths-gateway, 竞价数据来源) */
+const THS_GATEWAY = process.env.THS_GATEWAY || "http://127.0.0.1:9877";
+
+/** 拉取全市场竞价异动(同花顺 ths-gateway), 失败返回 null(不影响整体分析) */
+async function fetchAuctionAnomaly() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(`${THS_GATEWAY}/api/ths/call-auction-anomaly?market=USHA,USZA`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    return j?.success ? j.data : null;
+  } catch (e) {
+    console.error("[philia] fetchAuctionAnomaly failed:", e.message);
+    return null;
+  }
+}
+
+/** 拉取单只个股集合竞价(同花顺 ths-gateway), 失败返回 null */
+async function fetchStockAuction(thsCode) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(`${THS_GATEWAY}/api/ths/call-auction?code=${encodeURIComponent(thsCode)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    return j?.success ? j.data : null;
+  } catch (e) {
+    console.error("[philia] fetchStockAuction failed:", e.message);
+    return null;
+  }
+}
+
+/** 通用 ths-gateway 请求: 返回 data 或 null */
+async function fetchThsJson(path) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(`${THS_GATEWAY}${path}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    return j?.success ? j.data : null;
+  } catch (e) {
+    console.error(`[philia] fetchThsJson ${path} failed:`, e.message);
+    return null;
+  }
+}
+
+/** 名称/代码/拼音 → 首个 A股 6 位代码(经同花顺搜索索引反查); 失败返回 null */
+async function resolveStockCodeByQuery(q) {
+  try {
+    const rows = await fetchThsJson(`/api/ths/search?q=${encodeURIComponent(String(q || "").trim())}`);
+    if (!Array.isArray(rows) || !rows.length) return null;
+    for (const s of rows) {
+      const m = /^(USHA|USZA|USTM)(\d{6})$/.exec(String(s["THSCODE"] || s["代码"] || ""));
+      if (m) return m[2];
+    }
+    return null;
+  } catch (e) {
+    console.error("[philia] resolveStockCodeByQuery failed:", e?.message || e);
+    return null;
+  }
+}
+
+/** 组装单只个股数据块(实时行情 + 集合竞价 + 主力资金 + 近半年K线因子/日成交量因子), 供「个股意见」作为因子; 无法解析时返回 null */
+async function buildStockInput(stock) {
+  let code6 = String(stock?.code || "").replace(/\D/g, "").slice(-6);
+  const name = String(stock?.name || "").trim();
+  // 仅填名称/拼音时: 先经搜索索引反查代码, 保证 K线因子/行情/竞价/主力资金均可获取(否则这些因子必然「数据不可用」)
+  if (!code6 && name) {
+    const resolved = await resolveStockCodeByQuery(name);
+    if (resolved) code6 = resolved;
+  }
+  const thsCode = toThsCode(code6 || "");
+  if (!thsCode && !name) return null;
+  const [q, a, mf, kf] = await Promise.allSettled([
+    thsCode ? fetchThsJson(`/api/ths/quote?code=${thsCode}`) : Promise.resolve(null),
+    thsCode ? fetchStockAuction(thsCode) : Promise.resolve(null),
+    thsCode ? fetchThsJson(`/api/ths/main-forces?code=${thsCode}`) : Promise.resolve(null),
+    code6 ? fetchStockKFactors([code6]) : Promise.resolve({}),
+  ]);
+  const quote = q.status === "fulfilled" ? q.value : null;
+  const auction = a.status === "fulfilled" ? a.value : null;
+  const forces = mf.status === "fulfilled" ? mf.value : null;
+  const kFactors = kf.status === "fulfilled" ? kf.value : {};
+  const sym = code6 ? emSymbol(code6) : "";
+  const lines = [`【个股数据 · ${name || sym || "未知标的"}】`];
+  const r0 = quote?.[0] || {};
+  const qks = ["名称", "代码", "最新价", "涨跌幅", "今开", "昨收", "最高", "最低", "成交量", "成交额"];
+  lines.push("实时行情: " + (quote?.length ? qks.map((k) => `${k}=${r0[k] ?? "—"}`).join(" ") : "数据不可用(如实标注)"));
+  lines.push("集合竞价: " + (auction?.length
+    ? auction.slice(0, 12).map((x) => `${x["时间"] || ""} 价${x["价格"] ?? "—"} 量${x["成交量"] ?? x["当前量"] ?? "—"} 买一${x["买1"] ?? x["买一"] ?? "—"} 卖一${x["卖1"] ?? x["卖一"] ?? "—"}`).join("；")
+    : "数据不可用(非竞价时段或网关离线)"));
+  const f0 = forces?.[0] || {};
+  lines.push("主力资金: " + (forces?.length
+    ? ["主力净流入", "主力净量"].map((k) => `${k}=${f0[k] ?? "—"}`).join(" ")
+    : "数据不可用"));
+  lines.push("近半年K线(月K6/周K26/日K5 · 量能/技术位): " + (kFactors[code6] || "数据不可用"));
+  return lines.join("\n");
+}
+
+/** 6位代码 → thsdk 代码(4位市场前缀 + 6位数字) */
+function toThsCode(code6) {
+  const p = String(code6 || "").replace(/\D/g, "").slice(-6);
+  if (!p || p.length !== 6) return "";
+  const head = p[0];
+  if (head === "6" || head === "9") return `USHA${p}`;   // 沪市
+  if (head === "4" || head === "8") return `USTM${p}`;   // 北交所
+  return `USZA${p}`;                                      // 深市(0/2/3)
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 抓取文本(fetch 失败时回退 curl, 兼容 TLS 指纹敏感上游) */
@@ -187,6 +342,153 @@ async function emGetHis(url, tries = 3) {
     }
   }
   throw lastErr;
+}
+
+/* ---------------- 同花顺 kline 全局节流调度器 ----------------
+ * thsdk 对 klines 方法有官方 20ms/次 间隔限制, 网关另有令牌桶(20QPS/突发5):
+ * 月K/周K/日K 并行同时到达会被拒绝(实测报「太快啦」), 导致数据静默缺失。
+ * 用全局调度器把所有 kline 调用按 50ms 间隔发射(请求在途可重叠, 不等待返回),
+ * 同时满足 thsdk 20ms 限频与网关 20QPS, 保证覆盖率(全量约 5s, 白皮书 5min 缓存)。
+ */
+let klineLast = 0;
+const klinePending = [];
+let klineTimer = null;
+function throttledKlineFetch(path) {
+  return new Promise((resolve, reject) => {
+    klinePending.push({ path, resolve, reject });
+    scheduleKline();
+  });
+}
+function scheduleKline() {
+  if (klineTimer || !klinePending.length) return;
+  klineTimer = setTimeout(async () => {
+    klineTimer = null;
+    const wait = klineLast + 50 - Date.now();
+    if (wait > 0) await sleep(wait);
+    klineLast = Date.now();
+    const { path, resolve, reject } = klinePending.shift();
+    fetchThsJson(path).then(resolve, reject);
+    scheduleKline();
+  }, 0);
+}
+
+/**
+ * 批量拉取重点个股「半年K线」三层参考: 月K(近6月) + 周K(近26周·涨跌幅序列) + 日K(近5日) + 日成交量因子,
+ * 以最少输入长度覆盖半年量价结构(全量日K约120根≈6000字符/股, 三层降采样后每只约600字符)。
+ * 数据源: 同花顺 ths-gateway kline(与竞价/行情同源, 稳定); kline 调用经全局节流泵串行发射。
+ *  - 月K: 近6月 收/高/低/月涨跌幅 → 大级别趋势与所处位置;
+ *  - 周K: 近26周 周涨跌幅序列 → 波段节奏/中枢/压力支撑(26个数字, 前端带起止日期锚点);
+ *  - 日K: 近5日 开/收/高/低/量/额/涨跌幅 → 近期量价细节(配合当日实时数据);
+ *  - 日成交量因子: 5日均量/量比/环比/量能状态(放量/平量/缩量/量窒息), 当日盘中半根单列标注。
+ * 返回 code(6位) → 摘要文本; 单个周期失败自动省略, 单只失败跳过, 不影响整体。
+ */
+async function fetchStockKFactors(codes) {
+  const uniq = [...new Set(
+    (Array.isArray(codes) ? codes : [])
+      .map((c) => String(c || "").replace(/\D/g, "").slice(-6))
+      .filter((c) => c && c.length === 6)
+  )].slice(0, 40);
+  if (!uniq.length) return {};
+  const d = new Date();
+  const todayStr = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  const out = {};
+  let i = 0;
+  const worker = async () => {
+    while (i < uniq.length) {
+      const code = uniq[i++];
+      const thsCode = toThsCode(code);
+      if (!thsCode) continue;
+      try {
+        // 三层K线经全局节流泵发射(thsdk klines 官方限频 20ms/次): 月K(6月) / 周K(26周) / 日K(70日, 支撑技术位计算与近5日显示)
+        const [dayRows, weekRows, monthRows] = await Promise.all([
+          throttledKlineFetch(`/api/ths/kline?code=${thsCode}&count=70`),
+          throttledKlineFetch(`/api/ths/kline?code=${thsCode}&interval=week&count=26`),
+          throttledKlineFetch(`/api/ths/kline?code=${thsCode}&interval=month&count=6`),
+        ]);
+        const parts = [];
+        // —— 月K(近6月): MM 收/高/低 月涨% ——
+        if (Array.isArray(monthRows) && monthRows.length) {
+          const mk = monthRows.map((r, idx) => {
+            const mm = String(r["时间"] || "").slice(5, 7);
+            const c = r["收盘价"], h = r["最高价"], l = r["最低价"];
+            let pct = "—";
+            if (idx > 0 && c != null && monthRows[idx - 1]?.["收盘价"]) {
+              pct = (((Number(c) / Number(monthRows[idx - 1]["收盘价"])) - 1) * 100).toFixed(1) + "%";
+            }
+            return `${mm} ${c}/${h}/${l} ${pct}`;
+          }).slice(-6);
+          parts.push(`月K(6月): ${mk.join(" | ")}`);
+        }
+        // —— 周K(近26周 周涨%序列): 26个数字, 起止日期锚点 ——
+        if (Array.isArray(weekRows) && weekRows.length > 1) {
+          const seq = weekRows.map((r, idx) => {
+            const c = r["收盘价"];
+            if (idx === 0 || c == null || !weekRows[idx - 1]?.["收盘价"]) return null;
+            return (((Number(c) / Number(weekRows[idx - 1]["收盘价"])) - 1) * 100).toFixed(1);
+          }).filter((v) => v != null).slice(-26);
+          if (seq.length) {
+            const start = String(weekRows[0]["时间"] || "").slice(5, 10);
+            const end = String(weekRows[weekRows.length - 1]["时间"] || "").slice(5, 10);
+            parts.push(`周K(${seq.length}周 周涨% ${start}~${end}): ${seq.join(" ")}`);
+          }
+        }
+        // —— 日K(近5日) + 日成交量因子 + 技术位(客观支撑/压力锚点) ——
+        if (Array.isArray(dayRows) && dayRows.length) {
+          const closed = dayRows.filter((r) => String(r["时间"] || "").slice(0, 10).replace(/-/g, "") !== todayStr);
+          const dk = dayRows.map((r, idx) => {
+            const rawDate = String(r["时间"] || "").slice(5, 10);
+            const isTodayBar = String(r["时间"] || "").slice(0, 10).replace(/-/g, "") === todayStr;
+            const date = rawDate + (isTodayBar ? "盘中" : "");
+            const o = r["开盘价"], c = r["收盘价"], h = r["最高价"], l = r["最低价"];
+            const vol = Number(r["成交量"]) / 1e4;         // 手 → 万手
+            const amt = Number(r["总金额"]) / 1e8;         // 元 → 亿
+            let pct = "—";
+            if (idx > 0 && c != null && dayRows[idx - 1]?.["收盘价"]) {
+              pct = (((Number(c) / Number(dayRows[idx - 1]["收盘价"])) - 1) * 100).toFixed(2) + "%";
+            }
+            return `${date} 开${o} 收${c} 高${h} 低${l} 量${vol.toFixed(1)}万手 额${amt.toFixed(2)}亿 ${pct}`;
+          }).slice(-5);
+          if (dk.length) {
+            parts.push(`日K(5日): ${dk.join(" | ")}`);
+            const vols = closed.slice(-5).map((r) => Number(r["成交量"])).filter((v) => Number.isFinite(v) && v > 0);
+            if (vols.length >= 2) {
+              const avg5 = vols.reduce((a, b) => a + b, 0) / vols.length / 1e4; // 5日均量(万手)
+              const latest = vols[vols.length - 1] / 1e4;                        // 最新完整日量(万手)
+              const prev = vols[vols.length - 2] / 1e4;
+              const ratio5 = avg5 > 0 ? latest / avg5 : 0;                       // 量比(相对5日均量)
+              const ratioD = prev > 0 ? latest / prev : 0;                       // 环比(相对前一日)
+              let state = "平量";
+              if (ratio5 >= 1.5) state = "放量";
+              else if (ratio5 < 0.5) state = "量窒息";
+              else if (ratio5 < 0.8) state = "缩量";
+              parts.push(`日量:5日均量${avg5.toFixed(1)}万手 最新${latest.toFixed(1)}万手(环比${ratioD.toFixed(2)}倍·较5日均${ratio5.toFixed(2)}倍 ${state})`);
+            }
+            // —— 技术位(客观): 基于近60个完整交易日, 供 LLM 的支撑/压力取自这些客观价位 ——
+            const highs = closed.map((r) => Number(r["最高价"])).filter((v) => Number.isFinite(v) && v > 0);
+            const lows = closed.map((r) => Number(r["最低价"])).filter((v) => Number.isFinite(v) && v > 0);
+            const closes = closed.map((r) => Number(r["收盘价"])).filter((v) => Number.isFinite(v) && v > 0);
+            const ma = (n) => (closes.length >= n ? closes.slice(-n).reduce((a, b) => a + b, 0) / n : null);
+            const hi60 = highs.length ? Math.max(...highs.slice(-60)) : null;
+            const lo60 = lows.length ? Math.min(...lows.slice(-60)) : null;
+            const hi20 = highs.length ? Math.max(...highs.slice(-20)) : null;
+            const lo20 = lows.length ? Math.min(...lows.slice(-20)) : null;
+            const f2 = (v) => (v == null ? "—" : Number(v).toFixed(2));
+            let fib = "—";
+            if (hi60 != null && lo60 != null && hi60 > lo60) {
+              const range = hi60 - lo60;
+              fib = [0.382, 0.5, 0.618].map((f) => (hi60 - range * f).toFixed(2)).join("/");
+            }
+            parts.push(`技术位:60日高${f2(hi60)}低${f2(lo60)} 20日高${f2(hi20)}低${f2(lo20)} MA5:${f2(ma(5))} MA20:${f2(ma(20))} MA60:${f2(ma(60))} 斐波回撤0.382/0.5/0.618:${fib}`);
+          }
+        }
+        if (parts.length) out[code] = parts.join(" | ");
+      } catch (e) {
+        console.error(`[philia] K线因子 ${code} failed:`, e.message);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker)); // 并发 6 × 每只3请求, 控制网关请求量
+  return out;
 }
 
 /** 当前交易日 YYYYMMDD(与 dashToday 一致, 跳过周末) */
@@ -505,11 +807,14 @@ function dashToday() {
 /* ---------------- 技能库解析 ---------------- */
 
 /**
- * 解析单个大 skill 的 SKILL.md, 提取 front-matter 与各技能小节为可选技能。
- * 小节识别规则: 按 "## " 切分, 识别 "X、名称（标签）" 标题, 兼容 "名称 · 标签" 形式。
+ * 解析单个大 skill 为可选技能项(与前端 philiaSkills.ts 同构):
+ *  - 知识库结构(references/*.md): 每个 md 文件 = 一个技能项;
+ *  - 经典结构(无 references): 主 SKILL.md 内 "## X、名称(标签)" 小节 = 技能项。
+ * 均附「全览」选项(content 为该大 skill 全部内容拼接)。
  */
-function parseSkillFile(text, group) {
-  // front-matter name/description
+function parseSkillGroup(group) {
+  const text = fs.readFileSync(group.skillFile, "utf-8");
+  // front-matter description
   let docDesc = "";
   const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
   if (fm) {
@@ -517,37 +822,61 @@ function parseSkillFile(text, group) {
     if (d) docDesc = d[1];
   }
   const skills = [];
-  const parts = text.split(/^## /m);
-  for (const part of parts) {
-    const firstLine = part.split("\n")[0].trim();
-    const m = firstLine.match(/^[一二三四五六七八九十]、(.+?)(?:[（(](.+?)[）)])?$/);
-    if (!m) continue;
-    let name = m[1].trim();
-    let tag = (m[2] || "").trim();
-    // 兼容 "名称 · 标签" 形式(如 "炒股养家 · 情绪流交易系统")
-    const sep = name.indexOf("·");
-    if (sep > 0) {
-      if (!tag) tag = name.slice(sep + 1).trim();
-      name = name.slice(0, sep).trim();
+  // 1) 知识库结构: references/ 下每个 md 文件 = 一个技能项
+  if (group.refFiles && group.refFiles.length) {
+    for (const f of group.refFiles) {
+      const content = readRefContent(group, f);
+      const base = path.basename(f).replace(/\.md$/, "");
+      const name = base.replace(/^\d+[_\s]*/, "").trim() || base;
+      const title = content.match(/^# (.+)$/m)?.[1]?.trim();
+      skills.push({
+        name,
+        description: title || `${group.name}方法论模块`,
+        slug: `${group.slug}:${name}`,
+        content,
+        group: group.slug,
+        groupName: group.name,
+        isAll: false,
+      });
     }
-    skills.push({
-      name,
-      description: tag || "交易思维",
-      slug: `${group.slug}:${name}`,
-      content: part.trim(),
-      group: group.slug,
-      groupName: group.name,
-      isAll: false,
-    });
+  } else {
+    // 2) 经典小节结构: "## X、名称（标签）"
+    const parts = text.split(/^## /m);
+    for (const part of parts) {
+      const firstLine = part.split("\n")[0].trim();
+      const m = firstLine.match(/^[一二三四五六七八九十]+、(.+?)(?:[（(](.+?)[）)])?$/);
+      if (!m) continue;
+      let name = m[1].trim();
+      let tag = (m[2] || "").trim();
+      // 兼容 "名称 · 标签" 形式(如 "炒股养家 · 情绪流交易系统")
+      const sep = name.indexOf("·");
+      if (sep > 0) {
+        if (!tag) tag = name.slice(sep + 1).trim();
+        name = name.slice(0, sep).trim();
+      }
+      skills.push({
+        name,
+        description: tag || "交易思维",
+        slug: `${group.slug}:${name}`,
+        content: part.trim(),
+        group: group.slug,
+        groupName: group.name,
+        isAll: false,
+      });
+    }
   }
-  // 提供"全览"选项(注入该大 skill 全文; 短线龙头沿用历史名称以兼容已保存配置)
+  // 全览选项(注入该大 skill 全部内容; 短线龙头沿用历史名称以兼容已保存配置)
   if (skills.length) {
     const allName = group.slug === "duanxian-longtou" ? "七大游资全览" : `${group.name}全览`;
+    const allContent =
+      group.refFiles && group.refFiles.length
+        ? text + "\n\n" + group.refFiles.map((f) => fs.readFileSync(f, "utf-8")).join("\n\n")
+        : text;
     skills.unshift({
       name: allName,
       description: docDesc || `${group.name}交易思维合集`,
       slug: `${group.slug}:all`,
-      content: text,
+      content: allContent,
       group: group.slug,
       groupName: group.name,
       isAll: true,
@@ -560,10 +889,8 @@ function parseSkillFile(text, group) {
 function loadSkills() {
   const out = [];
   for (const g of loadSkillGroups()) {
-    const file = path.join(g.dir, "SKILL.md");
-    if (!fs.existsSync(file)) continue;
     try {
-      out.push(...parseSkillFile(fs.readFileSync(file, "utf-8"), g));
+      out.push(...parseSkillGroup(g));
     } catch (e) {
       console.error(`[philia] 解析技能 ${g.name}(${g.slug}) 失败:`, e.message);
     }
@@ -587,30 +914,33 @@ function dedupeSkills(selected) {
  * 使每条主观观点可追溯至「文件名 + 具体章节编号 + 模型/条目编号」。
  */
 
-/** 遍历全部大 skill 的 SKILL.md, 建立「小节 → 模型条目」的章节索引 */
+/** 遍历全部大 skill 的 SKILL.md 与 references/*.md, 建立「小节 → 模型条目」的章节索引 */
 function buildSkillIndex() {
   const index = [];
   for (const g of loadSkillGroups()) {
-    const file = path.join(g.dir, "SKILL.md");
-    if (!fs.existsSync(file)) continue;
-    const lines = fs.readFileSync(file, "utf-8").split("\n");
-    let part = ""; // 一级标题(第X部分 · 名称)
-    for (const raw of lines) {
-      const line = raw.trim();
-      const h1 = /^# (.+)$/.exec(line);
-      const h2 = /^## (.+)$/.exec(line);
-      if (h1) { part = h1[1]; continue; }
-      if (h2) {
-        const head = h2[1];
-        const no = /^[一二三四五六七八九十]+、/.exec(head)?.[0] || "";
-        const nameBase = head.replace(no, "").split("·")[0].trim();
-        index.push({ file: `${g.slug}/SKILL.md`, part, head, no, name: nameBase, models: [] });
-        continue;
-      }
-      // 模型条目: **模型1：标题**
-      if (index.length) {
-        const m = /^\*\*模型(\d+)[:：](.+?)(?:\*\*|$)/.exec(line);
-        if (m) index[index.length - 1].models.push({ no: m[1], title: m[2].trim() });
+    const files = [g.skillFile, ...(g.refFiles || [])];
+    for (const file of files) {
+      if (!fs.existsSync(file)) continue;
+      const label = file.replace(SKILLS_ROOT + path.sep, "").replace(/\\/g, "/");
+      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      let part = ""; // 一级标题(第X部分 · 名称)
+      for (const raw of lines) {
+        const line = raw.trim();
+        const h1 = /^# (.+)$/.exec(line);
+        const h2 = /^## (.+)$/.exec(line);
+        if (h1) { part = h1[1]; continue; }
+        if (h2) {
+          const head = h2[1];
+          const no = /^[一二三四五六七八九十]+、/.exec(head)?.[0] || "";
+          const nameBase = head.replace(no, "").split("·")[0].trim();
+          index.push({ file: label, part, head, no, name: nameBase, models: [] });
+          continue;
+        }
+        // 模型条目: **模型1：标题**
+        if (index.length) {
+          const m = /^\*\*模型(\d+)[:：](.+?)(?:\*\*|$)/.exec(line);
+          if (m) index[index.length - 1].models.push({ no: m[1], title: m[2].trim() });
+        }
       }
     }
   }
@@ -696,6 +1026,17 @@ function loadLuotouObjectiveData() {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return cleaned;
+}
+
+/* ---------------- 趋势波段复盘方法论(次要参考) ---------------- */
+/** 趋势波段复盘技能: 数据来源/采集规范/三段式输出格式, 趋势波段模式时注入 */
+const QUSHI_SKILL_PATH = path.join(ROOT, ".trae", "skills", "qushi-boduan-sipan", "SKILL.md");
+
+/** 读取「趋势波段复盘」技能全文(去掉 front-matter), 作为趋势波段模式的次要参考注入 */
+function loadQushiObjectiveData() {
+  if (!fs.existsSync(QUSHI_SKILL_PATH)) return "";
+  const md = fs.readFileSync(QUSHI_SKILL_PATH, "utf-8");
+  return md.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 }
 
 /* ---------------- 模型列表 / Key 校验(OpenRouter) ---------------- */
@@ -801,6 +1142,7 @@ async function assembleContext(tracer) {
     fetchIndexToday(),                   // 大盘因子·今日(指数涨跌幅/量能)
     fetchIndexYesterday(),               // 大盘因子·昨日(指数涨跌幅/量能)
     fetchBoardToday(),                   // 板块因子·今日(行业/概念 涨跌幅+主力净额)
+    fetchAuctionAnomaly(),               // 同花顺·集合竞价异动(全市场)
   ]);
   const zt = results[0].status === "fulfilled" ? results[0].value : null;
   const zb = results[1].status === "fulfilled" ? results[1].value : null;
@@ -810,6 +1152,7 @@ async function assembleContext(tracer) {
   const indexToday = results[5].status === "fulfilled" ? results[5].value : null;
   const indexYesterday = results[6].status === "fulfilled" ? results[6].value : null;
   const boardToday = results[7].status === "fulfilled" ? results[7].value : null;
+  const auctionAnomaly = results[8].status === "fulfilled" ? results[8].value : null;
   // 昨日板块因子: 依赖今日板块TOP名单, 单独并行拉取(失败降级为空, 不影响整体)
   const boardYesterday = boardToday ? await fetchBoardYesterday(boardToday).catch((e) => { console.error("[philia] fetchBoardYesterday failed:", e?.message); return []; }) : null;
   // 大盘量能客观评估(两市总成交额 今日 vs 昨日): 作为个股判断的客观环境约束
@@ -900,6 +1243,15 @@ async function assembleContext(tracer) {
       : "获取失败(双日对照数据缺失, 如实标注)",
   });
 
+  tracer?.add({
+    type: "resource", name: "同花顺·集合竞价异动(全市场)", status: auctionAnomaly?.length ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 异动数量: auctionAnomaly?.length ?? 0 },
+    summary: auctionAnomaly?.length
+      ? `捕获 ${auctionAnomaly.length} 条竞价异动(涉及个股分析时纳入竞价因子)`
+      : "未获取(网关/同花顺不可用或非竞价时段, 如实标注)",
+  });
+
   const ztCount = zt?.count ?? (zt?.pool ? zt.pool.length : 0);
   const zbCount = zb?.count ?? (zb?.pool ? zb.pool.length : 0);
   const dtCount = dt?.pool ? dt.pool.length : 0;
@@ -951,6 +1303,7 @@ async function assembleContext(tracer) {
   if (indexYesterday?.length) sources.push({ name: `东方财富·大盘指数(${indexYesterday[0].date})`, fetchedAt: fetchedMin });
   if (boardCnt) sources.push({ name: "东方财富·板块涨跌与主力资金(今日)", fetchedAt: fetchedMin });
   if (boardYesterday?.length) sources.push({ name: `东方财富·板块涨跌与主力资金(${boardYesterday.find((b) => b.date)?.date || "昨日"})`, fetchedAt: fetchedMin });
+  if (auctionAnomaly?.length) sources.push({ name: "同花顺·集合竞价异动", fetchedAt: fetchedMin });
 
   // 核心标的参考池(主板热点 → 龙头股): 由 index.cjs 注入的 getter 获取, 失败不影响整体分析
   let leaderPool = null;
@@ -986,6 +1339,31 @@ async function assembleContext(tracer) {
   feedNameToCode(leaderPool?.pool);
   feedNameToCode(yesterdayMatch?.rows);
 
+  // 重点个股 半年K线因子(月K6+周K26+日K5) + 日成交量因子: 涨停池TOP + 龙头池 + 低吸候选 + 昨日涨停TOP,
+  // 以最少输入长度覆盖半年量价结构, 配合当日实时数据供趋势标的池/短线龙头推荐池个股做量价与位置判断
+  const focusCodes = [];
+  const feedFocus = (arr, max) => {
+    if (!Array.isArray(arr)) return;
+    for (const x of arr.slice(0, max)) {
+      const c = x?.code || x?.c;
+      if (c) focusCodes.push(String(c));
+    }
+  };
+  feedFocus(zt?.pool, 10);
+  feedFocus(leaderPool?.pool, 20);
+  feedFocus(lowAbsorbPool, 10);
+  feedFocus(yestPool, 8);
+  const stockKFactors = await fetchStockKFactors(focusCodes);
+  tracer?.add({
+    type: "resource", name: "个股半年K线因子(月K6+周K26+日K5·量价/量能)", status: Object.keys(stockKFactors).length ? "ok" : "failed",
+    startedAt: t0, durationMs: Date.now() - t0,
+    params: { 覆盖个股: Object.keys(stockKFactors).length, 候选: focusCodes.length },
+    summary: Object.keys(stockKFactors).length
+      ? `已获取 ${Object.keys(stockKFactors).length} 只重点个股半年K线(月K近6月+周K近26周+日K近5日) + 日成交量因子(5日均量/量比/放量缩量)`
+      : "获取失败(已降级, 不影响整体)",
+  });
+  if (Object.keys(stockKFactors).length) sources.push({ name: "同花顺·个股K线(月K+周K+日K·半年量价/技术位)", fetchedAt: fetchedMin });
+
   const ctx = {
     date: today,
     mood: mood || null,
@@ -1006,6 +1384,8 @@ async function assembleContext(tracer) {
     boardToday,       // 板块因子·今日(行业/概念 涨跌幅+主力净额)
     boardYesterday,   // 板块因子·昨日(TOP板块 涨跌幅+主力净额)
     volumeSignal,     // 大盘量能客观评估(放量/缩量, 个股判断的环境约束)
+    auctionAnomaly,   // 同花顺·集合竞价异动(全市场, 个股分析竞价因子)
+    stockKFactors,    // 重点个股半年K线因子(月K6+周K26+日K5·量价/量能, 供趋势标的池/短线龙头推荐池个股分析)
     nameToCode,   // 全部标的名称→代码映射(供前端单击标的名跳转同花顺)
     sources,      // 数据源清单(名称 + 获取时间)
   };
@@ -1030,6 +1410,18 @@ function contextToText(ctx) {
   }
   const rf = ctx.riseFall || {};
   lines.push(`[涨跌停统计] 涨停:${rf["limit_up_count"] ?? "—"} 跌停:${rf["limit_down_count"] ?? "—"} 炸板:${rf["broken_limit_up_count"] ?? "—"} 炸板率:${rf["blown_limit_up_rate"] ?? "—"}% 昨日涨停今表现:${rf["yesterday_limit_up_performance"] ?? "—"}%`);
+  // 集合竞价异动(同花顺): 涉及个股分析时的竞价因子(涨停试盘/跌停试盘/抢筹/砸盘/高开低开等)
+  if (Array.isArray(ctx.auctionAnomaly) && ctx.auctionAnomaly.length) {
+    const au = ctx.auctionAnomaly.slice(0, 20).map((x) =>
+      [x["时间"] || "", x["代码"] || x["证券代码"] || "", x["异动类型1"] || x["异动类型"] || ""].filter(Boolean).join(" ")
+    );
+    if (au.length) lines.push(`[集合竞价异动] ` + au.join("；") + (ctx.auctionAnomaly.length > 20 ? ` …等${ctx.auctionAnomaly.length}条` : ""));
+  }
+  // 个股半年K线因子(月K6+周K26+日K5 · 量能/技术位): 覆盖涨停池TOP/龙头池/低吸候选/昨日涨停TOP, 配合当日实时数据做量价与位置判断
+  if (ctx.stockKFactors && Object.keys(ctx.stockKFactors).length) {
+    const ks = Object.entries(ctx.stockKFactors).slice(0, 30);
+    lines.push(`[个股半年K线(月K近6月+周K近26周+日K近5日 · 量能/位置/技术位)] ` + ks.map(([c, v]) => `${emSymbol(c)}: ${v}`).join(" \n "));
+  }
   // 优先使用网页数据源实时统计的连板梯队, 其次本地库
   const liveLadder = ctx.liveLadder;
   if (liveLadder && (liveLadder.firstBoard != null || liveLadder.highBoard != null)) {
@@ -1383,8 +1775,9 @@ function history(limit = 20) {
 
 /* ---------------- 龙头情绪复盘(5 模块) ---------------- */
 
-/** 5 模块复盘 prompt: 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险 / 昨日连板梯队·今日实盘对照验证 */
-function buildMarketPrompt(ctx, skills) {
+/** 5 模块复盘 prompt(短线龙头模式): 今日龙头核心 / 今日情绪周期 / 今日机会 / 今日风险 / 昨日连板梯队·今日实盘对照验证
+ *  stock: 填写个股时, 追加个股数据块并要求输出 stockAdvice(个股意见, 以大局因子 + 竞价纳入判断)。 */
+async function buildMarketPrompt(ctx, skills, stock = null) {
   const sys = `
 你是一位深耕A股超短线的资深市场分析师, 擅长以游资视角做「龙头 + 情绪周期」结构化复盘。
 请基于给定的市场数据, 输出严格合法的 JSON(不要任何多余文字/注释/代码块标记), 结构如下:
@@ -1412,6 +1805,8 @@ function buildMarketPrompt(ctx, skills) {
 要求:
 - **必须将「大盘因子」与「板块因子」纳入研判依据**: 结合大盘因子(今日/昨日指数涨跌幅、成交额量能对比)判断大盘强弱与放量/缩量; 结合板块因子(行业/概念 今日/昨日涨跌幅与主力净额)判断主线资金持续性(持续流入=主线确立 / 由负转正=资金回流 / 连续流出=退潮), 并在各模块分析文本中体现依据。
 - **大盘量能作为个股判断的客观环境约束**: 结合「大盘量能评估」(放量/缩量) 校准对个股与机会的判断口径——放量环境资金充裕、龙头溢价更充分、可适度关注板块内中位补涨; 缩量环境资金抱团、仅聚焦最强龙头与核心标的、严控扩散度; 判断的客观基准: 个股/机会依据须以客观数据(板块资金、连板、封单、量能环境)为准, 该量能口径仅作内部约束参与判断, 输出文本无需刻意提及量能数字。
+- **K线因子与日成交量因子(半年量价/位置/量能)**: 结合白皮书「个股半年K线(月K近6月+周K近26周+日K近5日 · 量能/位置)」, 从大级别(月K: 趋势方向与所处位置)→中级别(周K: 波段节奏/中枢/压力支撑)→近期(日K: 量价与量能)三层研判龙头/低吸候选的量价结构(放量/缩量/量窒息)与所处位置(底部/平台/高位), 与当日实时数据(行情/竞价/主力资金)配合研判; 短线龙头推荐池与龙头低吸候选池个股的参考数据均须纳入以上因子。
+- **支撑/压力(客观技术位)**: 涉及个股关键价位(龙头低吸价位判断、stockAdvice.position)时, 必须取自白皮书「技术位」(60/20日高低点、MA5/20/60、斐波那契回撤0.382/0.5/0.618)中的客观价位, 严格满足 支撑位 < 当前价 < 压力位; 不得凭空编造价位。
 - leaderCore.leaders 3-5 只(今日龙头核心), ladder 为数字。
 - leaderLowAbsorb(龙头低吸) 为「今日龙头核心」的右侧并列模块, 输出格式与 leaderCore 完全一致:
   * 候选标的必须严格从数据白皮书「龙头低吸候选池」中挑选, 数量 3-5 只。
@@ -1434,7 +1829,7 @@ function buildMarketPrompt(ctx, skills) {
   * conclusionCheck 至少 3 条, result 必须严格取「命中/偏差/失准」之一; 命中说明验证充分, 偏差/失准须给出 reason 说明原因(如情绪切换、资金分歧、题材退潮)。
   * 若白皮书中昨日连板梯队数据缺失, 如实标注「昨日数据缺失, 无法进行对照验证」, 不得编造。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
-- 当前仅作研究参考, 不构成投资建议。`;
+${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "位置/趋势与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限四档之一: 小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
   let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为大盘环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
   if (skills && skills.length) {
     let skillText = "";
@@ -1452,11 +1847,66 @@ function buildMarketPrompt(ctx, skills) {
   if (luotou) {
     user += `\n\n【客观数据方法论 · 次要参考·仅数据】以下为数据采集与来源标注的客观规则, 优先级低于上述「游资交易思维」, 仅用于确保数据来源可追溯、结构化完整, 禁止据此输出任何主观研判或情绪化结论:\n${luotou}`;
   }
+  // 个股意见因子: 填写了个股时追加个股数据块, 并要求输出 stockAdvice
+  if (stock) {
+    const sBlock = await buildStockInput(stock);
+    if (sBlock) user += `\n\n${sBlock}\n\n请针对该个股输出 stockAdvice 个股意见, 将以上全部大局因子(大盘/板块/情绪/竞价)纳入判断:`;
+  }
   return { system: sys, user };
 }
 
-/** 5 模块结果校验与规范化(容错) */
-function normalizeMarketResult(raw, nameToCode) {
+/** 三段式复盘 prompt(趋势波段模式): 大盘与波段环境 / 主线板块与趋势方向 / 趋势标的池
+ *  stock: 填写个股时, 追加个股数据块并要求输出 stockAdvice。 */
+async function buildTrendPrompt(ctx, skills, stock = null) {
+  const sys = `
+你是一位深耕A股趋势波段的资深市场分析师, 擅长以波段视角做「环境 → 主线 → 标的」结构化研判。
+请基于给定的市场数据, 输出严格合法的 JSON(不要任何多余文字/注释/代码块标记), 结构如下:
+{
+  "marketEnvironment": { "strength": "强/中/弱", "style": "趋势风格/短线风格/混动", "environment": "波段环境定性(精炼 2-3 句)", "basePosition": "仓位基调(仅限四档之一: 小/中/大/满)", "analysis": "精炼研判(含大盘量能放缩依据)" },
+  "mainLines": [ { "name": "主线板块/题材", "stage": "启动/发酵/高潮/退潮", "capital": "资金持续性(持续流入/回流/退潮)", "direction": "关注方向与板块内梯队关系", "note": "精炼点评" } ],
+  "trendStocks": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "trendState": "放量建仓/缩量整理/量窒息/起涨", "support": "支撑位", "resistance": "压力位", "buyPoint": "量窒息埋伏/突破半路/收红确认", "position": "仓位档位(仅限四档之一: 小/中/大/满)", "logic": "一句买卖逻辑" } ]
+}
+要求:
+- **精炼浓缩但不简略**: 每段先给判断、再给 1-2 句数据依据; 不堆砌数据流水账。
+- **必须将「大盘因子」与「板块因子」纳入研判依据**: 结合大盘因子(今日/昨日指数涨跌幅、成交额量能对比)判断大盘强弱与放量/缩量; 结合板块因子(行业/概念 今日/昨日涨跌幅与主力净额)判断主线资金持续性(持续流入=主线确立 / 由负转正=资金回流 / 连续流出=退潮), 并在各段分析文本中体现依据。
+- **大盘量能作为个股判断的客观环境约束**: 结合「大盘量能评估」(放量/缩量) 校准对趋势票的判断口径——放量环境趋势票有延续空间; 缩量环境只做最强趋势票、严控扩散度。该量能口径仅作内部约束, 输出文本无需刻意提及量能数字。
+- **K线因子与日成交量因子(半年量价/位置/量能)**: 结合白皮书「个股半年K线(月K近6月+周K近26周+日K近5日 · 量能/位置)」, 从大级别(月K: 趋势方向与所处位置)→中级别(周K: 波段节奏/中枢/压力支撑)→近期(日K: 量价与量能)三层研判趋势票候选的量价结构(放量建仓/缩量整理/量窒息/起涨)与所处位置(底部/平台/高位), 与当日实时数据(行情/竞价/主力资金)配合研判; 趋势标的池个股的参考数据须纳入以上因子。
+- **支撑/压力(客观技术位)**: trendStocks.support/resistance 必须取自白皮书「技术位」(60/20日高低点、MA5/20/60、斐波那契回撤0.382/0.5/0.618)中的客观价位, 严格满足 支撑位 < 当前价 < 压力位; 不得凭空编造价位。
+- **市场风格**: 结合涨停家数、连板高度与炸板率判断当前是短线连板风格还是趋势波段风格(连板打不高、趋势票持续走强=趋势风格), 先判风格再选票。
+- marketEnvironment.basePosition 参照 4321 仓位法给出基调, 严格输出四档之一「小/中/大/满」, 不得输出数字或百分比。
+- mainLines 2-3 条, 精炼给出主线方向与运行阶段。
+- trendStocks 3-5 只: 从白皮书中挑选底部/平台放量→缩量整理→量窒息、相对底部、刚启动、左侧无套牢压力的趋势票; 剔除短线票/ST/已走出主升的票; 若候选不足, 如实标注「无满足条件趋势票」, 不得凑数。
+- 涉及个股分析时, 将「集合竞价异动」数据纳入竞价情绪判断。
+- 只依据给定数据与趋势波段方法论推断, 不编造具体价格/数据。
+${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "趋势状态与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限四档之一: 小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
+  let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为波段环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
+  if (skills && skills.length) {
+    let skillText = "";
+    for (const s of skills) {
+      if (skillText.length >= MAX_PROMPT_SKILL_CHARS) break;
+      const c = s.content || "";
+      skillText += (skillText ? "\n\n" : "") + c.slice(0, MAX_PROMPT_SKILL_CHARS - skillText.length);
+    }
+    user += `\n\n请结合以下「交易方法论」进行研判(融入相应视角):\n${skillText}`;
+  } else {
+    user += `\n\n(未指定技能, 请以通用趋势波段视角研判。)`;
+  }
+  // 注入「趋势波段复盘方法论」(次要参考: 数据来源/采集规范/三段式输出格式)
+  const qushi = loadQushiObjectiveData();
+  if (qushi) {
+    user += `\n\n【趋势波段复盘方法论 · 次要参考·仅数据】以下为数据来源与采集规范及输出格式, 优先级低于上述「交易方法论」, 仅用于确保数据可追溯、输出结构规范:\n${qushi}`;
+  }
+  // 个股意见因子
+  if (stock) {
+    const sBlock = await buildStockInput(stock);
+    if (sBlock) user += `\n\n${sBlock}\n\n请针对该个股输出 stockAdvice 个股意见, 将以上全部大局因子(大盘/板块/情绪/竞价)纳入判断:`;
+  }
+  return { system: sys, user };
+}
+
+/** 5 模块结果校验与规范化(短线龙头模式); mode=trend 时走三段式规范化 */
+function normalizeMarketResult(raw, nameToCode, mode = "short") {
+  if (mode === "trend") return normalizeTrendResult(raw, nameToCode);
   const num = (v, lo = 0, hi = 999) => {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0;
@@ -1578,14 +2028,106 @@ function normalizeMarketResult(raw, nameToCode) {
   for (const name of targets) {
     if (!targetCodes[name] && nameToCode && nameToCode[name]) targetCodes[name] = String(nameToCode[name]);
   }
-  return { leaderCore, leaderLowAbsorb, sentimentCycle, opportunities, risks, marketValidation, targets, targetCodes };
+  // 个股意见(填写了个股时返回; 以大局因子 + 竞价纳入)
+  const sa = raw?.stockAdvice || null;
+  const stockAdvice = sa
+    ? {
+        stock: str(sa.stock),
+        auction: str(sa.auction),
+        position: str(sa.position),
+        opinion: str(sa.opinion),
+        positionAdvice: pos(sa.positionAdvice),
+        risk: str(sa.risk),
+      }
+    : null;
+  return { leaderCore, leaderLowAbsorb, sentimentCycle, opportunities, risks, marketValidation, targets, targetCodes, stockAdvice };
 }
 
-/** 龙头情绪复盘(5 模块): 复用 LLM 管线与降频缓存 */
-async function analyzeMarket({ model, skills = [], force = false }) {
+/** 三段式(趋势波段模式)结果校验与规范化: 大盘与波段环境 / 主线板块与趋势方向 / 趋势标的池 */
+function normalizeTrendResult(raw, nameToCode) {
+  const num = (v, lo = 0, hi = 999) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0;
+  };
+  const str = (v) => (v === undefined || v === null ? "" : String(v));
+  const pos = (v) => {
+    if (v === undefined || v === null || v === "") return null;
+    const s = String(v).trim();
+    if (!s) return null;
+    if (/满/.test(s)) return "满";
+    if (/大/.test(s)) return "大";
+    if (/中/.test(s)) return "中";
+    if (/小/.test(s)) return "小";
+    const n = Number(s.replace(/[%％]/g, ""));
+    if (Number.isFinite(n)) {
+      const pct = n > 0 && n < 1 ? n * 100 : n;
+      if (pct <= 25) return "小";
+      if (pct <= 50) return "中";
+      if (pct <= 75) return "大";
+      return "满";
+    }
+    return null;
+  };
+  // 第一段 · 大盘与波段环境
+  const me = raw?.marketEnvironment || {};
+  const marketEnvironment = {
+    strength: ["强", "中", "弱"].includes(me.strength) ? me.strength : str(me.strength) || "中",
+    style: str(me.style),
+    environment: str(me.environment),
+    basePosition: pos(me.basePosition),
+    analysis: str(me.analysis),
+  };
+  // 第二段 · 主线板块与趋势方向
+  const mainLines = (Array.isArray(raw?.mainLines) ? raw.mainLines : []).slice(0, 6).map((m) => ({
+    name: str(m.name),
+    stage: str(m.stage),
+    capital: str(m.capital),
+    direction: str(m.direction),
+    note: str(m.note),
+  }));
+  // 第三段 · 趋势标的池
+  const trendStocks = (Array.isArray(raw?.trendStocks) ? raw.trendStocks : []).slice(0, 8).map((s) => ({
+    name: str(s.name),
+    code: str(s.code),
+    trendState: str(s.trendState),
+    support: str(s.support),
+    resistance: str(s.resistance),
+    buyPoint: str(s.buyPoint),
+    position: pos(s.position),
+    logic: str(s.logic),
+  }));
+  const targets = [...new Set([...mainLines.map((m) => m.name), ...trendStocks.map((s) => s.name)].filter(Boolean))];
+  const targetCodes = {};
+  for (const s of trendStocks) {
+    const n = str(s.name), c = str(s.code);
+    if (n && c) targetCodes[n] = c;
+  }
+  for (const n of targets) if (!targetCodes[n] && nameToCode?.[n]) targetCodes[n] = String(nameToCode[n]);
+  // 个股意见(填写了个股时返回)
+  const sa = raw?.stockAdvice || null;
+  const stockAdvice = sa
+    ? {
+        stock: str(sa.stock),
+        auction: str(sa.auction),
+        position: str(sa.position),
+        opinion: str(sa.opinion),
+        positionAdvice: pos(sa.positionAdvice),
+        risk: str(sa.risk),
+      }
+    : null;
+  return { marketEnvironment, mainLines, trendStocks, targets, targetCodes, stockAdvice, mode: "trend" };
+}
+
+/** 个股意见标的显示名规范化: LLM 可能只输出纯代码(如 603799 / sh600519 / 600519.SH), 用前端搜索框名称兜底为名称, 避免前端标的显示为号码 */
+function fixStockAdviceName(sa, name) {
+  if (sa && name && /^\d{6}$/.test(String(sa.stock || "").replace(/\D/g, ""))) sa.stock = String(name);
+  return sa;
+}
+
+/** PHILIA 复盘: 短线龙头模式(5 模块) / 趋势波段模式(三段式); stock 提供时一并输出个股意见 */
+async function analyzeMarket({ model, skills = [], force = false, stock = null }) {
   const tracer = createTracer();
   const tStart = Date.now();
-  tracer.add({ type: "agent", name: "启动龙头情绪复盘", status: "ok", startedAt: tStart, durationMs: 0, params: { force: !!force, 模块数: 5 }, summary: "今日龙头核心 / 情绪周期 / 机会 / 风险 / 昨日梯队双日对照" });
   // 未显式指定模型时, 取已配置模型或默认模型(前端 config/skills 接口可能未启用)
   if (!model) model = getAiKey()?.model || DEFAULT_MODELS.find((m) => m.default)?.id || "";
   if (!MODEL_WHITELIST.has(model)) {
@@ -1598,8 +2140,12 @@ async function analyzeMarket({ model, skills = [], force = false }) {
   const apiKey = decrypt(k);
   const date = dashToday();
   const sorted = [...skills].sort();
+  // 缓存键: 模式前缀统一, 由技能组合 + 个股参数共同区分
+  const stockKey = stock
+    ? `|${String(stock?.code || "").replace(/\D/g, "") || String(stock?.name || "")}`
+    : "";
   const cacheKey = crypto.createHash("sha256")
-    .update(`market5-lowabs|${date}|${model}|${sorted.join(",")}`)
+    .update(`market-review|${date}|${model}|${sorted.join(",")}${stockKey}`)
     .digest("hex");
 
   // 命中缓存(未强制刷新) -> 直接返回, 不重复计费
@@ -1607,30 +2153,46 @@ async function analyzeMarket({ model, skills = [], force = false }) {
     const hit = getAiAnalysis(cacheKey);
     if (hit && hit.result) {
       tracer.add({ type: "tool", name: "分析结果缓存", status: "ok", startedAt: Date.now(), durationMs: 0, params: { cacheKey }, summary: "30min 降频缓存命中, 未重新调用 LLM" });
-      return { ...hit, fromCache: true, cacheKey, trace: tracer.steps };
+      // 展示名规范化(不改动缓存本体): LLM 可能输出纯代码, 用已存名称兜底, 避免前端标的显示为号码
+      const res = { ...hit.result };
+      fixStockAdviceName(res?.stockAdvice, res?.stockInput?.name);
+      return { ...hit, result: res, fromCache: true, cacheKey, trace: tracer.steps };
     }
   }
 
   const ctx = await assembleContext(tracer);
   const skillList = loadSkills();
   const selected = dedupeSkills(skillList.filter((s) => sorted.includes(s.name)));
+  // 模式: 技能全部属于趋势波段(qushi-boduan) → 三段式; 否则默认短线龙头(混选/空选同此)
+  const mode = selected.length > 0 && selected.every((s) => s.group === "qushi-boduan") ? "trend" : "short";
+  const modeLabel = mode === "trend" ? "趋势波段·三段式" : "短线龙头·5模块";
   tracer.add({
-    type: "resource", name: "技能库(游资交易思维)", status: "ok",
+    type: "agent", name: `启动复盘(${modeLabel})`, status: "ok", startedAt: tStart, durationMs: 0,
+    params: { force: !!force, 模式: modeLabel, 个股: stock ? `${stock.name || stock.code || ""}` : null },
+    summary: mode === "trend" ? "大盘与波段环境 / 主线板块与趋势方向 / 趋势标的池" : "今日龙头核心 / 情绪周期 / 机会 / 风险 / 昨日梯队双日对照",
+  });
+  tracer.add({
+    type: "resource", name: `技能库(${modeLabel})`, status: "ok",
     startedAt: Date.now(), durationMs: 0,
     params: { 命中技能: selected.map((s) => s.name) },
     summary: `加载 ${selected.length} 项技能注入 prompt`,
   });
-  const prompt = buildMarketPrompt(ctx, selected);
-  tracer.add({ type: "tool", name: "组装 LLM Prompt", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 模型: model, 技能数: selected.length }, summary: "白皮书 + 技能拼接为单轮 prompt" });
+  const prompt = mode === "trend"
+    ? await buildTrendPrompt(ctx, selected, stock)
+    : await buildMarketPrompt(ctx, selected, stock);
+  tracer.add({ type: "tool", name: "组装 LLM Prompt", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 模型: model, 技能数: selected.length, 模式: modeLabel }, summary: "白皮书 + 技能拼接为单轮 prompt" });
   const llmT0 = Date.now();
   const raw = await callLLM(apiKey, model, prompt).catch((e) => {
     tracer.add({ type: "tool", name: "调用 LLM(推理模型)", status: "failed", startedAt: llmT0, durationMs: Date.now() - llmT0, params: { 模型: model }, summary: e?.message || "LLM 调用失败" });
     throw e;
   });
   tracer.add({ type: "tool", name: "调用 LLM(推理模型)", status: "ok", startedAt: llmT0, durationMs: Date.now() - llmT0, params: { 模型: model }, summary: "已返回结构化 JSON 结果" });
-  const result = normalizeMarketResult(raw, ctx.nameToCode);
+  const result = normalizeMarketResult(raw, ctx.nameToCode, mode);
   result.sources = (ctx.sources || []).map((s) => ({ name: s.name, fetchedAt: s.fetchedAt }));
-  tracer.add({ type: "tool", name: "结果规范化", status: "ok", startedAt: Date.now(), durationMs: 0, params: {}, summary: "5 模块结果校验与字段规范化(含双日对照验证)" });
+  if (stock) result.stockInput = { code: String(stock.code || ""), name: String(stock.name || "") };
+  // 个股意见标的显示名规范化: LLM 可能只输出纯代码, 用搜索框名称兜底, 避免前端标的显示为号码
+  fixStockAdviceName(result?.stockAdvice, stock?.name);
+  tracer.add({ type: "tool", name: "结果规范化", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 模式: modeLabel }, summary: `${modeLabel} 结果校验与字段规范化` });
 
   upsertAiAnalysis({ cacheKey, date, model, skillsHash: sorted.join(","), result });
   return { cacheKey, date, model, skillsHash: sorted.join(","), result, createdAt: Date.now(), updatedAt: Date.now(), fromCache: false, trace: tracer.steps };

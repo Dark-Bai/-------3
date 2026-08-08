@@ -20,7 +20,7 @@ import os
 import sys
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
@@ -190,6 +190,18 @@ def _rows(resp: Any) -> list:
     return []
 
 
+def _fmt_auction(rows: list) -> list:
+    """竞价数据格式化: 「时间」列为 UTC 秒时转为北京时间 HH:MM:SS, 其余原样返回。"""
+    fmt = []
+    for r in rows:
+        x = dict(r)
+        t = x.get("时间")
+        if isinstance(t, (int, float)) and t > 0:
+            x["时间"] = (datetime(1970, 1, 1) + timedelta(seconds=float(t), hours=8)).strftime("%H:%M:%S")
+        fmt.append(x)
+    return fmt
+
+
 def make_handlers(conn: THSConn) -> dict:
     def h_quote(qs, body=None):
         code = (qs.get("code") or [""])[0].strip().upper()
@@ -292,6 +304,48 @@ def make_handlers(conn: THSConn) -> dict:
             merged.update(x)
         return _response(True, [merged] if merged else [])
 
+    def h_call_auction(qs, body=None):
+        """单股集合竞价(9:15-9:25): code 为 ths 代码(如 USZA300033); 时间列(UTC 秒)转北京时间 HH:MM:SS。"""
+        code = (qs.get("code") or [""])[0].strip().upper()
+        if not code:
+            return _response(False, [], "缺少 code 参数")
+        r = conn.query(lambda t: t.call_auction(code))
+        if not getattr(r, "success", False):
+            return _response(False, [], getattr(r, "error", "查询失败"))
+        return _response(True, _fmt_auction(_rows(r)))
+
+    def h_call_auction_anomaly(qs, body=None):
+        """竞价异动(全市场): market 逗号分隔支持 USHA/USZA, 默认两者都拉; 时间列转北京时间。"""
+        markets = [m.strip().upper() for m in (qs.get("market") or ["USHA,USZA"])[0].split(",") if m.strip()]
+        out = []
+        for mkt in markets:
+            if mkt not in ("USHA", "USZA"):
+                continue
+            try:
+                r = conn.query(lambda t, m=mkt: t.call_auction_anomaly(m))
+                if getattr(r, "success", False):
+                    out.extend(_rows(r))
+            except Exception:
+                continue
+        if not out:
+            return _response(False, [], "竞价异动数据获取失败(网关/同花顺连接不可用)")
+        return _response(True, _fmt_auction(out))
+
+    def h_kline(qs, body=None):
+        """日K(近 N 根): code 为 ths 代码(如 USHA600519); count=根数(默认6); interval=day/1m/5m等。"""
+        code = (qs.get("code") or [""])[0].strip().upper()
+        if not code:
+            return _response(False, [], "缺少 code 参数")
+        try:
+            count = int((qs.get("count") or ["6"])[0])
+        except ValueError:
+            count = 6
+        interval = (qs.get("interval") or ["day"])[0]
+        r = conn.query(lambda t: t.klines(code, count=count, interval=interval))
+        if not getattr(r, "success", False):
+            return _response(False, [], getattr(r, "error", "查询失败"))
+        return _response(True, _rows(r))
+
     def h_account(qs, body=None):
         """GET: 读取当前账号(不含明文密码); POST: 更新账号并热重连。"""
         if body is None:
@@ -319,6 +373,9 @@ def make_handlers(conn: THSConn) -> dict:
         "/api/ths/search": h_search,
         "/api/ths/bulk-quote": h_bulk_quote,
         "/api/ths/main-forces": h_main_forces,
+        "/api/ths/call-auction": h_call_auction,
+        "/api/ths/call-auction-anomaly": h_call_auction_anomaly,
+        "/api/ths/kline": h_kline,
         "/api/ths/account": h_account,
     }
 

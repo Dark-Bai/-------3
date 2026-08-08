@@ -564,8 +564,8 @@ export const api = {
     },
     /** 龙头池与龙头股数据源一致性深度校验 */
     validateLeaderPool: () => get<PhiliaLeaderValidateReport>(`/api/philia/leader-pool/validate`),
-    /** 龙头情绪复盘(5 模块): 今日龙头核心/今日情绪周期/今日机会/今日风险/昨日梯队双日对照; force=true 强制重算; LLM 耗时长用独立长超时 */
-    marketAnalyze: (cfg: { model?: string; skills?: string[]; force?: boolean }) =>
+    /** PHILIA 复盘: 技能决定模式(短线龙头5模块 / 趋势波段三段式); stock 提供时一并输出个股意见; force=true 强制重算; LLM 耗时长用独立长超时 */
+    marketAnalyze: (cfg: { model?: string; skills?: string[]; force?: boolean; stock?: { code?: string; name?: string } }) =>
       post<PhiliaMarketAnalysis>(`/api/philia/market-analyze`, cfg, 180000),
   },
   /* ---------- 同花顺 THS 网关账号 ---------- */
@@ -764,6 +764,8 @@ export interface PhiliaSkill {
   groupName?: string;
   /** 是否为大 skill 全览(其内容为该 SKILL.md 全文) */
   isAll?: boolean;
+  /** 技能内容字符数(构建期计算, 用于输入长度预算提示与超限禁用) */
+  chars?: number;
 }
 
 /** 可选模型(OpenRouter) */
@@ -1074,6 +1076,60 @@ export interface PhiliaMarketRisk {
   sourceRef?: string;
 }
 
+/** 趋势波段三段式结果(大盘与波段环境 / 主线板块与趋势方向 / 趋势标的池) */
+export interface PhiliaTrendEnvironment {
+  /** 大盘强弱: 强/中/弱 */
+  strength: string;
+  /** 市场风格: 趋势风格/短线风格/混动 */
+  style: string;
+  /** 波段环境定性 */
+  environment: string;
+  /** 仓位基调: 固定四级分类之一(小/中/大/满) */
+  basePosition?: string;
+  /** 精炼研判 */
+  analysis: string;
+}
+export interface PhiliaTrendMainLine {
+  name: string;
+  /** 运行阶段: 启动/发酵/高潮/退潮 */
+  stage: string;
+  /** 资金持续性: 持续流入/回流/退潮 */
+  capital: string;
+  /** 关注方向与板块内梯队关系 */
+  direction: string;
+  /** 精炼点评 */
+  note: string;
+}
+export interface PhiliaTrendStock {
+  name: string;
+  code: string;
+  /** 趋势状态: 放量建仓/缩量整理/量窒息/起涨 */
+  trendState: string;
+  /** 支撑位 */
+  support: string;
+  /** 压力位 */
+  resistance: string;
+  /** 买点类型: 量窒息埋伏/突破半路/收红确认 */
+  buyPoint: string;
+  /** 仓位档位: 固定四级分类之一(小/中/大/满) */
+  position?: string;
+  /** 一句买卖逻辑 */
+  logic: string;
+}
+export interface PhiliaStockAdvice {
+  stock: string;
+  /** 竞价情绪判断(集合竞价信号) */
+  auction: string;
+  /** 位置/趋势与关键价位 */
+  position: string;
+  /** 综合建议(大局因子 + 竞价) */
+  opinion: string;
+  /** 仓位档位: 固定四级分类之一(小/中/大/满) */
+  positionAdvice?: string;
+  /** 风险提示 */
+  risk: string;
+}
+
 /** 龙头情绪复盘结果(5 模块) */
 export interface PhiliaMarketAnalysisResult {
   leaderCore: PhiliaMarketLeaderCore;
@@ -1090,6 +1146,15 @@ export interface PhiliaMarketAnalysisResult {
   targetCodes?: Record<string, string>;
   /** AI 生成内容所参考的数据源列表(含获取时间) */
   sources?: PhiliaDataSource[];
+  /* ---- 趋势波段模式(三段式) ---- */
+  mode?: "short" | "trend";
+  marketEnvironment?: PhiliaTrendEnvironment;
+  mainLines?: PhiliaTrendMainLine[];
+  trendStocks?: PhiliaTrendStock[];
+  /* ---- 个股意见(填写个股时返回) ---- */
+  stockAdvice?: PhiliaStockAdvice | null;
+  /** 本次查询的个股(便于前端展示) */
+  stockInput?: { code: string; name: string };
 }
 
 /** 昨日连板梯队 · 今日实盘对照验证(双日对照) */
