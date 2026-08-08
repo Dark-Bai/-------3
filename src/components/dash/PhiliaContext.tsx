@@ -15,7 +15,7 @@ import {
   type PhiliaModel,
   type PhiliaAnalysis,
 } from "@/lib/api";
-import { PHILIA_SKILLS } from "@/lib/philiaSkills";
+import { PHILIA_SKILLS, PHILIA_GROUPS } from "@/lib/philiaSkills";
 
 interface PhiliaState {
   /* 配置 */
@@ -24,6 +24,8 @@ interface PhiliaState {
   /* 静态数据 */
   skills: PhiliaSkill[];
   skillsLoaded: boolean;
+  /** 大 skill 列表(slug → 显示名), 供「技能选择」旁的下拉按钮切换 */
+  skillGroups: { slug: string; name: string }[];
   models: PhiliaModel[];
   /* 分析 */
   analyzing: boolean;
@@ -137,6 +139,7 @@ export function PhiliaProvider({ children }: { children: ReactNode }) {
         configLoaded,
         skills: PHILIA_SKILLS,
         skillsLoaded: true,
+        skillGroups: PHILIA_GROUPS,
         models,
         analyzing,
         analysis,

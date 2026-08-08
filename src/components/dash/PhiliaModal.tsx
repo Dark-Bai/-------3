@@ -4,13 +4,13 @@
  * 输入项:
  *  - API Key(强制, sk-or- 格式校验 + 实时校验)
  *  - AI 模型下拉(默认 deepseek-v4-flash 正式版)
- *  - 技能多选(读取 youzi-qijie-jinghua 目录)
+ *  - 技能多选(读取 skills/ 根目录各「大 skill」子文件夹的 SKILL.md, 支持大 skill 切换)
  * 操作:
  *  - 保存配置: 加密存储后关闭; 分析由主面板「启动 AI 综合分析」按钮触发
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Sparkles, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { X, Sparkles, Loader2, CheckCircle2, AlertCircle, ChevronDown } from "lucide-react";
 import { usePhilia } from "./PhiliaContext";
 import { api, type PhiliaModel, type PhiliaConfig, type ThsAccountInfo } from "@/lib/api";
 
@@ -29,12 +29,15 @@ function keyFormatValid(key: string): boolean {
 }
 
 export function PhiliaModal() {
-  const { config, skills, skillsLoaded, models, closeModal, saveSettings } = usePhilia();
+  const { config, skills, skillGroups, skillsLoaded, models, closeModal, saveSettings } = usePhilia();
 
   /* 表单状态 */
   const [key, setKey] = useState("");
   const [model, setModel] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  /* 大 skill 选择: 当前展示分组 + 下拉开关 */
+  const [activeGroup, setActiveGroup] = useState<string | null>(null);
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   /* 校验状态 */
   const [keyValidating, setKeyValidating] = useState(false);
   const [keyValidated, setKeyValidated] = useState<"valid" | "invalid" | null>(null);
@@ -61,6 +64,12 @@ export function PhiliaModal() {
     if (models && models.length > 0) return models;
     return DEFAULT_MODELS;
   }, [models]);
+
+  /* 当前展示分组(默认第一个)与对应技能列表 */
+  const currentGroup = activeGroup ?? skillGroups[0]?.slug ?? null;
+  const currentGroupName = skillGroups.find((g) => g.slug === currentGroup)?.name ?? "";
+  const groupSkills = skills.filter((s) => s.group === currentGroup);
+  const groupAllChecked = groupSkills.length > 0 && groupSkills.every((s) => selectedSkills.includes(s.name));
 
   /* 弹窗打开(挂载): 从已保存配置回填表单。
    * 仅当 config 首次就绪时初始化一次, 之后 config 引用变化不再重置用户编辑中的选择,
@@ -311,18 +320,76 @@ export function PhiliaModal() {
             <div className="mb-1 flex items-center justify-between">
               <label className="text-[12px] font-semibold text-[#8b7a5e]">技能选择</label>
               <div className="flex items-center gap-2">
-                {skills.length > 0 && (
+                {/* 大 skill 切换: 下拉选择主题(如 短线龙头 / 趋势波段) */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    disabled={!!submitting}
+                    onClick={() => setGroupMenuOpen((v) => !v)}
+                    title="选择大 skill（主题）"
+                    className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                      groupMenuOpen
+                        ? "border-[#d4943a]/70 bg-[#d4943a]/10 text-[#d4943a]"
+                        : "border-[#e0d5c0] bg-[#f5f0e6] text-[#6b5b3e] hover:border-[#d4943a]/60"
+                    }`}
+                  >
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#d4943a]" />
+                    <span className="max-w-[64px] truncate">{currentGroupName || "大 skill"}</span>
+                    <ChevronDown size={11} className={`transition-transform ${groupMenuOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {groupMenuOpen && (
+                    <>
+                      {/* 点击外部关闭 */}
+                      <div className="fixed inset-0 z-[1]" onClick={() => setGroupMenuOpen(false)} />
+                      <div className="absolute right-0 top-full z-[2] mt-1 w-36 overflow-hidden rounded border border-[#e0d5c0] bg-[#faf6ee] shadow-newspaper-lg">
+                        {skillGroups.length === 0 ? (
+                          <div className="px-2.5 py-1.5 text-[11px] text-[#a8987e]">未发现大 skill</div>
+                        ) : (
+                          skillGroups.map((g) => (
+                            <button
+                              key={g.slug}
+                              type="button"
+                              onClick={() => {
+                                setActiveGroup(g.slug);
+                                setGroupMenuOpen(false);
+                                // 大 skill 隔离: 切换后清空其他大 skill 的已选技能,
+                                // 确保本次分析只参照当前大 skill 的规则, 不混入其他主题
+                                setSelectedSkills((prev) =>
+                                  prev.filter((n) => {
+                                    const s = skills.find((x) => x.name === n);
+                                    return !s || s.group === g.slug;
+                                  })
+                                );
+                              }}
+                              className={`block w-full px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+                                currentGroup === g.slug
+                                  ? "bg-[#d4943a]/10 font-semibold text-[#d4943a]"
+                                  : "text-[#6b5b3e] hover:bg-[#ede4d4]"
+                              }`}
+                            >
+                              {g.name}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                {/* 全选: 作用于当前大 skill 下的全部技能 */}
+                {groupSkills.length > 0 && (
                   <button
                     type="button"
                     disabled={!!submitting}
                     onClick={() =>
-                      setSelectedSkills(
-                        selectedSkills.length === skills.length ? [] : skills.map((s) => s.name)
-                      )
+                      setSelectedSkills((prev) => {
+                        const names = groupSkills.map((s) => s.name);
+                        if (groupAllChecked) return prev.filter((n) => !names.includes(n));
+                        return Array.from(new Set([...prev, ...names]));
+                      })
                     }
                     className="text-[11px] text-[#4a6b3f] underline-offset-2 hover:underline"
                   >
-                    {selectedSkills.length === skills.length ? "取消全选" : "全选"}
+                    {groupAllChecked ? "取消全选" : "全选"}
                   </button>
                 )}
                 <span className="text-[10px] text-[#a8987e]">
@@ -334,13 +401,15 @@ export function PhiliaModal() {
               <div className="flex h-16 items-center justify-center gap-2 rounded border border-[#e0d5c0] bg-[#f5f0e6]/60 text-[11px] text-[#a8987e]">
                 <Loader2 size={13} className="animate-spin" /> 正在读取技能库…
               </div>
-            ) : skills.length === 0 ? (
+            ) : groupSkills.length === 0 ? (
               <div className="flex h-16 items-center justify-center rounded border border-[#e0d5c0] bg-[#f5f0e6]/60 text-[11px] text-[#a8987e]">
-                未发现技能库，将使用通用市场分析模式
+                {currentGroup
+                  ? `该大 skill 暂无技能（请完善 skills/${currentGroup}/SKILL.md）`
+                  : "未发现技能库，将使用通用市场分析模式"}
               </div>
             ) : (
               <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-[#e0d5c0] bg-[#f5f0e6]/60 p-1.5">
-                {skills.map((s) => {
+                {groupSkills.map((s) => {
                   const checked = selectedSkills.includes(s.name);
                   return (
                     <label

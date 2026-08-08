@@ -540,7 +540,7 @@ export const api = {
   monitor: () => get<MonitorData>(`/api/monitor`),
   /* ---------- PHILIA AI 综合分析 ---------- */
   philia: {
-    /** 技能列表(读取 youzi-qijie-jinghua 目录) */
+    /** 技能列表(读取 skills/ 根目录各「大 skill」子文件夹的 SKILL.md) */
     skills: () => get<PhiliaSkill[]>(`/api/philia/skills`),
     /** 可用模型列表(OpenRouter models 过滤) */
     models: () => get<PhiliaModel[]>(`/api/philia/models`),
@@ -752,12 +752,18 @@ export function useOpenRouterUsage() {
 
 /* ---------------- PHILIA AI 综合分析数据结构 ---------------- */
 
-/** 技能(读取 youzi-qijie-jinghua 目录的 SKILL.md) */
+/** 技能(读取 skills/ 根目录各「大 skill」子文件夹的 SKILL.md) */
 export interface PhiliaSkill {
   name: string;
   description: string;
-  /** 技能标题(文件/章节名) */
+  /** 技能唯一标识(格式: 大skillSlug:技能名 或 大skillSlug:all) */
   slug: string;
+  /** 所属大 skill(slug) */
+  group?: string;
+  /** 所属大 skill(显示名) */
+  groupName?: string;
+  /** 是否为大 skill 全览(其内容为该 SKILL.md 全文) */
+  isAll?: boolean;
 }
 
 /** 可选模型(OpenRouter) */

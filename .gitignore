@@ -47,5 +47,5 @@ android-tv/app/build/
 
 kpl-api-docs/
 
-# 游资骑劫精华
-youzi-qijie-jinghua/SKILL.md
+# 游资骑劫精华(大 skill 技能内容仅本机管理, 不入库)
+skills/*/SKILL.md

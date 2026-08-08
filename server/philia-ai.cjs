@@ -2,7 +2,7 @@
  * PHILIA AI 综合分析 - 后端核心
  *
  * 职责:
- *  - 技能库解析(youzi-qijie-jinghua/SKILL.md)
+ *  - 技能库解析(skills/ 根目录下每个子文件夹 = 一个大 skill, 见 SKILL_GROUPS)
  *  - OpenRouter 模型列表 / Key 校验
  *  - 市场数据白皮书组装(本地库 + KPL 实时)
  *  - LLM 调用(OpenRouter, response_format=json_object) + 结构化校验
@@ -23,11 +23,40 @@ const {
 
 /* ---------------- 常量 ---------------- */
 const ROOT = path.join(__dirname, "..");
-const SKILL_DIR = path.join(ROOT, "youzi-qijie-jinghua");
-// 次要客观数据方法论来源(龙头情绪复盘): 仅吸收其客观数据信息, 优先级低于 youzi-qijie-jinghua
+// 次要客观数据方法论来源(龙头情绪复盘): 仅吸收其客观数据信息, 优先级低于游资交易思维
 const LUOTOU_SKILL_PATH = path.join(ROOT, ".trae", "skills", "luotou-qingxu-sipan", "SKILL.md");
 const OR_BASE = "https://openrouter.ai/api/v1";
 const DS_BASE = "https://api.deepseek.com";
+
+/**
+ * 大 skill 自动发现: skills/ 根目录下每个子文件夹 = 一个大 skill(主题),
+ * 内含 SKILL.md, 解析出可勾选的子技能(小节)与「全览」选项。
+ * 大 skill 显示名取 SKILL.md front-matter 的 `name` 字段(中文), 缺失时回退为目录名。
+ * 新增大 skill: 只需在 skills/ 下新建文件夹并放入 SKILL.md, 前后端均无需改注册代码。
+ */
+const SKILLS_ROOT = path.join(ROOT, "skills");
+function loadSkillGroups() {
+  const out = [];
+  if (!fs.existsSync(SKILLS_ROOT)) return out;
+  const dirs = fs
+    .readdirSync(SKILLS_ROOT, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+  for (const slug of dirs) {
+    const dir = path.join(SKILLS_ROOT, slug);
+    const file = path.join(dir, "SKILL.md");
+    if (!fs.existsSync(file)) continue;
+    let name = slug;
+    try {
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(fs.readFileSync(file, "utf-8"));
+      const n = fm?.[1].match(/^name:\s*(.+?)\s*$/m);
+      if (n) name = n[1].trim();
+    } catch { /* 解析失败时保留目录名 */ }
+    out.push({ slug, name, dir });
+  }
+  return out;
+}
 
 /** 依据 key 前缀识别 provider: sk-or- 为 OpenRouter, 其余 sk- 视为 DeepSeek */
 const isOpenRouterKey = (key) => typeof key === "string" && key.startsWith("sk-or-");
@@ -475,11 +504,11 @@ function dashToday() {
 
 /* ---------------- 技能库解析 ---------------- */
 
-/** 解析 SKILL.md, 提取 front-matter 与各「游资」小节为可选技能 */
-function loadSkills() {
-  const file = path.join(SKILL_DIR, "SKILL.md");
-  if (!fs.existsSync(file)) return [];
-  const text = fs.readFileSync(file, "utf-8");
+/**
+ * 解析单个大 skill 的 SKILL.md, 提取 front-matter 与各技能小节为可选技能。
+ * 小节识别规则: 按 "## " 切分, 识别 "X、名称（标签）" 标题, 兼容 "名称 · 标签" 形式。
+ */
+function parseSkillFile(text, group) {
   // front-matter name/description
   let docDesc = "";
   const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
@@ -487,7 +516,6 @@ function loadSkills() {
     const d = fm[1].match(/description:\s*"(.+?)"/);
     if (d) docDesc = d[1];
   }
-  // 按 "## " 切分小节, 识别 "X、名称（标签）" 标题
   const skills = [];
   const parts = text.split(/^## /m);
   for (const part of parts) {
@@ -504,62 +532,86 @@ function loadSkills() {
     }
     skills.push({
       name,
-      description: tag || "游资交易思维",
-      slug: `yg-${name}`,
+      description: tag || "交易思维",
+      slug: `${group.slug}:${name}`,
       content: part.trim(),
+      group: group.slug,
+      groupName: group.name,
+      isAll: false,
     });
   }
-  // 提供"全览"选项(注入各游资核心决策启发式)
+  // 提供"全览"选项(注入该大 skill 全文; 短线龙头沿用历史名称以兼容已保存配置)
   if (skills.length) {
+    const allName = group.slug === "duanxian-longtou" ? "七大游资全览" : `${group.name}全览`;
     skills.unshift({
-      name: "七大游资全览",
-      description: docDesc || "七大顶级游资交易思维精华合集",
-      slug: "all",
+      name: allName,
+      description: docDesc || `${group.name}交易思维合集`,
+      slug: `${group.slug}:all`,
       content: text,
+      group: group.slug,
+      groupName: group.name,
+      isAll: true,
     });
   }
   return skills;
 }
 
+/** 加载全部大 skill 的技能列表(跳过尚未创建目录/文件的 group) */
+function loadSkills() {
+  const out = [];
+  for (const g of loadSkillGroups()) {
+    const file = path.join(g.dir, "SKILL.md");
+    if (!fs.existsSync(file)) continue;
+    try {
+      out.push(...parseSkillFile(fs.readFileSync(file, "utf-8"), g));
+    } catch (e) {
+      console.error(`[philia] 解析技能 ${g.name}(${g.slug}) 失败:`, e.message);
+    }
+  }
+  return out;
+}
+
 /**
- * 技能去重: 「七大游资全览」的 content 即 SKILL.md 全文(含各单项小节),
- * 同时勾选「全览 + 单项」会导致全文与单项重复注入。已选全览时只保留全览,
- * 避免重复内容占用 prompt 空间并触发 MAX_PROMPT_SKILL_CHARS 截断。
+ * 技能去重: 大 skill 的「全览」content 即该 SKILL.md 全文(含其全部小节),
+ * 同时勾选「全览 + 单项」会导致全文与单项重复注入。按大 skill 维度去重:
+ * 某大 skill 已选全览时丢弃该大 skill 的单项, 其他大 skill 的选择不受影响。
  */
 function dedupeSkills(selected) {
-  const hasAll = selected.some((s) => s.slug === "all");
-  return hasAll ? selected.filter((s) => s.slug === "all") : selected;
+  const allGroups = new Set(selected.filter((s) => s.isAll).map((s) => s.group));
+  if (!allGroups.size) return selected;
+  return selected.filter((s) => !allGroups.has(s.group) || s.isAll);
 }
 
 /* ---------------- 观点来源解析 ----------------
- * 将 LLM 输出的 skill/tactic 解析为 SKILL.md 中的精确条目,
+ * 将 LLM 输出的 skill/tactic 解析为各 SKILL.md 中的精确条目,
  * 使每条主观观点可追溯至「文件名 + 具体章节编号 + 模型/条目编号」。
  */
-const SKILL_FILE_LABEL = "youzi-qijie-jinghua/SKILL.md";
 
-/** 解析 SKILL.md, 建立「游资小节 → 模型条目」的章节索引 */
+/** 遍历全部大 skill 的 SKILL.md, 建立「小节 → 模型条目」的章节索引 */
 function buildSkillIndex() {
-  const file = path.join(SKILL_DIR, "SKILL.md");
-  if (!fs.existsSync(file)) return [];
-  const lines = fs.readFileSync(file, "utf-8").split("\n");
   const index = [];
-  let part = ""; // 一级标题(第X部分 · 名称)
-  for (const raw of lines) {
-    const line = raw.trim();
-    const h1 = /^# (.+)$/.exec(line);
-    const h2 = /^## (.+)$/.exec(line);
-    if (h1) { part = h1[1]; continue; }
-    if (h2) {
-      const head = h2[1];
-      const no = /^[一二三四五六七八九十]+、/.exec(head)?.[0] || "";
-      const nameBase = head.replace(no, "").split("·")[0].trim();
-      index.push({ part, head, no, name: nameBase, models: [] });
-      continue;
-    }
-    // 模型条目: **模型1：标题**
-    if (index.length) {
-      const m = /^\*\*模型(\d+)[:：](.+?)(?:\*\*|$)/.exec(line);
-      if (m) index[index.length - 1].models.push({ no: m[1], title: m[2].trim() });
+  for (const g of loadSkillGroups()) {
+    const file = path.join(g.dir, "SKILL.md");
+    if (!fs.existsSync(file)) continue;
+    const lines = fs.readFileSync(file, "utf-8").split("\n");
+    let part = ""; // 一级标题(第X部分 · 名称)
+    for (const raw of lines) {
+      const line = raw.trim();
+      const h1 = /^# (.+)$/.exec(line);
+      const h2 = /^## (.+)$/.exec(line);
+      if (h1) { part = h1[1]; continue; }
+      if (h2) {
+        const head = h2[1];
+        const no = /^[一二三四五六七八九十]+、/.exec(head)?.[0] || "";
+        const nameBase = head.replace(no, "").split("·")[0].trim();
+        index.push({ file: `${g.slug}/SKILL.md`, part, head, no, name: nameBase, models: [] });
+        continue;
+      }
+      // 模型条目: **模型1：标题**
+      if (index.length) {
+        const m = /^\*\*模型(\d+)[:：](.+?)(?:\*\*|$)/.exec(line);
+        if (m) index[index.length - 1].models.push({ no: m[1], title: m[2].trim() });
+      }
     }
   }
   return index;
@@ -577,7 +629,7 @@ function resolveSkillSource(skill, tactic) {
   const t = String(tactic || "").trim();
   if (!s && !t) return "";
   const idx = getSkillIndex();
-  // 1) 用 skill 中的游资名匹配小节
+  // 1) 用 skill 中的名字匹配小节
   let sec = null;
   for (const it of idx) {
     if (it.name && s.includes(it.name)) { sec = it; break; }
@@ -590,14 +642,13 @@ function resolveSkillSource(skill, tactic) {
   }
   const parts = [];
   if (sec) {
-    parts.push(`${sec.part} ${sec.head}`);
+    parts.push(`${sec.file} · ${sec.part} ${sec.head}`);
     if (model) parts.push(`模型${model.no} ${model.title}`);
   }
-  if (parts.length) return `${SKILL_FILE_LABEL} · ${parts.join(" · ")}`;
-  // 回退: 仅给出文件名 + 原始引用
+  if (parts.length) return parts.join(" · ");
+  // 回退: 仅给出原始引用(无法定位到具体大 skill 小节时)
   const tNo = t.replace(/^模型/, "");
-  const raw = [s, t ? `模型${tNo}` : ""].filter(Boolean).join(" · ");
-  return raw ? `${SKILL_FILE_LABEL} · ${raw}` : SKILL_FILE_LABEL;
+  return [s, t ? `模型${tNo}` : ""].filter(Boolean).join(" · ");
 }
 
 /* ---------------- 客观数据过滤(龙头情绪复盘技能) ----------------

@@ -153,8 +153,8 @@ function SourceTag({
 }) {
   let text = "";
   if (sourceRef) {
-    // 去掉文件名前缀, 仅保留「章节 · 模型」等精确条目
-    const ref = sourceRef.replace(/^youzi-qijie-jinghua\/SKILL\.md\s*·\s*/, "");
+    // 去掉「大skill路径/SKILL.md ·」文件名前缀, 仅保留「章节 · 模型」等精确条目
+    const ref = sourceRef.replace(/^[^\s]*\/SKILL\.md\s*·\s*/, "");
     text = `来源：${ref}`;
   } else if (skill || tactic) {
     text = `来源：${skill || "游资思路"}${tactic ? ` - 战法${tactic}` : ""}`;
