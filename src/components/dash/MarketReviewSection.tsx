@@ -862,9 +862,9 @@ export const MarketReviewSection = forwardRef<
             title={
               enabled
                 ? active
-                  ? "自动轮询已开启 · 盘中 09:14-15:01 每2分钟刷新 · 正在轮询中(点击关闭)"
-                  : "自动轮询已开启 · 当前非轮询时段(09:14-15:01)(点击关闭)"
-                : "自动轮询已关闭 · 盘中 09:14-15:01 每2分钟自动刷新(点击开启)"
+                  ? "自动轮询已开启 · 盘中 09:29-11:31 / 12:59-15:01 每2分钟刷新 · 正在轮询中(点击关闭)"
+                  : "自动轮询已开启 · 当前非轮询时段(09:29-11:31 / 12:59-15:01)(点击关闭)"
+                : "自动轮询已关闭 · 盘中 09:29-11:31 / 12:59-15:01 每2分钟自动刷新(点击开启)"
             }
             aria-pressed={enabled}
             className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[13px] font-bold transition-all duration-300 ${

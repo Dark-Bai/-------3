@@ -2,7 +2,7 @@
  * PHILIA 自动轮询 hook(模块级单例)
  *
  * 规则:
- *  - 轮询时段: 每日 09:14:00(含) 至 15:01:00(不含)
+ *  - 轮询时段: 每日两个交易时段窗口 09:29(含)~11:31(不含) 与 12:59(含)~15:01(不含)
  *  - 轮询频率: 每 POLL_INTERVAL_MIN(2) 分钟触发一次 onTick
  *  - 防漂移: 以"距下一个 2 分钟边界的毫秒数"自校正调度, 而非固定 setInterval, 避免时间漂移累积
  *  - 防并发: 上一轮 onTick 仍在途时跳过本轮触发(避免 LLM 分析重叠重复计费)
@@ -10,7 +10,7 @@
  *             极老浏览器回退 localStorage 时间戳去重
  *  - 单例: 开关/状态/定时器为模块级共享。主面板与悬浮小窗(同一 children 被渲染两份)共用同一份轮询状态,
  *          避免"小窗显示轮询中、主面板不同步"的错位; 也只有一份定时器, 不会重复触发。
- *  - 时段校准: 每 30s 复核一次是否处于轮询时段(收盘后自动停、次日开盘自动恢复)
+ *  - 时段校准: 每 30s 复核一次是否处于轮询时段(午休/收盘后自动停、开盘自动恢复)
  *  - 状态记忆: 用户开关持久化到 localStorage, 页面刷新后保持
  *  - 首轮调度: 开启后仅排到下一个本地时钟整分边界(偶数分钟)触发。不做挂载立即补拉、也不在开启瞬间补拉,
  *          保证轮询节奏始终以本地时钟整分为准, 与用户进入/开启程序的时刻无关
@@ -18,9 +18,11 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { onPhiliaSync, postPhiliaSync } from "@/lib/philiaSync";
 
-/** 轮询时段(分钟): 09:14(含) 至 15:01(不含) */
-const POLL_START_MIN = 9 * 60 + 14;
-const POLL_END_MIN = 15 * 60 + 1;
+/** 轮询时段窗口(分钟, 含起始不含结束): 上午 09:29~11:31, 下午 12:59~15:01 */
+const POLL_WINDOWS: ReadonlyArray<readonly [number, number]> = [
+  [9 * 60 + 29, 11 * 60 + 31],
+  [12 * 60 + 59, 15 * 60 + 1],
+];
 /** 轮询间隔(分钟): 每 2 分钟一次 */
 const POLL_INTERVAL_MIN = 2;
 /** 时段校准周期: 30s */
@@ -51,10 +53,10 @@ function acquirePollLock(): void {
   }
 }
 
-/** 当前时刻是否处于轮询时段(含起始 09:14, 不含结束 15:01) */
+/** 当前时刻是否处于任一轮询时段窗口(含起始 09:29/12:59, 不含结束 11:31/15:01) */
 export function inPhiliaPollWindow(d = new Date()): boolean {
   const m = d.getHours() * 60 + d.getMinutes();
-  return m >= POLL_START_MIN && m < POLL_END_MIN;
+  return POLL_WINDOWS.some(([start, end]) => m >= start && m < end);
 }
 
 /** 距下一个 POLL_INTERVAL_MIN 分钟边界还有多少毫秒(对齐边界、避免漂移) */
