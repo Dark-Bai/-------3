@@ -90,12 +90,13 @@ export function PhiliaStockBox({ mirror = false, onCheck, onStockChange }: Phili
     return () => { dead = true; clearTimeout(timer); };
   }, [stockQ, mirror]);
 
-  /** 查收: 精确代码优先(搜索选中/拖入), 其次 6 位代码, 最后按名称 */
+  /** 查收: 精确代码优先(搜索选中/拖入), 其次 6 位代码, 最后按名称; 代码与名称一并传递,
+   *  保证前端「查收」名称匹配与后端展示名兜底(fixStockAdviceName)均生效 */
   const handleCheck = () => {
     const q = stockQ.trim();
     if (!q) return;
-    if (stockCode) onCheck?.({ code: stockCode });
-    else if (/^\d{6}$/.test(q)) onCheck?.({ code: q });
+    if (stockCode) onCheck?.({ code: stockCode, name: stockQ });
+    else if (/^\d{6}$/.test(q)) onCheck?.({ code: q, name: stockQ });
     else onCheck?.({ name: q });
   };
 

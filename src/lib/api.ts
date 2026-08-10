@@ -325,17 +325,17 @@ let cooldownUntil = 0; // 429 冷却截止时间戳
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt: number) => RETRY_BASE * Math.pow(RETRY_BACKOFF, attempt);
 
-async function doGet<T>(path: string, attempt = 0): Promise<T> {
+async function doGet<T>(path: string, attempt = 0, timeout = REQ_TIMEOUT): Promise<T> {
   // 若处于 429 冷却期, 先等待冷却结束再发请求
   if (cooldownUntil > Date.now()) await sleep(cooldownUntil - Date.now());
   let r: Response;
   try {
-    r = await fetch(path, { signal: timeoutSignal(REQ_TIMEOUT) });
+    r = await fetch(path, { signal: timeoutSignal(timeout) });
   } catch (e) {
     // 网络错误/超时: 幂等 GET 可重试, 指数退避
     if (attempt < REQ_MAX_RETRY) {
       await sleep(backoff(attempt));
-      return doGet<T>(path, attempt + 1);
+      return doGet<T>(path, attempt + 1, timeout);
     }
     throw e;
   }
@@ -349,10 +349,10 @@ async function doGet<T>(path: string, attempt = 0): Promise<T> {
   return j.data as T;
 }
 
-async function get<T>(path: string): Promise<T> {
+async function get<T>(path: string, timeout?: number): Promise<T> {
   await acquire();
   try {
-    return await doGet<T>(path);
+    return await doGet<T>(path, 0, timeout ?? REQ_TIMEOUT);
   } finally {
     release();
   }
@@ -513,7 +513,8 @@ export const api = {
   treasuries: () => get<Treasury[]>(`/api/treasuries`),
   treasuryHistory: () => get<TreasuryCurvePoint[]>(`/api/treasury-history`),
   openRouterUsage: () => get<OrUsageDay[]>(`/api/openrouter-usage`),
-  stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`),
+  // 搜索接口走 THS 主源(可能慢, 后端 2s 快失败回退新浪), 用 15s 独立超时避免 8s 默认超时中止
+  stockSearch: (q: string) => get<StockSearchResult[]>(`/api/stock-search?q=${encodeURIComponent(q)}`, 15000),
   /** 唤起同花顺客户端: 后台启动 hexin.exe 并输入股票代码跳转(本机 Windows) */
   launchHexin: (code: string) => get<{ ok: boolean; error?: string }>(`/api/launch-hexin?code=${encodeURIComponent(code)}`),
   /** 浮窗系统级置顶: 将 CockpitFloat 独立小窗置顶到其他应用上方(Windows HWND_TOPMOST) */

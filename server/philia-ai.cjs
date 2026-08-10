@@ -17,7 +17,7 @@ const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 const { encrypt, decrypt, maskKey } = require("./philia-keystore.cjs");
 const {
-  getAiKey, upsertAiKey, getAiAnalysis, upsertAiAnalysis, listAiAnalyses,
+  getAiKey, upsertAiKey, getAiAnalysis, upsertAiAnalysis, listAiAnalyses, cleanupAiAnalysis,
   getTrends, getLadderTrend,
 } = require("./stock-db.cjs");
 
@@ -70,10 +70,9 @@ function listReferenceFiles(skillFileDir) {
 function readRefContent(group, f) {
   const base = path.basename(f).replace(/\.md$/, "");
   const full = path.join(path.dirname(group.skillFile), "references", "full", base + ".md");
-  if (fs.existsSync(full)) {
-    try { return fs.readFileSync(full, "utf-8"); } catch { /* 读取失败时回退精版 */ }
-  }
-  return fs.readFileSync(f, "utf-8");
+  const fullContent = readFileCached(full);
+  if (fullContent !== null) return fullContent;
+  return readFileCached(f) ?? "";
 }
 
 function loadSkillGroups() {
@@ -90,7 +89,7 @@ function loadSkillGroups() {
     if (!skillFile) continue;
     let name = slug;
     try {
-      const fm = /^---\n([\s\S]*?)\n---\n/.exec(fs.readFileSync(skillFile, "utf-8"));
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(readFileCached(skillFile) || "");
       const n = fm?.[1].match(/^name:\s*(.+?)\s*$/m);
       if (n) name = n[1].trim().replace(/^["'\s]+|["'\s]+$/g, "");
     } catch { /* 解析失败时保留目录名 */ }
@@ -240,11 +239,13 @@ async function buildStockInput(stock) {
   }
   const thsCode = toThsCode(code6 || "");
   if (!thsCode && !name) return null;
+  // K线因子优先复用本次白皮书已抓取的结果(个股恰在重点池中时, 避免再发 3 个 K 线请求挤占节流时隙)
+  const cachedK = code6 ? contextCache?.data?.stockKFactors?.[code6] : null;
   const [q, a, mf, kf] = await Promise.allSettled([
     thsCode ? fetchThsJson(`/api/ths/quote?code=${thsCode}`) : Promise.resolve(null),
     thsCode ? fetchStockAuction(thsCode) : Promise.resolve(null),
     thsCode ? fetchThsJson(`/api/ths/main-forces?code=${thsCode}`) : Promise.resolve(null),
-    code6 ? fetchStockKFactors([code6]) : Promise.resolve({}),
+    cachedK ? Promise.resolve({ [code6]: cachedK }) : (code6 ? fetchStockKFactors([code6]) : Promise.resolve({})),
   ]);
   const quote = q.status === "fulfilled" ? q.value : null;
   const auction = a.status === "fulfilled" ? a.value : null;
@@ -613,15 +614,22 @@ async function calcYestLimitUpPerformance(yestPool, yesterdayMatch) {
   const emMarket = (c) => (/^6|^9/.test(c) ? 1 : 0);
   const pcts = [];
   try {
-    for (let i = 0; i < codes.length; i += 50) {
-      const chunk = codes.slice(i, i + 50);
-      const secids = chunk.map((c) => `${emMarket(c)}.${c}`).join(",");
-      const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f2,f3,f12&np=1&fltt=2&invt=2`).catch(() => null);
-      for (const d of j?.data?.diff || []) {
-        const pct = Number(d.f3);
-        if (Number.isFinite(pct) && Number(d.f2) > 0) pcts.push(pct);
+    // 分批(50只/批)拉取昨涨停股今日行情: 3 路并发 worker, 从串行(最坏 6 批≈2-4s)压到 ~2 轮
+    const chunks = [];
+    for (let i = 0; i < codes.length; i += 50) chunks.push(codes.slice(i, i + 50));
+    let ci = 0;
+    const worker = async () => {
+      while (ci < chunks.length) {
+        const chunk = chunks[ci++];
+        const secids = chunk.map((c) => `${emMarket(c)}.${c}`).join(",");
+        const j = await emGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f2,f3,f12&np=1&fltt=2&invt=2`).catch(() => null);
+        for (const d of j?.data?.diff || []) {
+          const pct = Number(d.f3);
+          if (Number.isFinite(pct) && Number(d.f2) > 0) pcts.push(pct);
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: 3 }, worker));
   } catch { /* 走回退口径 */ }
   if (pcts.length >= 10) return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
   // 回退口径: 今日仍涨停(晋级+维持)占昨日涨停总数比例(%), 近似反映昨日涨停股今日承接强度
@@ -647,23 +655,29 @@ async function fetchIndexToday() {
   }));
 }
 
-/** 昨日大盘因子: 三大指数上一交易日收盘/涨跌幅/量能(push2his 日K, 取倒数第2根) */
+/** 昨日大盘因子: 三大指数上一交易日收盘/涨跌幅/量能(push2his 日K, 取倒数第2根); 三指数并行拉取 */
 async function fetchIndexYesterday() {
-  const out = [];
-  for (const secid of INDEX_SECIDS.split(",")) {
-    try {
-      const url = `${EM_HIS_BASE}/kline/get?secid=${secid}&ut=${UT_EM}&klt=101&fqt=1&end=20500101&lmt=3&fields1=f1,f2,f3,f4,f5,f6&fields2=${KLINE_FIELDS2}`;
-      const j = await emGetHis(url);
-      const klines = j?.data?.klines || [];
-      if (klines.length >= 2) {
-        const y = klines[klines.length - 2].split(","); // 倒数第2根 = 上一交易日
-        out.push({
-          name: j.data.name || "", date: y[0], close: Number(y[2]) || null,
-          vol: Number(y[5]) || null, amount: Number(y[6]) || null, pct: Number(y[8]) || null, change: Number(y[9]) || null,
-        });
-      }
-    } catch (e) { console.error(`[philia] fetchIndexYesterday ${secid} failed:`, e.message); }
-  }
+  const secids = INDEX_SECIDS.split(",");
+  const rows = await Promise.allSettled(secids.map(async (secid) => {
+    const url = `${EM_HIS_BASE}/kline/get?secid=${secid}&ut=${UT_EM}&klt=101&fqt=1&end=20500101&lmt=3&fields1=f1,f2,f3,f4,f5,f6&fields2=${KLINE_FIELDS2}`;
+    const j = await emGetHis(url);
+    const klines = j?.data?.klines || [];
+    if (klines.length >= 2) {
+      const y = klines[klines.length - 2].split(","); // 倒数第2根 = 上一交易日
+      return {
+        name: j.data.name || "", date: y[0], close: Number(y[2]) || null,
+        vol: Number(y[5]) || null, amount: Number(y[6]) || null, pct: Number(y[8]) || null, change: Number(y[9]) || null,
+      };
+    }
+    return null;
+  }));
+  const out = rows
+    .filter((r) => r.status === "fulfilled" && r.value != null)
+    .map((r) => r.value);
+  // 失败项记录日志(不阻断整体)
+  rows.forEach((r, i) => {
+    if (r.status === "rejected") console.error(`[philia] fetchIndexYesterday ${secids[i]} failed:`, r.reason?.message || r.reason);
+  });
   return out;
 }
 
@@ -806,6 +820,68 @@ function dashToday() {
 
 /* ---------------- 技能库解析 ---------------- */
 
+/* ---- 技能文件内容缓存(进程级) ----
+ * SKILL.md / references/*.md 为静态文件, 仅改版时变化。
+ * 此前每次分析全量重读 20+ 文件, 且在 loadSkills / buildSkillIndex /
+ * loadLuotouObjectiveData 三处各自独立读取, 重复磁盘 I/O 与解析。
+ * 统一走带 mtime 校验的内容缓存: 文件未变则复用内存内容(改版后自动失效)。 */
+const _fileContentCache = new Map(); // path -> { mtimeMs, content }
+function readFileCached(p) {
+  let st;
+  try { st = fs.statSync(p); } catch { return null; }
+  const hit = _fileContentCache.get(p);
+  if (hit && hit.mtimeMs === st.mtimeMs) return hit.content;
+  const content = fs.readFileSync(p, "utf-8");
+  _fileContentCache.set(p, { mtimeMs: st.mtimeMs, content });
+  return content;
+}
+
+/** 技能库文件摘要: 全部 md 文件的 路径@mtime 拼接, 用于技能列表/索引结果缓存失效判断 */
+function skillFilesDigest() {
+  const parts = [];
+  const walk = (dir) => {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".md")) {
+        try { parts.push(`${p}@${fs.statSync(p).mtimeMs}`); } catch { /* 忽略单个文件 stat 失败 */ }
+      }
+    }
+  };
+  walk(SKILLS_ROOT);
+  return parts.join("|");
+}
+let _skillsCache = { key: null, value: null };
+let _groupsCache = { key: null, value: null };
+let _skillIndexCache = { key: null, value: null };
+
+/** 带摘要失效的技能列表缓存: 文件未变则直接复用解析结果, 避免每次分析重复读盘与解析 */
+function cachedSkillGroups() {
+  const key = skillFilesDigest();
+  if (_groupsCache.key === key) return _groupsCache.value;
+  const v = loadSkillGroups();
+  _groupsCache = { key, value: v };
+  return v;
+}
+
+function cachedSkills() {
+  const key = skillFilesDigest();
+  if (_skillsCache.key === key) return _skillsCache.value;
+  const v = loadSkills();
+  _skillsCache = { key, value: v };
+  return v;
+}
+
+function cachedSkillIndex() {
+  const key = skillFilesDigest();
+  if (_skillIndexCache.key === key) return _skillIndexCache.value;
+  const v = buildSkillIndex();
+  _skillIndexCache = { key, value: v };
+  return v;
+}
+
 /**
  * 解析单个大 skill 为可选技能项(与前端 philiaSkills.ts 同构):
  *  - 知识库结构(references/*.md): 每个 md 文件 = 一个技能项;
@@ -813,7 +889,7 @@ function dashToday() {
  * 均附「全览」选项(content 为该大 skill 全部内容拼接)。
  */
 function parseSkillGroup(group) {
-  const text = fs.readFileSync(group.skillFile, "utf-8");
+  const text = readFileCached(group.skillFile) || "";
   // front-matter description
   let docDesc = "";
   const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
@@ -870,7 +946,7 @@ function parseSkillGroup(group) {
     const allName = group.slug === "duanxian-longtou" ? "七大游资全览" : `${group.name}全览`;
     const allContent =
       group.refFiles && group.refFiles.length
-        ? text + "\n\n" + group.refFiles.map((f) => fs.readFileSync(f, "utf-8")).join("\n\n")
+        ? text + "\n\n" + group.refFiles.map((f) => readFileCached(f) || "").join("\n\n")
         : text;
     skills.unshift({
       name: allName,
@@ -885,10 +961,10 @@ function parseSkillGroup(group) {
   return skills;
 }
 
-/** 加载全部大 skill 的技能列表(跳过尚未创建目录/文件的 group) */
+/** 加载全部大 skill 的技能列表(跳过尚未创建目录/文件的 group); 结果经 cachedSkills 缓存 */
 function loadSkills() {
   const out = [];
-  for (const g of loadSkillGroups()) {
+  for (const g of cachedSkillGroups()) {
     try {
       out.push(...parseSkillGroup(g));
     } catch (e) {
@@ -917,12 +993,12 @@ function dedupeSkills(selected) {
 /** 遍历全部大 skill 的 SKILL.md 与 references/*.md, 建立「小节 → 模型条目」的章节索引 */
 function buildSkillIndex() {
   const index = [];
-  for (const g of loadSkillGroups()) {
+  for (const g of cachedSkillGroups()) {
     const files = [g.skillFile, ...(g.refFiles || [])];
     for (const file of files) {
-      if (!fs.existsSync(file)) continue;
+      if (readFileCached(file) === null) continue;
       const label = file.replace(SKILLS_ROOT + path.sep, "").replace(/\\/g, "/");
-      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      const lines = (readFileCached(file) || "").split("\n");
       let part = ""; // 一级标题(第X部分 · 名称)
       for (const raw of lines) {
         const line = raw.trim();
@@ -947,10 +1023,8 @@ function buildSkillIndex() {
   return index;
 }
 
-let _skillIndex = null;
 function getSkillIndex() {
-  if (!_skillIndex) _skillIndex = buildSkillIndex();
-  return _skillIndex;
+  return cachedSkillIndex();
 }
 
 /** 解析技能引用 → 精确来源标注(含文件名 + 章节编号 + 模型编号) */
@@ -1000,10 +1074,10 @@ const LUOTOU_KEEP_HEADERS = [
 const LUOTOU_SUBJECTIVE_RE =
   /(主观看好|情绪面|心理层面|资金情绪正盛|予以追捧|谨慎对待|不宜追高|逢高减磅|切勿|大胆|果断|坚决|重仓|满仓|强烈看|后市可期|值得期待|抄底|逃顶|恐慌|贪婪|狂热|杀跌|诱多|诱空|我判断|我倾向|我认为|我觉得|方可进入)/;
 
-/** 读取并严格过滤「龙头情绪复盘」技能的客观数据部分 */
+/** 读取并严格过滤「龙头情绪复盘」技能的客观数据部分(经 readFileCached 缓存, 仅改版后重解析) */
 function loadLuotouObjectiveData() {
-  if (!fs.existsSync(LUOTOU_SKILL_PATH)) return "";
-  const md = fs.readFileSync(LUOTOU_SKILL_PATH, "utf-8");
+  const md = readFileCached(LUOTOU_SKILL_PATH);
+  if (md === null) return "";
   const sections = md.split(/^##\s+/m);
   const kept = [];
   for (const sec of sections) {
@@ -1032,10 +1106,10 @@ function loadLuotouObjectiveData() {
 /** 趋势波段复盘技能: 数据来源/采集规范/三段式输出格式, 趋势波段模式时注入 */
 const QUSHI_SKILL_PATH = path.join(ROOT, ".trae", "skills", "qushi-boduan-sipan", "SKILL.md");
 
-/** 读取「趋势波段复盘」技能全文(去掉 front-matter), 作为趋势波段模式的次要参考注入 */
+/** 读取「趋势波段复盘」技能全文(去掉 front-matter), 作为趋势波段模式的次要参考注入(经 readFileCached 缓存) */
 function loadQushiObjectiveData() {
-  if (!fs.existsSync(QUSHI_SKILL_PATH)) return "";
-  const md = fs.readFileSync(QUSHI_SKILL_PATH, "utf-8");
+  const md = readFileCached(QUSHI_SKILL_PATH);
+  if (md === null) return "";
   return md.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 }
 
@@ -1153,8 +1227,23 @@ async function assembleContext(tracer) {
   const indexYesterday = results[6].status === "fulfilled" ? results[6].value : null;
   const boardToday = results[7].status === "fulfilled" ? results[7].value : null;
   const auctionAnomaly = results[8].status === "fulfilled" ? results[8].value : null;
-  // 昨日板块因子: 依赖今日板块TOP名单, 单独并行拉取(失败降级为空, 不影响整体)
-  const boardYesterday = boardToday ? await fetchBoardYesterday(boardToday).catch((e) => { console.error("[philia] fetchBoardYesterday failed:", e?.message); return []; }) : null;
+  // 昨日涨停池(双日对照)与昨日梯队实盘对照: 同步计算, 供第二波并行与后续模块使用
+  const yestPool = yestZt?.pool || null;
+  const yesterdayLadder = yestPool ? yestLadderFromPool(yestPool, yestCompact) : null;
+  const yesterdayMatch = yestPool ? matchYesterdayLadder(yestPool, zt?.pool, zb?.pool, dt?.pool) : null;
+  // 第二波并行: 昨日板块因子(依赖今日板块TOP名单) / 昨日涨停今表现 / 龙头参考池 三者互不依赖。
+  // 原实现为 4 级串行 await 链(昨日板块→今表现→龙头池→K线), 最坏 ~6-19s; 现压为 2 级(第一波9路→本波3路→K线),
+  // 任一失败降级不影响整体。
+  const [boardYesterdayRes, yestPerfRes, leaderPoolRes] = await Promise.allSettled([
+    boardToday ? fetchBoardYesterday(boardToday).catch((e) => { console.error("[philia] fetchBoardYesterday failed:", e?.message); return []; }) : Promise.resolve(null),
+    yestPool ? calcYestLimitUpPerformance(yestPool, yesterdayMatch).catch(() => null) : Promise.resolve(null),
+    typeof leaderPoolGetter === "function" ? leaderPoolGetter() : Promise.resolve(null),
+  ]);
+  const boardYesterday = boardToday && boardYesterdayRes.status === "fulfilled" ? boardYesterdayRes.value : (boardToday ? [] : null);
+  if (yestPerfRes.status === "rejected") console.error("[philia] calcYestLimitUpPerformance failed:", yestPerfRes.reason?.message || yestPerfRes.reason);
+  const yestLimitUpPerf = yestPerfRes.status === "fulfilled" ? yestPerfRes.value : null;
+  if (leaderPoolRes.status === "rejected") console.error("[philia] leaderPool get failed:", leaderPoolRes.reason?.message || leaderPoolRes.reason);
+  const leaderPool = leaderPoolRes.status === "fulfilled" ? leaderPoolRes.value : null;
   // 大盘量能客观评估(两市总成交额 今日 vs 昨日): 作为个股判断的客观环境约束
   const volumeSignal = calcVolumeSignal(indexToday, indexYesterday);
 
@@ -1212,12 +1301,8 @@ async function assembleContext(tracer) {
       ? `已拉取 ${boardYesterday.length} 个TOP板块的昨日涨跌幅/主力净额`
       : "无板块数据或获取失败(已降级)",
   });
-  // 昨日涨停池(双日对照): 独立记录加载结果
-  const yestPool = yestZt?.pool || null;
-  const yesterdayLadder = yestPool ? yestLadderFromPool(yestPool, yestCompact) : null;
-  const yesterdayMatch = yestPool ? matchYesterdayLadder(yestPool, zt?.pool, zb?.pool, dt?.pool) : null;
-  // 「昨日涨停今表现」(%): 昨日涨停股今日平均涨跌幅; 失败回退今日仍涨停率口径(见 calcYestLimitUpPerformance)
-  const yestLimitUpPerf = yestPool ? await calcYestLimitUpPerformance(yestPool, yesterdayMatch).catch(() => null) : null;
+  // 昨日涨停池(双日对照): 已在第二波并行前同步计算(见上), 此处仅记录加载结果
+  // 「昨日涨停今表现」(%): 昨日涨停股今日平均涨跌幅; 已在第二波并行中计算(见上), 此处仅记录追踪步骤
   tracer?.add({
     type: "resource", name: "昨日涨停今表现", status: yestLimitUpPerf != null ? "ok" : "failed",
     startedAt: t0, durationMs: Date.now() - t0,
@@ -1305,11 +1390,7 @@ async function assembleContext(tracer) {
   if (boardYesterday?.length) sources.push({ name: `东方财富·板块涨跌与主力资金(${boardYesterday.find((b) => b.date)?.date || "昨日"})`, fetchedAt: fetchedMin });
   if (auctionAnomaly?.length) sources.push({ name: "同花顺·集合竞价异动", fetchedAt: fetchedMin });
 
-  // 核心标的参考池(主板热点 → 龙头股): 由 index.cjs 注入的 getter 获取, 失败不影响整体分析
-  let leaderPool = null;
-  if (typeof leaderPoolGetter === "function") {
-    try { leaderPool = await leaderPoolGetter(); } catch (e) { console.error("[philia] leaderPool get failed:", e?.message || e); }
-  }
+  // 核心标的参考池(主板热点 → 龙头股): 已在第二波并行中获取(见上), 此处仅记录追踪步骤
   tracer?.add({
     type: "resource", name: "龙头股参考池(网页热点)", status: leaderPool ? "ok" : "failed",
     startedAt: t0, durationMs: Date.now() - t0,
@@ -1567,28 +1648,54 @@ async function callLLM(apiKey, model, prompt) {
   // DeepSeek V4 为推理模型: 默认先写 reasoning_content 再写 content, 且 max_tokens 是「思考+正文」共享预算。
   // 本场景只需结构化 JSON, 关掉思考让 content 直接输出, 避免思考耗尽预算导致 content 为空, 同时省 ~94% 输出 token。
   const isDeepSeekV4 = !or && /v4/i.test(model);
-  const resp = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: actualModel,
-      messages: [
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user },
-      ],
-      temperature: 0.3,
-      // DeepSeek V4 为推理模型, 先消费大量 token 于 reasoning, 需更大预算才能落到 content
-      max_tokens: or ? 4096 : 8192,
-      response_format: { type: "json_object" },
-      ...(isDeepSeekV4 ? { thinking: { type: "disabled" } } : {}),
-    }),
-    signal: AbortSignal.timeout(150000),
+  const body = JSON.stringify({
+    model: actualModel,
+    messages: [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ],
+    temperature: 0.3,
+    // DeepSeek V4 为推理模型, 先消费大量 token 于 reasoning, 需更大预算才能落到 content
+    max_tokens: or ? 4096 : 8192,
+    response_format: { type: "json_object" },
+    ...(isDeepSeekV4 ? { thinking: { type: "disabled" } } : {}),
   });
-  const j = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    const err = j?.error?.message || `HTTP ${resp.status}`;
-    throw Object.assign(new Error(`LLM 调用失败: ${err}`), { status: 502 });
+
+  /** 单次 LLM 请求: 成功 {ok:true,j}; 可重试失败(网络/超时/429/5xx) {ok:false,retryable:true,...}; 其余失败 {ok:false,retryable:false,...} */
+  const attempt = async () => {
+    let resp;
+    try {
+      resp = await fetch(`${base}/chat/completions`, {
+        method: "POST", headers, body, signal: AbortSignal.timeout(150000),
+      });
+    } catch (e) {
+      // 网络错误/超时: 请求未必被计费, 重试成本低, 视为可重试
+      return { ok: false, retryable: true, status: 0, errMsg: e?.message || String(e) };
+    }
+    const j = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        retryable: resp.status === 429 || resp.status >= 500, // 限流/服务端错误可重试, 4xx 业务错误不重试
+        status: resp.status,
+        errMsg: j?.error?.message || `HTTP ${resp.status}`,
+        j,
+      };
+    }
+    return { ok: true, j };
+  };
+
+  // 网络错误 / 429 / 5xx: 至多重试 1 次(3s 退避), 避免偶发抖动直接导致复盘失败; 业务错误不重试
+  let r = await attempt();
+  if (!r.ok && r.retryable) {
+    console.warn(`[philia] LLM 调用失败(HTTP ${r.status || "network"}), 3s 后重试...`);
+    await sleep(3000);
+    r = await attempt();
   }
+  if (!r.ok) {
+    throw Object.assign(new Error(`LLM 调用失败: ${r.errMsg}`), { status: 502 });
+  }
+  const j = r.j;
   const msg = j?.choices?.[0]?.message;
   let content = msg?.content;
   // 推理模型可能只输出 reasoning_content; 从中尽力提取 JSON 块兜底
@@ -1719,9 +1826,23 @@ function saveConfig({ key, model, skills }) {
 }
 
 /** 触发综合分析(降频缓存; force 绕过缓存) */
+let lastAiCleanupTs = 0;
+/** 定期清理过期的 ai_analysis 缓存行(每小时至多一次), 防止降频缓存表无限增长 */
+function maybeCleanupAiAnalysis() {
+  const now = Date.now();
+  if (now - lastAiCleanupTs < 3600 * 1000) return;
+  lastAiCleanupTs = now;
+  try {
+    const n = cleanupAiAnalysis(ANALYSIS_CACHE_TTL);
+    if (n > 0) console.log(`[philia] 清理过期分析缓存 ${n} 条`);
+  } catch (e) { console.error("[philia] cleanupAiAnalysis failed:", e?.message || e); }
+}
+
+/** PHILIA 综合分析(短线龙头 5 模块, 降频缓存; force=true 绕过缓存); LLM 耗时长由前端独立长超时 */
 async function analyze({ model, skills = [], force = false }) {
   const tracer = createTracer();
   const tStart = Date.now();
+  maybeCleanupAiAnalysis(); // 防表无限增长(清理过期缓存行)
   tracer.add({ type: "agent", name: "启动综合分析", status: "ok", startedAt: tStart, durationMs: 0, params: { force: !!force }, summary: "情绪评分 / 机会 / 风险 / 核心标的" });
   if (!MODEL_WHITELIST.has(model)) {
     throw Object.assign(new Error("不支持的模型"), { status: 400 });
@@ -1737,10 +1858,10 @@ async function analyze({ model, skills = [], force = false }) {
     .update(`${date}|${model}|${sorted.join(",")}`)
     .digest("hex");
 
-  // 命中缓存(未强制刷新) -> 直接返回, 不重复计费
+  // 命中缓存(未强制刷新, 且在 ANALYSIS_CACHE_TTL 30min 内) -> 直接返回, 不重复计费
   if (!force) {
     const hit = getAiAnalysis(cacheKey);
-    if (hit && hit.result) {
+    if (hit && hit.result && Date.now() - hit.updatedAt < ANALYSIS_CACHE_TTL) {
       tracer.add({ type: "tool", name: "分析结果缓存", status: "ok", startedAt: Date.now(), durationMs: 0, params: { cacheKey }, summary: "30min 降频缓存命中, 未重新调用 LLM" });
       return { ...hit, fromCache: true, cacheKey, trace: tracer.steps };
     }
@@ -1748,7 +1869,7 @@ async function analyze({ model, skills = [], force = false }) {
 
   // 组数据白皮书 + 技能内容 + 调 LLM
   const ctx = await assembleContext(tracer);
-  const skillList = loadSkills();
+  const skillList = cachedSkills();
   const selected = dedupeSkills(skillList.filter((s) => sorted.includes(s.name)));
   tracer.add({ type: "resource", name: "技能库(游资交易思维)", status: "ok", startedAt: Date.now(), durationMs: 0, params: { 命中技能: selected.map((s) => s.name) }, summary: `加载 ${selected.length} 项技能注入 prompt` });
   const prompt = buildPrompt(ctx, selected);
@@ -2130,6 +2251,7 @@ function fixStockAdviceName(sa, name) {
 async function analyzeMarket({ model, skills = [], force = false, stock = null }) {
   const tracer = createTracer();
   const tStart = Date.now();
+  maybeCleanupAiAnalysis(); // 防表无限增长(清理过期缓存行)
   // 未显式指定模型时, 取已配置模型或默认模型(前端 config/skills 接口可能未启用)
   if (!model) model = getAiKey()?.model || DEFAULT_MODELS.find((m) => m.default)?.id || "";
   if (!MODEL_WHITELIST.has(model)) {
@@ -2150,10 +2272,10 @@ async function analyzeMarket({ model, skills = [], force = false, stock = null }
     .update(`market-review|${date}|${model}|${sorted.join(",")}${stockKey}`)
     .digest("hex");
 
-  // 命中缓存(未强制刷新) -> 直接返回, 不重复计费
+  // 命中缓存(未强制刷新, 且在 ANALYSIS_CACHE_TTL 30min 内) -> 直接返回, 不重复计费
   if (!force) {
     const hit = getAiAnalysis(cacheKey);
-    if (hit && hit.result) {
+    if (hit && hit.result && Date.now() - hit.updatedAt < ANALYSIS_CACHE_TTL) {
       tracer.add({ type: "tool", name: "分析结果缓存", status: "ok", startedAt: Date.now(), durationMs: 0, params: { cacheKey }, summary: "30min 降频缓存命中, 未重新调用 LLM" });
       // 展示名规范化(不改动缓存本体): LLM 可能输出纯代码, 用已存名称兜底, 避免前端标的显示为号码
       const res = { ...hit.result };
@@ -2163,7 +2285,7 @@ async function analyzeMarket({ model, skills = [], force = false, stock = null }
   }
 
   const ctx = await assembleContext(tracer);
-  const skillList = loadSkills();
+  const skillList = cachedSkills();
   const selected = dedupeSkills(skillList.filter((s) => sorted.includes(s.name)));
   // 模式: 技能全部属于趋势波段(qushi-boduan) → 三段式; 否则默认短线龙头(混选/空选同此)
   const mode = selected.length > 0 && selected.every((s) => s.group === "qushi-boduan") ? "trend" : "short";

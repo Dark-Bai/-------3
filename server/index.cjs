@@ -712,12 +712,15 @@ async function thsMinuteFetch(code) {
   const stockCode = code.replace(/^s[hz]/, "");
   const thsCode = thsCodeOf(stockCode);
   if (!thsCode) return null;
-  const j = await thsThrottled("/api/ths/minute", { code: thsCode }, { timeout: 8000, retries: 2 });
+  // 分时与昨收(quote)并行拉取: 原实现串行(minute 完成才请求 quote), 分时图加载路径上少一次往返
+  const [j, q] = await Promise.all([
+    thsThrottled("/api/ths/minute", { code: thsCode }, { timeout: 8000, retries: 2 }).catch(() => null),
+    thsThrottled("/api/ths/quote", { code: thsCode }, { timeout: 8000, retries: 1 }).catch(() => null),
+  ]);
   const rows = j?.data || [];
   if (!j?.success || !rows.length) return null;
   let prec = 0;
   try {
-    const q = await thsThrottled("/api/ths/quote", { code: thsCode }, { timeout: 8000, retries: 1 });
     if (q?.success && q.data?.[0]) prec = num(q.data[0]["昨收价"]);
   } catch { /* prec 保持 0 */ }
   const pts = rows.map((r) => ({ t: String(r["时间"] || "").slice(11, 16), p: num(r["价格"]) }));
@@ -758,7 +761,12 @@ async function handleMinute(code) {
   if (EM_GLOBAL_INDEX[code]) {
     try {
       const secid = EM_GLOBAL_INDEX[code];
-      const j = await emGetHis(`${EM_HIS}/trends2/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f53,f56,f58&iscr=0&ndays=1`);
+      // 全球指数(日经/韩指)经 push2his trends2, 该域名对本机 IPv6 不稳定, 收紧为 5s 总超时快速降级,
+      // 避免重试链(3×8s)拖慢指数面板批量分时
+      const j = await withTimeout(
+        emGetHis(`${EM_HIS}/trends2/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f53,f56,f58&iscr=0&ndays=1`),
+        5000, "em-global-minute"
+      ).catch(() => null);
       const d = j?.data;
       const trends = Array.isArray(d?.trends) ? d.trends : [];
       const prec = num(d?.preClose || d?.preSettlement);
@@ -828,9 +836,12 @@ async function handleMinute(code) {
   return { code, prec, points: pts };
 }
 
-/** 单指数分时, 带 5s 独立缓存与并发去重(供单指数与批量只读复用) */
+/** 单指数分时, 独立缓存与并发去重(供单指数与批量只读复用)。
+ *  前端指数面板按 15s 轮询, TTL(20s)略大于轮询周期: 轮询间隔内必然命中缓存, 不再每轮重抓上游。
+ *  usN225/usKS11(日经/韩指)经不稳定 push2his, 且数据为日频, 用更长 60s TTL 进一步降低慢请求频率 */
 function getMinute(code) {
-  return cached(`minute:${code}`, 5000, () => handleMinute(code || "sh000001"));
+  const ttl = /^us(n225|ks11)$/i.test(code || "") ? 60000 : 20000;
+  return cached(`minute:${code}`, ttl, () => handleMinute(code || "sh000001"));
 }
 
 /* ---------------- 腾讯板块榜(行业 t=01 / 概念 t=02) ---------------- */
@@ -1003,6 +1014,12 @@ const failBackoff = (code, field, cd = 30000) => sdBackoff.set(code + ":" + fiel
 const clearBackoff = (code, field) => sdBackoff.delete(code + ":" + field);
 
 async function handleStockDetail(code) {
+  // 入参校验: 仅接受 A股带前缀代码(sh/sz/bj + 6 位), 非法直接 400, 防止任意字符串落库污染 stocks 表
+  const normCode = String(code || "").trim().toLowerCase();
+  if (!/^(sh|sz|bj)\d{6}$/.test(normCode)) {
+    throw Object.assign(new Error("invalid stock code"), { status: 400 });
+  }
+  code = normCode;
   const now = Date.now();
   let row = getStock(code);
   if (!row) row = { code, created_at: now };
@@ -1249,7 +1266,8 @@ async function handleStockFlows(codesParam) {
 /* ---------------- 个股主力净额(THS 主源 / 东财 ulist 备, 替代 KPL 主力资金 main-forces) ---------------- */
 async function handleStockMainForces(code) {
   const stockCode = String(code || "").replace(/^(sh|sz|bj)/, "").toLowerCase();
-  if (!/^\d{6}$/.test(stockCode)) return Promise.reject(new Error("invalid stock code"));
+  // 非法 code 属客户端错误: 返回 null(与 handleStockQuote 一致, 由调用方按空数据处理), 而非抛错回 502
+  if (!/^\d{6}$/.test(stockCode)) return null;
   // THS 主源: 基础(总金额) + 扩展1(主力净流入592890); 失败回退东财
   const thsCode = thsCodeOf(stockCode);
   if (thsCode) {
@@ -1517,7 +1535,15 @@ function defaultReportPeriod() {
   return `${y}-09-30`;
 }
 
-const validPeriod = (p) => (/^\d{4}-\d{2}-\d{2}$/.test(p || "") ? p : defaultReportPeriod());
+// 报告期参数校验: 格式合法且为真实日期(YYYY-MM-DD)才放行, 否则回退默认报告期(防 9999-99-99 等穿透到上游)
+const validPeriod = (p) => {
+  const s = String(p || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s) return s;
+  }
+  return defaultReportPeriod();
+};
 
 // 单公司近 12 期主指标(F10)
 async function handleFinanceMain(code) {
@@ -2259,8 +2285,10 @@ async function handleNewsAnalystKPL() {
 async function handleStockSearch(query) {
   if (!query || query.length < 1) return [];
   // THS 主源: search_symbols(替代新浪 suggest, 免 GBK 解析与 WAF 拦截); 失败回退新浪
+  // 不走 thsQueue 串行队列: 搜索请求小且要快, 避免被慢轮询请求(实测 10-25s)堵住排队;
+  // 2s 单次超时不重试, THS 会话失效/网关慢时快速失败, 保证前端超时内返回
   try {
-    const j = await thsThrottled("/api/ths/search", { q: query }, { timeout: 6000, retries: 1 });
+    const j = await thsFetch("/api/ths/search", { q: query }, 2000);
     if (j?.success && j.data?.length) {
       const out = [];
       for (const s of j.data) {
@@ -2272,20 +2300,25 @@ async function handleStockSearch(query) {
     }
   } catch (e) { console.error(`[ths-search] ${query} error:`, e?.message || e); }
   const url = `https://suggest3.sinajs.cn/suggest/type=&key=${encodeURIComponent(query)}`;
-  const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
-  const buf = await resp.arrayBuffer();
-  const text = new TextDecoder("gbk").decode(buf);
-  const m = text.match(/suggestvalue="([^"]+)"/);
-  if (!m) return [];
-  // 格式: name,type,code,fullCode,pinyin,...;
-  const results = [];
-  for (const part of m[1].split(";")) {
-    const f = part.split(",");
-    if (f.length >= 4 && /^(sh|sz|bj)\d{6}$/.test(f[3])) {
-      results.push({ code: f[3], name: f[0], pinyin: f[4] || "" });
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const buf = await resp.arrayBuffer();
+    const text = new TextDecoder("gbk").decode(buf);
+    const m = text.match(/suggestvalue="([^"]+)"/);
+    if (!m) return [];
+    // 格式: name,type,code,fullCode,pinyin,...;
+    const results = [];
+    for (const part of m[1].split(";")) {
+      const f = part.split(",");
+      if (f.length >= 4 && /^(sh|sz|bj)\d{6}$/.test(f[3])) {
+        results.push({ code: f[3], name: f[0], pinyin: f[4] || "" });
+      }
     }
+    return results.slice(0, 10);
+  } catch (e) {
+    console.error(`[sina-search] ${query} error:`, e?.message || e);
+    return [];
   }
-  return results.slice(0, 10);
 }
 
 /* ---------------- 风口聚合: 基于 kpl.liuhepc.cn 多接口 dims 聚合 ---------------- */
@@ -2888,13 +2921,26 @@ async function validateLeaderPoolEndpoint() {
 /* ------------------------------------------------------------- */
 
 /* ---------------- 主机路由表 ---------------- */
+/** codes 列表参数规范化: 丢弃非法符号 + 截断数量上限, 防止单请求放大为数百次上游调用(codes 长度上限 2000 可容纳 ~300 个) */
+function sanitizeCodes(raw, max = 100) {
+  return String(raw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((c) => /^(sh|sz|bj|hk|us|wh)[A-Za-z0-9]{2,10}$/i.test(c) || /^\d{6}$/.test(c))
+    .slice(0, max);
+}
+
 const routes = {
-  "/api/quotes": async (q) => handleQuotes(q.get("codes") || ""), // 内部按代码独立缓存(TTL 1.5s)
+  "/api/quotes": async (q) => handleQuotes(sanitizeCodes(q.get("codes")).join(",")), // 内部按代码独立缓存(TTL 1.5s)
   "/api/minute": async (q) => getMinute(q.get("code") || "sh000001"), // 单指数分时(按代码独立缓存 5s)
   // 批量分时: 指数面板一次取全部指数, 内部按代码复用 getMinute 缓存与并发去重, 减少 HTTP 往返
   "/api/minutes": async (q) => {
-    const codes = (q.get("codes") || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const rs = await Promise.all(codes.map((c) => getMinute(c).catch(() => ({ code: c, prec: 0, points: [] }))));
+    const codes = sanitizeCodes(q.get("codes"));
+    // 单路 8s 总超时: 个别慢指数(如新浪全球日线 usN225/usKS11)挂起时不让其拖死整个批量,
+    // 超时按空点降级返回, 底层任务完成后写入 5s 缓存, 下轮命中即恢复
+    const rs = await Promise.all(codes.map((c) =>
+      withTimeout(getMinute(c), 8000, "minute").catch(() => ({ code: c, prec: 0, points: [] }))
+    ));
     const map = Object.create(null);
     // 以请求时的原始代码(含大小写)为 key, 保证前端按 def.code 能取到(handleMinute 内部会小写化 code 字段)
     for (let i = 0; i < codes.length; i++) if (rs[i]) map[codes[i]] = rs[i];
@@ -2928,7 +2974,11 @@ const routes = {
   "/api/board-flow": async (q) => cached(`bf:${q.get("n")}`, 120000, () => handleBoardFlow(q.get("n") || "20")),
   "/api/stock-boards": async (q) => {
     // 行业/概念为每日更新的基础静态数据: 一律从库读取, 首次(未入库)补种一次, 不做实时外呼
-    const code = q.get("code") || "";
+    const rawCode = q.get("code") || "";
+    const code = String(rawCode).trim().toLowerCase();
+    if (!/^(sh|sz|bj)\d{6}$/.test(code)) {
+      throw Object.assign(new Error("invalid stock code"), { status: 400 });
+    }
     let row = getStock(code);
     if (!row || (!row.industry && !row.area && (!row.concepts || row.concepts.length === 0))) {
       if (!inCooldown(code, "boards")) {
@@ -3140,6 +3190,8 @@ const PROTECTED_ROUTES = new Set([
   "/api/philia/key",
   // 同花顺账号凭据, 仅允许同源访问
   "/api/ths/account",
+  // 系统监控: lastErr 含内部错误文本、dbPath 含服务端绝对路径, 仅同源展示
+  "/api/monitor",
 ]);
 
 // 环回地址互认: 开发期 vite 代理(:3000→:3001)跨端口转发, Origin/Host 端口必然不同, 视为同源
@@ -3176,12 +3228,19 @@ function clientIp(req) {
   return req.socket.remoteAddress || "unknown";
 }
 
-// 固定窗口计数器: windowMs 内超过 max 次返回 false; 定时清扫防 Map 无界增长
+// 固定窗口计数器: windowMs 内超过 max 次返回 false; 定时清扫防 Map 无界增长(含伪造 IP 轮换场景)
 function makeLimiter(windowMs, max) {
   const hits = new Map(); // ip -> { ts, count }
   const sweeper = setInterval(() => {
     const now = Date.now();
     for (const [ip, h] of hits) if (now - h.ts > windowMs) hits.delete(ip);
+    // 容量上限: 攻击者轮换唯一 IP 时仍会撑爆 Map, 超限按最旧淘汰(防内存 DoS)
+    while (hits.size > 10000) {
+      let oldestKey = null, oldestTs = Infinity;
+      for (const [k, h] of hits) if (h.ts < oldestTs) { oldestTs = h.ts; oldestKey = k; }
+      if (oldestKey === null) break;
+      hits.delete(oldestKey);
+    }
   }, windowMs);
   sweeper.unref();
   return (ip) => {
@@ -3341,9 +3400,11 @@ const server = http.createServer(async (req, res) => {
     if (routes[u.pathname]) {
       const cors = corsHeadersFor(req);
       // 按 IP 限流(先于缓存命中判断, 防唯一 key 旋转造成的上游请求放大)
-      // LLM 计费端点(/api/philia/analyze 与 /api/philia/market-analyze)共用 philiaLimiter(5 次/分钟)严控并发
-      const isLlmbilling = u.pathname === "/api/philia/analyze" || u.pathname === "/api/philia/market-analyze";
-      const limiter = isLlmbilling ? philiaLimiter : (PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter);
+      // LLM 计费端点(/api/philia/market-analyze)共用 philiaLimiter(5 次/分钟)严控并发
+      const isLlmbilling = u.pathname === "/api/philia/market-analyze";
+      // 龙头池强制重建(force=1)会清缓存全量重抓上游, 属重成本操作, 复用私有端点限流(20 次/分钟)防放大
+      const isHeavyForce = u.pathname === "/api/philia/leader-pool" && u.searchParams.get("force") === "1";
+      const limiter = isLlmbilling ? philiaLimiter : (isHeavyForce || PROTECTED_ROUTES.has(u.pathname) ? protectedLimiter : apiLimiter);
       const allowed = limiter(clientIp(req));
       if (!allowed) {
         send(res, 429, { ok: false, error: "too many requests" }, cors);
@@ -3394,7 +3455,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     // 静态资源 + SPA fallback
-    let p = decodeURIComponent(u.pathname);
+    let p;
+    try {
+      p = decodeURIComponent(u.pathname);
+    } catch {
+      // 畸形 % 编码(如 /static/%): 属于客户端错误, 回 400 而非 500
+      send(res, 400, { ok: false, error: "bad url encoding" });
+      return;
+    }
     if (p === "/") p = "/index.html";
     const file = path.join(DIST, path.normalize(p));
     if (file !== DIST && !file.startsWith(DIST + path.sep)) {
@@ -3442,13 +3510,41 @@ server.listen(PORT, () => {
 
 /* ---------------- THS 数据网关自动拉起 ----------------
  * 个股分时/新闻等依赖同花顺 thsdk, 由 server/ths-gateway.py 提供。
- * Node 服务启动时探测网关, 不可达则后台拉起 Python 进程, 避免手动启动。 */
+ * Node 服务启动时探测网关, 不可达则后台拉起 Python 进程, 避免手动启动。
+ * 注意: 仅当 9877 端口无任何监听时才拉起, 避免网关卡死/瞬慢时重复拉起多个实例
+ * (多个实例同监听 9877 会随机分发请求, 造成时好时坏的假象)。 */
 function ensureThsGateway() {
-  const probe = async () => {
+  /** 9877 端口当前是否有进程监听(快速 TCP 探测, 不依赖 HTTP) */
+  const portListening = (port) =>
+    new Promise((resolve) => {
+      const s = require("net").connect({ host: "127.0.0.1", port, timeout: 800 });
+      s.on("connect", () => { s.destroy(); resolve(true); });
+      s.on("error", () => resolve(false));
+      s.on("timeout", () => { s.destroy(); resolve(false); });
+    });
+  /** 业务健康检查: 网关需返回 success=true 才算健康(仅 HTTP 200 不足, 卡死时请求会挂起超时) */
+  const gatewayHealthy = async () => {
     try {
-      const r = await fetch(`${THS_GATEWAY}/api/ths/industry`, { signal: AbortSignal.timeout(1500) });
-      if (r.ok) { console.log("[ths-gateway] 已连接:", THS_GATEWAY); return; }
-    } catch { /* 不可达, 拉起 */ }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 2000);
+      try {
+        const r = await fetch(`${THS_GATEWAY}/api/ths/account`, { signal: ctrl.signal });
+        if (r.ok) return (await r.json())?.success === true;
+      } finally { clearTimeout(timer); }
+    } catch { /* 不可达 */ }
+    return false;
+  };
+  const probe = async () => {
+    if (await gatewayHealthy()) {
+      console.log("[ths-gateway] 已连接:", THS_GATEWAY);
+      return;
+    }
+    if (await portListening(9877)) {
+      // 端口已有监听但业务不可用(网关启动中或疑似卡死): 不再重复拉起,
+      // 网关自身 connect/查询超时机制会自愈; 重复拉起只会制造多实例混乱
+      console.warn("[ths-gateway] 端口 9877 已有监听但业务探测失败, 跳过拉起(网关超时机制将自愈)");
+      return;
+    }
     try {
       const py = process.platform === "win32" ? "python" : "python3";
       const { spawn } = require("child_process");

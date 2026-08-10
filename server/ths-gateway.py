@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -103,27 +104,56 @@ def load_account() -> dict:
 
 
 class THSConn:
-    """THS 单例连接(带锁, 断线自动重连一次)。"""
+    """THS 单例连接(带锁, 断线自动重连一次)。
+
+    超时防护: thsdk 底层 connect/查询均无超时, 同花顺服务端一旦挂起,
+    被 RLock 串行的查询会永久阻塞, 导致 ThreadingHTTPServer 每请求一线程,
+    线程无限累积后整个网关失去响应(历史故障: 2314 线程卡死)。
+    故所有 THS 调用经进程级线程池执行并带超时, 超时立即断开连接置空,
+    释放 RLock, 让网关恢复响应(下次查询自动重连)。
+    """
+
+    # 进程级查询执行池: 限制并发 worker, 配合超时避免单次挂起拖死网关
+    _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ths-query")
+    CONNECT_TIMEOUT = 10.0  # THS connect 超时(秒)
+    QUERY_TIMEOUT = 20.0    # 单次查询超时(秒)
 
     def __init__(self, account: dict):
         self._account = account
         self._ths: Optional[THS] = None
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _do_connect(account: dict) -> THS:
+        """在线程池中执行连接(独立于主线程, 可被超时放弃)。"""
+        ths = THS(dict(account))
+        r = ths.connect()
+        if not r.success:
+            raise RuntimeError(f"THS 连接失败: {r.error}")
+        return ths
+
     def ensure(self) -> THS:
         with self._lock:
             if self._ths is None:
                 if not self._account.get("username"):
                     raise RuntimeError("未配置 THS 账号(server/ths-account.json 或环境变量)")
-                self._ths = THS(dict(self._account))
-                r = self._ths.connect()
-                if not r.success:
+                try:
+                    self._ths = self._pool.submit(self._do_connect, self._account).result(timeout=self.CONNECT_TIMEOUT)
+                except FutureTimeoutError:
                     self._ths = None
-                    raise RuntimeError(f"THS 连接失败: {r.error}")
+                    raise RuntimeError(f"THS 连接超时({self.CONNECT_TIMEOUT:.0f}s, 请检查同花顺账号/网络)")
             return self._ths
 
+    def _run(self, fn: Callable[[THS], Any]) -> Any:
+        """在线程池中执行一次 THS 调用并等待, 超时抛 RuntimeError(由调用方断开重连)。"""
+        fut = self._pool.submit(fn, self._ths)
+        try:
+            return fut.result(timeout=self.QUERY_TIMEOUT)
+        except FutureTimeoutError:
+            raise RuntimeError(f"THS 查询超时({self.QUERY_TIMEOUT:.0f}s)")
+
     def query(self, fn: Callable[[THS], Any], rate: bool = True) -> Any:
-        """加锁执行一次查询; 失败时断开并重连一次再试。
+        """加锁执行一次查询; 超时/失败时断开连接置空并重连一次再试。
 
         每次查询前先经令牌桶限速(rate=True 时): 令牌不足抛 RateLimited(429)。
         限流判断在连接锁之外——多线程同时到达时, 先由令牌桶全局把关,
@@ -134,15 +164,24 @@ class THSConn:
         with self._lock:
             ths = self.ensure()
             try:
-                return fn(ths)
+                return self._run(fn)
             except Exception:
+                # 查询失败/超时: 断开并置空, 下次查询自动重连(解除 RLock 阻塞)
                 try:
                     ths.disconnect()
                 except Exception:
                     pass
                 self._ths = None
                 ths = self.ensure()
-                return fn(ths)
+                try:
+                    return self._run(fn)
+                except Exception:
+                    try:
+                        ths.disconnect()
+                    except Exception:
+                        pass
+                    self._ths = None
+                    raise
 
     def close(self) -> None:
         with self._lock:

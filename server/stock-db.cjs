@@ -560,4 +560,10 @@ function listAiAnalyses(limit = 20) {
   });
 }
 
-module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, getAiKey, upsertAiKey, getAiAnalysis, upsertAiAnalysis, listAiAnalyses, DB_PATH };
+/** 清理过期分析缓存(updated_at 早于 ttlMs 阈值即删除), 防止 ai_analysis 表无限增长; 返回删除行数 */
+function cleanupAiAnalysis(ttlMs) {
+  const cutoff = Date.now() - (ttlMs || 30 * 60 * 1000);
+  return db.prepare(`DELETE FROM ai_analysis WHERE updated_at < ?`).run(cutoff).changes || 0;
+}
+
+module.exports = { getStock, getStockBoards, upsertStock, upsertStockBoards, stockCount, allStockCodes, getMeta, setMeta, deleteMeta, saveMsOffline, loadMsOffline, clearMsOffline, upsertTrends, getTrends, trendCount, upsertLadderTrends, getLadderTrend, getDbMetrics, getAiKey, upsertAiKey, getAiAnalysis, upsertAiAnalysis, listAiAnalyses, cleanupAiAnalysis, DB_PATH };
