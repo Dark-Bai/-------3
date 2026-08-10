@@ -1785,15 +1785,15 @@ async function buildMarketPrompt(ctx, skills, stock = null) {
   "leaderCore": {
     "title": "今日总龙头一句话概括",
     "summary": "龙头梯队结构、市场共识与带动性的详细分析",
-    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ]
+    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 连板高度数字, "seal": "封单/强度描述", "note": "定位点评", "skill": "参考思路名称(如 炒股养家·赚钱效应)", "tactic": "对应战法编号(如 模型1)", "position": 建议仓位(仅限五档之一: 空/小/中/大/满) } ]
   },
   "leaderLowAbsorb": {
     "title": "龙头低吸一句话概括(候选池总览与今日低吸机会总判断)",
     "summary": "低吸逻辑总述: 候选个股共性、分歧转一致机会、风险总提示",
-    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 昨日连板高度数字, "seal": "今日状态与昨日封单描述(如 今日断板·昨封4.82亿)", "note": "低吸点评(辩证分析投资机会与潜在风险)", "skill": "参考思路名称(如 炒股养家·买入分歧)", "tactic": "对应战法编号(如 模型4)", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ]
+    "leaders": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "board": "所属板块", "ladder": 昨日连板高度数字, "seal": "今日状态与昨日封单描述(如 今日断板·昨封4.82亿)", "note": "低吸点评(辩证分析投资机会与潜在风险)", "skill": "参考思路名称(如 炒股养家·买入分歧)", "tactic": "对应战法编号(如 模型4)", "position": 建议仓位(仅限五档之一: 空/小/中/大/满) } ]
   },
   "sentimentCycle": { "stage": "冰点/回暖/高潮/退潮阶段", "indicators": "涨停家数/连板/炸板率等关键情绪指标", "analysis": "情绪周期阶段研判", "suggestion": "整体操作建议(如 谨慎乐观建议控制仓位/市场情绪低迷建议观望为主)" },
-  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "targets": ["涉及的具体标的名, 如 翔鹭钨业"], "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位(仅限四档之一: 小/中/大/满) } ],
+  "opportunities": [ { "type": "机会类型", "sector": "板块/题材", "targets": ["涉及的具体标的名, 如 翔鹭钨业"], "analysis": "机会逻辑", "opportunity": "可操作机会点", "skill": "参考思路名称", "tactic": "对应战法编号", "position": 建议仓位(仅限五档之一: 空/小/中/大/满) } ],
   "risks": [ { "level": "高/中/低", "scope": "全市场/板块/个股", "targets": ["涉及的具体标的名"], "description": "风险描述", "mitigation": "应对建议", "skill": "参考思路名称", "tactic": "对应战法编号" } ],
   "marketValidation": {
     "yesterdaySummary": "昨日连板梯队复盘摘要(昨日涨停/连板家数、最高高度、总龙头与分支龙头, 必须标注日期与数据来源)",
@@ -1813,14 +1813,14 @@ async function buildMarketPrompt(ctx, skills, stock = null) {
   * 筛选条件已在候选池中保证: 昨日连板≥2(表现亮眼/龙头梯队成员) 且 今日未处于涨停状态(断板/炸板/跌停)。
   * 严禁把今日仍涨停(晋级/维持)的个股放入龙头低吸; 若候选池数据缺失或无候选, 如实标注「无满足条件的龙头低吸候选」。
   * note 必须辩证分析: 左侧写投资机会(分歧转一致/弱转强/资金承接), 右侧写潜在风险(高位见顶/断板闷杀/题材退潮), 二者缺一不可。
-  * position 依据低吸时机与情绪阶段给出四档分类之一「小/中/大/满」(参考: 冰点/退潮→小或空仓、回暖→中、分歧转一致确认→大、高潮一致后→小), 切实把握/无把握时输出「小」。
+  * position 依据低吸时机与情绪阶段给出五档分类之一「空/小/中/大/满」(参考: 冰点/退潮→空或小、回暖→中、分歧转一致确认→大、高潮一致后→小), 切实把握/无把握时输出「小」。
   * ladder 填昨日连板高度; seal 描述今日状态与昨日封单(如「今日断板 · 昨封4.82亿」)。
   * skill/tactic 必须引用下方「游资交易思维」中的低吸/分歧相关思路(如 炒股养家·买入分歧、退学炒股·弱转强、陈小群·预期差)。
 - opportunities 至少 3 个, risks 至少 3 个。
 - 每个 opportunity / risk 的 targets 必须列出该条涉及的全部具体标的名(股票公司名, 不含代码), 与 description/analysis 中提到的标的一一对应。
 - sentimentCycle.stage 必须明确给出情绪周期阶段。
 - skill 必须引用下方「游资交易思维」中的具体思路名称, tactic 给出该思路下对应战法编号。
-- position 必须严格输出四档分类之一「小/中/大/满」(不得输出数字或百分比), 依据下方技能中的仓位规则并结合当前情绪阶段给出(参考: 冰点→小、回暖→大、高潮→中、退潮→小), 切实把握/无把握时输出「小」。
+- position 必须严格输出五档分类之一「空/小/中/大/满」(不得输出数字或百分比), 依据下方技能中的仓位规则并结合当前情绪阶段给出(参考: 冰点→空、回暖→大、高潮→中、退潮→小), 切实把握/无把握时输出「小」。
 - sentimentCycle.suggestion 必须严格采用该技能的语气风格, 基于当前情绪阶段给出明确操作方向指引。
 - marketValidation 必须基于数据白皮书中的「昨日连板梯队」「昨日梯队今日表现」字段, 逐一核验昨日结论在今日实盘中的应对状况:
   * yesterdaySummary 必须标注昨日日期(如 2026-08-06)。
@@ -1829,7 +1829,7 @@ async function buildMarketPrompt(ctx, skills, stock = null) {
   * conclusionCheck 至少 3 条, result 必须严格取「命中/偏差/失准」之一; 命中说明验证充分, 偏差/失准须给出 reason 说明原因(如情绪切换、资金分歧、题材退潮)。
   * 若白皮书中昨日连板梯队数据缺失, 如实标注「昨日数据缺失, 无法进行对照验证」, 不得编造。
 - 只依据给定数据与游资思维推断, 不编造具体价格/数据。
-${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "位置/趋势与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限四档之一: 小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
+${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "位置/趋势与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限五档之一: 空/小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
   let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为大盘环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
   if (skills && skills.length) {
     let skillText = "";
@@ -1862,9 +1862,9 @@ async function buildTrendPrompt(ctx, skills, stock = null) {
 你是一位深耕A股趋势波段的资深市场分析师, 擅长以波段视角做「环境 → 主线 → 标的」结构化研判。
 请基于给定的市场数据, 输出严格合法的 JSON(不要任何多余文字/注释/代码块标记), 结构如下:
 {
-  "marketEnvironment": { "strength": "强/中/弱", "style": "趋势风格/短线风格/混动", "environment": "波段环境定性(精炼 2-3 句)", "basePosition": "仓位基调(仅限四档之一: 小/中/大/满)", "analysis": "精炼研判(含大盘量能放缩依据)" },
+  "marketEnvironment": { "strength": "强/中/弱", "style": "趋势风格/短线风格/混动", "environment": "波段环境定性(精炼 2-3 句)", "basePosition": "仓位基调(仅限五档之一: 空/小/中/大/满)", "analysis": "精炼研判(含大盘量能放缩依据)" },
   "mainLines": [ { "name": "主线板块/题材", "stage": "启动/发酵/高潮/退潮", "capital": "资金持续性(持续流入/回流/退潮)", "direction": "关注方向与板块内梯队关系", "note": "精炼点评" } ],
-  "trendStocks": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "trendState": "放量建仓/缩量整理/量窒息/起涨", "support": "支撑位", "resistance": "压力位", "buyPoint": "量窒息埋伏/突破半路/收红确认", "position": "仓位档位(仅限四档之一: 小/中/大/满)", "logic": "一句买卖逻辑" } ]
+  "trendStocks": [ { "name": "公司名", "code": "带交易所前缀如sh600519", "trendState": "放量建仓/缩量整理/量窒息/起涨", "support": "支撑位", "resistance": "压力位", "buyPoint": "量窒息埋伏/突破半路/收红确认", "position": "仓位档位(仅限五档之一: 空/小/中/大/满)", "logic": "一句买卖逻辑" } ]
 }
 要求:
 - **精炼浓缩但不简略**: 每段先给判断、再给 1-2 句数据依据; 不堆砌数据流水账。
@@ -1873,12 +1873,12 @@ async function buildTrendPrompt(ctx, skills, stock = null) {
 - **K线因子与日成交量因子(半年量价/位置/量能)**: 结合白皮书「个股半年K线(月K近6月+周K近26周+日K近5日 · 量能/位置)」, 从大级别(月K: 趋势方向与所处位置)→中级别(周K: 波段节奏/中枢/压力支撑)→近期(日K: 量价与量能)三层研判趋势票候选的量价结构(放量建仓/缩量整理/量窒息/起涨)与所处位置(底部/平台/高位), 与当日实时数据(行情/竞价/主力资金)配合研判; 趋势标的池个股的参考数据须纳入以上因子。
 - **支撑/压力(客观技术位)**: trendStocks.support/resistance 必须取自白皮书「技术位」(60/20日高低点、MA5/20/60、斐波那契回撤0.382/0.5/0.618)中的客观价位, 严格满足 支撑位 < 当前价 < 压力位; 不得凭空编造价位。
 - **市场风格**: 结合涨停家数、连板高度与炸板率判断当前是短线连板风格还是趋势波段风格(连板打不高、趋势票持续走强=趋势风格), 先判风格再选票。
-- marketEnvironment.basePosition 参照 4321 仓位法给出基调, 严格输出四档之一「小/中/大/满」, 不得输出数字或百分比。
+- marketEnvironment.basePosition 参照 4321 仓位法给出基调, 严格输出五档之一「空/小/中/大/满」, 不得输出数字或百分比。
 - mainLines 2-3 条, 精炼给出主线方向与运行阶段。
 - trendStocks 3-5 只: 从白皮书中挑选底部/平台放量→缩量整理→量窒息、相对底部、刚启动、左侧无套牢压力的趋势票; 剔除短线票/ST/已走出主升的票; 若候选不足, 如实标注「无满足条件趋势票」, 不得凑数。
 - 涉及个股分析时, 将「集合竞价异动」数据纳入竞价情绪判断。
 - 只依据给定数据与趋势波段方法论推断, 不编造具体价格/数据。
-${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "趋势状态与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限四档之一: 小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
+${stock ? `- 若给定「个股数据」, 必须额外输出 stockAdvice 字段: { "stock": "代码/名称", "auction": "竞价情绪判断(集合竞价信号)", "position": "趋势状态与关键价位", "opinion": "综合建议(将大盘/板块/情绪等大局因子与竞价全部纳入)", "positionAdvice": "仓位档位(仅限五档之一: 空/小/中/大/满)", "risk": "风险提示" }。` : ""}- 当前仅作研究参考, 不构成投资建议。`;
   let user = `以下是当前市场数据白皮书(重点注意「大盘因子·今日/昨日」与「板块因子·今日/昨日」的对比数据, 作为波段环境与板块资金合力研判依据):\n${contextToText(ctx)}`;
   if (skills && skills.length) {
     let skillText = "";
@@ -1913,12 +1913,13 @@ function normalizeMarketResult(raw, nameToCode, mode = "short") {
   };
   const str = (v) => (v === undefined || v === null ? "" : String(v));
   const arr = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
-  // 仓位建议标准化: 固定四级分类「小/中/大/满」, 消除随机性波动。
-  // 兼容历史数字/百分数(按分档映射), 最终统一为四档之一。
+  // 仓位建议标准化: 固定五级分类「空/小/中/大/满」, 消除随机性波动。
+  // 兼容历史数字/百分数(按分档映射), 最终统一为五档之一。
   const pos = (v) => {
     if (v === undefined || v === null || v === "") return null;
     const s = String(v).trim();
     if (!s) return null;
+    if (/空/.test(s)) return "空";
     if (/满/.test(s)) return "满";
     if (/大/.test(s)) return "大";
     if (/中/.test(s)) return "中";
@@ -1927,6 +1928,7 @@ function normalizeMarketResult(raw, nameToCode, mode = "short") {
     if (Number.isFinite(n)) {
       // 0-1 小数视为仓位占比(如 0.3=30%), 其余按 0-100 分档
       const pct = n > 0 && n < 1 ? n * 100 : n;
+      if (pct <= 0) return "空";
       if (pct <= 25) return "小";
       if (pct <= 50) return "中";
       if (pct <= 75) return "大";

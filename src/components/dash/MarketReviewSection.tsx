@@ -10,7 +10,7 @@
  *  - 「昨日连板梯队 · 今日实盘对照验证」: 双日对照验证模块, 将昨日连板梯队个股的今日实盘表现与今日最新梯队对照,
  *    验证昨日复盘结论(龙头核心/情绪周期/机会/风险)在今日市场中的应对状况、准确性及有效性
  *  - 每条主观信息旁标注 skill 来源(参考: 思路 - 战法N)
- *  - 具投资机会的标的标注建议仓位(固定四级分类: 小/中/大/满)
+ *  - 具投资机会的标的标注建议仓位(固定五级分类: 空/小/中/大/满)
  *  - 「今日情绪周期」旁给出整体操作建议(依据 skill 语气风格)
  *  - 「今日机会」「今日风险」可弹出为独立小窗(FloatingWindow), 彼此并存、支持最小化/最大化/关闭
  */
@@ -48,19 +48,21 @@ const SUGGESTION_SIZE = 14; // 操作建议字号(px)
 /** 金融标的蓝色标注色(最小字号文本中出现标的时高亮) */
 const TARGET_COLOR = "#1d4ed8";
 
-/** 建议仓位四级分类的配色(小/中/大/满) */
+/** 建议仓位五级分类的配色(空/小/中/大/满) */
 const POS_LEVEL_STYLE: Record<string, { color: string; bg: string }> = {
+  空: { color: "#8b7a5e", bg: "#f0ece4" },
   小: { color: "#3f7d3f", bg: "#e6f2e6" },
   中: { color: "#b8860b", bg: "#faf3d9" },
   大: { color: "#d4943a", bg: "#f8ead0" },
   满: { color: "#b8533a", bg: "#f7e3dc" },
 };
 
-/** 将任意仓位输入(四档文字 / 数字 / 百分数 / 历史旧数据)统一归一化为四级分类: 小/中/大/满 */
+/** 将任意仓位输入(五档文字 / 数字 / 百分数 / 历史旧数据)统一归一化为五级分类: 空/小/中/大/满 */
 function toPosLevel(v: unknown): string | null {
   if (v === undefined || v === null || v === "") return null;
   const s = String(v).trim();
   if (!s) return null;
+  if (/空/.test(s)) return "空";
   if (/满/.test(s)) return "满";
   if (/大/.test(s)) return "大";
   if (/中/.test(s)) return "中";
@@ -69,6 +71,7 @@ function toPosLevel(v: unknown): string | null {
   if (Number.isFinite(n)) {
     // 0-1 小数视为仓位占比(如 0.3=30%), 其余按 0-100 分档
     const pct = n > 0 && n < 1 ? n * 100 : n;
+    if (pct <= 0) return "空";
     if (pct <= 25) return "小";
     if (pct <= 50) return "中";
     if (pct <= 75) return "大";
@@ -168,7 +171,7 @@ function SourceTag({
   );
 }
 
-/** 建议仓位标识: 固定四级分类(小/中/大/满), 置于标的名称后方, 按档配色凸显 */
+/** 建议仓位标识: 固定五级分类(空/小/中/大/满), 置于标的名称后方, 按档配色凸显 */
 function PositionChip({ position, size = 10 }: { position?: string | number | null; size?: number }) {
   const level = toPosLevel(position);
   if (!level) return null;

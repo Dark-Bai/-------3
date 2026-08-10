@@ -1001,7 +1001,7 @@ export interface PhiliaMarketLeaderCore {
     skill?: string;
     /** 对应战法编号 */
     tactic?: string;
-    /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+    /** 建议仓位: 固定五级分类之一(空/小/中/大/满) */
     position?: string;
     /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
     sourceRef?: string;
@@ -1035,7 +1035,7 @@ export interface PhiliaMarketLowAbsorb {
     skill?: string;
     /** 对应战法编号 */
     tactic?: string;
-    /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+    /** 建议仓位: 固定五级分类之一(空/小/中/大/满) */
     position?: string;
     /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
     sourceRef?: string;
@@ -1054,7 +1054,7 @@ export interface PhiliaMarketOpportunity {
   skill?: string;
   /** 对应战法编号 */
   tactic?: string;
-  /** 建议仓位: 固定四级分类之一(小/中/大/满) */
+  /** 建议仓位: 固定五级分类之一(空/小/中/大/满) */
   position?: string;
   /** 精确来源标注(文件名 + 章节编号 + 模型编号) */
   sourceRef?: string;
@@ -1084,7 +1084,7 @@ export interface PhiliaTrendEnvironment {
   style: string;
   /** 波段环境定性 */
   environment: string;
-  /** 仓位基调: 固定四级分类之一(小/中/大/满) */
+  /** 仓位基调: 固定五级分类之一(空/小/中/大/满) */
   basePosition?: string;
   /** 精炼研判 */
   analysis: string;
@@ -1111,7 +1111,7 @@ export interface PhiliaTrendStock {
   resistance: string;
   /** 买点类型: 量窒息埋伏/突破半路/收红确认 */
   buyPoint: string;
-  /** 仓位档位: 固定四级分类之一(小/中/大/满) */
+  /** 仓位档位: 固定五级分类之一(空/小/中/大/满) */
   position?: string;
   /** 一句买卖逻辑 */
   logic: string;
@@ -1124,7 +1124,7 @@ export interface PhiliaStockAdvice {
   position: string;
   /** 综合建议(大局因子 + 竞价) */
   opinion: string;
-  /** 仓位档位: 固定四级分类之一(小/中/大/满) */
+  /** 仓位档位: 固定五级分类之一(空/小/中/大/满) */
   positionAdvice?: string;
   /** 风险提示 */
   risk: string;

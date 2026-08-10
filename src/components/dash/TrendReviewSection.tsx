@@ -10,8 +10,9 @@ import type { PhiliaMarketAnalysisResult, PhiliaStockAdvice, PhiliaTrendStock } 
 
 /** 金融标的蓝色标注 */
 const TARGET_COLOR = "#1d4ed8";
-/** 仓位四级配色 */
+/** 仓位五级配色 */
 const POS_LEVEL_STYLE: Record<string, { color: string; bg: string }> = {
+  空: { color: "#8b7a5e", bg: "#f0ece4" },
   小: { color: "#3f7d3f", bg: "#e6f2e6" },
   中: { color: "#b8860b", bg: "#faf3d9" },
   大: { color: "#d4943a", bg: "#f8ead0" },
