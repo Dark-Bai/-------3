@@ -469,7 +469,7 @@ function parseTencentLine(line) {
   };
 }
 
-const QUOTE_CACHE_TTL = 1500;
+const QUOTE_CACHE_TTL = 3000;
 
 async function handleQuotes(codes) {
   // 按代码独立缓存(报价中心请求集随面板订阅动态变化, 整串做 key 会每次 miss 直冲上游)
@@ -3522,8 +3522,8 @@ function scheduleColdWarmup() {
       cached("bf:20", 120000, () => handleBoardFlow("20")),
       getFengFrontBase(""),
       getLeaderPool(false),
-      // 指数面板分时: 预热常见指数代码, 避免冷启动时 usN225/usKS11 5s 慢请求占队列
-      ...(["sh000001", "sz399001", "sz399006", "sh000688", "hkHSI", "usIXIC", "usN225", "usKS11"].map((c) => getMinute(c))),
+      // 指数面板分时: 预热前端订阅的 10 只指数, 避免冷启动时 usN225/usKS11 5s 慢请求占队列
+      ...(["sh000001", "sz399001", "sz399006", "sh000688", "sh000300", "hkHSI", "hkHSTECH", "usIXIC", "usN225", "usKS11"].map((c) => getMinute(c))),
     ];
     const results = await Promise.allSettled(jobs);
     const ok = results.filter((r) => r.status === "fulfilled").length;

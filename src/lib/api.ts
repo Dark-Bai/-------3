@@ -307,13 +307,24 @@ const REQ_MAX_RETRY = 2;   // 幂等 GET 最大重试次数
 const RETRY_BASE = 500;    // 首次重试基础退避(ms)
 const RETRY_BACKOFF = 4;   // 指数退避倍数(500ms → 2s)
 const RETRY_429_WAIT = 30000; // 429 后整体冷却(ms), 不重试当前请求
+const ACQUIRE_TIMEOUT = 15000; // 排队等待上限(ms): 并发满时排队超过该时长快速失败, 防慢请求风暴时队列无限堆积
 
 // 简单信号量: 限制同时在途请求数, 出站请求排队, 防止后端超载
 let inFlight = 0;
 const waiters: Array<() => void> = [];
 function acquire(): Promise<void> {
   if (inFlight < REQ_CAP) { inFlight++; return Promise.resolve(); }
-  return new Promise((r) => waiters.push(r));
+  return new Promise((resolve, reject) => {
+    waiters.push(resolve);
+    // 排队超时保护: 队列长期满(上游慢/限流)时快速失败, 由轮询下一轮重试, 避免请求无限堆积冻结主线程
+    setTimeout(() => {
+      const i = waiters.indexOf(resolve);
+      if (i >= 0) {
+        waiters.splice(i, 1);
+        reject(new Error("请求排队超时"));
+      }
+    }, ACQUIRE_TIMEOUT);
+  });
 }
 function release(): void {
   inFlight--;
@@ -326,8 +337,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt: number) => RETRY_BASE * Math.pow(RETRY_BACKOFF, attempt);
 
 async function doGet<T>(path: string, attempt = 0, timeout = REQ_TIMEOUT): Promise<T> {
-  // 若处于 429 冷却期, 先等待冷却结束再发请求
-  if (cooldownUntil > Date.now()) await sleep(cooldownUntil - Date.now());
+  // 若处于 429 冷却期: 快速失败而非排队等待, 避免冷启动请求风暴时所有请求堆积等冷却(30s)造成页面假死,
+  // 由各轮询下一轮自动重试恢复
+  if (cooldownUntil > Date.now()) throw new Error("rate limited, cooling");
   let r: Response;
   try {
     r = await fetch(path, { signal: timeoutSignal(timeout) });
@@ -364,6 +376,8 @@ async function post<T>(path: string, body?: unknown, timeout = REQ_TIMEOUT): Pro
   try {
     let r: Response;
     try {
+      // 429 冷却期: 快速失败, 不排队等待(理由同 doGet)
+      if (cooldownUntil > Date.now()) throw new Error("rate limited, cooling");
       r = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

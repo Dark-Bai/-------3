@@ -3,14 +3,16 @@
  *
  * 功能:
  *  - 自选股管理: 列表查看/删除(搜索添加已移至 mini自选 面板)
- *  - 股票卡片: 实时价格(1s) + 涨跌幅(红涨绿跌) + 成交额 + Level2 大单净额 + 迷你分时图 + 总市值
+ *  - 股票卡片: 实时价格 + 涨跌幅(红涨绿跌) + 成交额 + Level2 大单净额 + 迷你分时图 + 总市值
  *  - 卡片拖动排序(HTML5 DnD, 无外部依赖), 顺序独立于 mini自选
- *  - 多组轮询: 报价 1s / 分时 10s / 大单净额 30s / 市值 60s, 均批量请求 + 后端缓存, 不阻塞渲染
+ *  - 多组轮询: 价格统一走报价中心(useQuotes, 5s) / 分时 10s / 大单净额 30s / 市值 60s,
+ *    均批量请求 + 后端缓存, 不阻塞渲染; 价格不再 1s 独立轮询, 避免与报价中心重复请求形成风暴
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Panel, type PanelZoomProps } from "./Panel";
 import { usePolling } from "@/hooks/usePolling";
-import { api, type Quote, type MinuteData, type StockFlow } from "@/lib/api";
+import { api, type MinuteData, type StockFlow } from "@/lib/api";
+import { useQuotes, type HubQuote } from "@/lib/market";
 import { bgChg, clsChg, fmtPct, fmtPrice, fmtWan, fmtYuan } from "@/lib/format";
 import { useWatchlist } from "./WatchlistContext";
 
@@ -23,6 +25,14 @@ const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 
 /** 涨跌颜色: 涨红 / 跌绿(与全站一致) */
 const hexChgV = (v: number) => (v > 0 ? "#b8533a" : v < 0 ? "#4a6b3f" : "#a8987e");
+
+/** 生成与值域同量级的"好看"刻度步长(1/2/5×10^n), 保证刻度循环迭代数恒为个位数级 */
+function niceStep(target: number): number {
+  if (!Number.isFinite(target) || target <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(target)));
+  const norm = target / mag;
+  return (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+}
 
 /** 迷你分时图: 价格线 + 面积 + 昨收基准线 + 涨跌幅纵轴 + 时间横轴(A股 240 分钟) */
 function MiniChart({ points, prec, width, height }: { points: { t: string; p: number }[]; prec: number; width: number; height: number }) {
@@ -51,9 +61,14 @@ function MiniChart({ points, prec, width, height }: { points: { t: string; p: nu
     }
     // Y 轴: 以昨收为 0% 的涨跌幅坐标
     const ps = points.map((d) => d.p);
-    const pctArr = ps.map((p) => ((p - prec) / prec) * 100);
-    const span = Math.max(...pctArr, 0) - Math.min(...pctArr, 0);
-    const step = span < 1.5 ? 0.5 : span < 4 ? 1 : 2; // 刻度步长(%), 自适应
+    // 防御异常数据: prec 非有限/极小(如 0.0001)会使涨跌幅值域爆炸(1e6~1e300%),
+    // 若刻度步长固定(如 2%)则循环迭代数趋近无穷 → 主线程永久冻结。此处:
+    //  1) 值域截断 ±1000%, 2) 步长与量级匹配, 3) 循环加迭代上限三重保险
+    const precOk = Number.isFinite(prec) && Math.abs(prec) >= 1e-4;
+    const pctArr = precOk ? ps.map((p) => ((p - prec) / prec) * 100) : [];
+    const pctFinite = pctArr.every((v) => Number.isFinite(v));
+    const span = pctFinite && pctArr.length ? Math.min(Math.max(...pctArr, 0) - Math.min(...pctArr, 0), 2000) : 0;
+    const step = span < 1.5 ? 0.5 : span < 4 ? 1 : niceStep(span / 4); // 刻度步长(%), 与值域同量级
     let min = Math.floor(Math.min(...pctArr, 0) / step) * step;
     let max = Math.ceil(Math.max(...pctArr, 0) / step) * step;
     if (max - min < 1e-9) { max = step; min = -step; }
@@ -65,7 +80,7 @@ function MiniChart({ points, prec, width, height }: { points: { t: string; p: nu
     const area = `${xs[0].toFixed(1)},${padT + chartH} ${line} ${xs[xs.length - 1].toFixed(1)},${padT + chartH}`;
     // Y 轴刻度(涨跌幅 %)
     const yTicks: { y: number; label: string }[] = [];
-    for (let v = min; v <= max + 1e-9; v += step) {
+    for (let v = min, guard = 0; v <= max + 1e-9 && guard < 100; v += step, guard++) {
       const abs = Math.abs(v);
       yTicks.push({ y: Y(v), label: abs < 0.05 ? "0" : `${v > 0 ? "+" : ""}${v.toFixed(step < 1 ? 1 : 0)}%` });
     }
@@ -111,7 +126,7 @@ function MiniChart({ points, prec, width, height }: { points: { t: string; p: nu
 function WatchCard({
   code, quote, minute, flow, marketValue, width, chartH, dragging, onSelect, onRemove, onHexin, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
-  code: string; quote?: Quote; minute?: MinuteData; flow?: StockFlow; marketValue?: number; width: number; chartH: number;
+  code: string; quote?: HubQuote; minute?: MinuteData; flow?: StockFlow; marketValue?: number; width: number; chartH: number;
   dragging: boolean; onSelect: () => void;
   onRemove: () => void;
   onHexin: () => void;
@@ -224,22 +239,8 @@ export function WatchlistPanel({ className = "", ...zoomProps }: { className?: s
   }, [cardH]);
 
   /* ---------------- 数据轮询(批量, 不同频率) ---------------- */
-  // 报价 1s(后端 1.5s 缓存, 有效数据时效 ≤1.5s)
-  const { data: quotes } = usePolling(
-    () => (enabled ? api.quotes(codes).catch(() => null) : Promise.resolve(null)),
-    1000,
-    [codesKey],
-    (a, b) => {
-      if (!a || !b) return a === b;
-      // 任一 code 在旧/新数据中缺失(如新增股票首帧) → 判定不同, 立即更新, 避免新卡片数据永远不落地
-      return codes.every((c) => {
-        const x = a[c], y = b[c];
-        if (!x || !y) return false;
-        return x.price === y.price && x.pct === y.pct;
-      });
-    },
-    enabled
-  );
+  // 报价: 统一走报价中心(useQuotes, 5s 单源), 不再 1s 独立轮询——避免与报价中心重复请求
+  const quotes = useQuotes(codes);
   // 分时 10s(含成交量, 后端 5s 缓存)
   const { data: minutes } = usePolling(
     () => (enabled ? api.minutes(codes).catch(() => null) : Promise.resolve(null)),

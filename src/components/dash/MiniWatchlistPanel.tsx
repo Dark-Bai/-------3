@@ -5,12 +5,13 @@
  *  - 标题右侧搜索添加(与自选股共享列表, 新加的从头部插入, 两面板同步出现)
  *  - 单行紧凑展示: 股票名称(点击打开个股小窗) + 涨幅 + 总金额 + 主力净额
  *  - 拖动排序(HTML5 DnD): 顺序独立持久化(dash:watchlist-mini-order), 不影响自选股卡片顺序
- *  - 数据: 报价 1s / 大单净额 30s, useSharedPolling 同 key 共享轮询
+ *  - 数据: 报价统一走报价中心(useQuotes 5s 单源) / 大单净额 30s
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Panel, type PanelZoomProps } from "./Panel";
 import { useSharedPolling } from "@/hooks/useSharedPolling";
-import { api, type Quote, type StockFlow, type StockSearchResult } from "@/lib/api";
+import { api, type StockFlow, type StockSearchResult } from "@/lib/api";
+import { useQuotes, type HubQuote } from "@/lib/market";
 import { clsChg, fmtPct, fmtWan, fmtYuan } from "@/lib/format";
 import { useWatchlist } from "./WatchlistContext";
 import { useStockDetail } from "./StockDetailContext";
@@ -24,7 +25,7 @@ const TNUM = { fontVariantNumeric: "tabular-nums" } as const;
 function MiniRow({
   code, quote, flow, dragging, onOpen, onRemove, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
-  code: string; quote?: Quote; flow?: StockFlow; dragging: boolean;
+  code: string; quote?: HubQuote; flow?: StockFlow; dragging: boolean;
   onOpen: () => void;
   onRemove: () => void;
   onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -112,12 +113,8 @@ export function MiniWatchlistPanel({ className = "", ...zoomProps }: { className
     try { localStorage.setItem(MINI_ORDER_KEY, JSON.stringify(miniOrder)); } catch { /* ignore */ }
   }, [miniOrder]);
 
-  /* ---------------- 数据(共享轮询: 报价 1s / 大单净额 30s) ---------------- */
-  const { data: quotes } = useSharedPolling<Record<string, Quote> | null>(
-    "mini:quotes",
-    () => (enabled ? api.quotes(codes).catch(() => null) : Promise.resolve(null)),
-    1000
-  );
+  /* ---------------- 数据(价格统一走报价中心 5s 单源; 大单净额 30s) ---------------- */
+  const quotes = useQuotes(codes);
   const { data: flows } = useSharedPolling<StockFlow[] | null>(
     "mini:flows",
     () => (enabled ? api.stockFlows(codes).catch(() => null) : Promise.resolve(null)),

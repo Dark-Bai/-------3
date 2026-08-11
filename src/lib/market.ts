@@ -51,33 +51,43 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// 报价轮询在途标记: setInterval 触发时若上一轮尚未完成则跳过,
+// 防止慢请求/排队时每 5s 无条件再发, 形成请求堆积与渲染风暴(冷启动卡死根因之一)
+let ticking = false;
+
 async function tick() {
-  if (!refCounts.size) return;
-  const codes = [...refCounts.keys()];
-  const rs = await Promise.allSettled([api.quotes(codes)]);
-  const now = Date.now();
-  let changed = false;
-  for (const r of rs) {
-    if (r.status !== "fulfilled") continue;
-    for (const [code, q] of Object.entries(r.value)) {
-      const next: HubQuote = {
-        name: typeof q.name === "string" ? q.name : undefined,
-        price: num(q.price),
-        pct: num(q.pct),
-        amount: q.amount != null ? num(q.amount) : undefined,
-        turnover: q.turnover != null ? num(q.turnover) : undefined,
-        updated: now,
-      };
-      const old = entries.get(code);
-      if (!old || old.price !== next.price || old.pct !== next.pct || old.amount !== next.amount || old.turnover !== next.turnover) {
-        entries.set(code, next);
-        changed = true;
+  if (ticking) return;
+  ticking = true;
+  try {
+    if (!refCounts.size) return;
+    const codes = [...refCounts.keys()];
+    const rs = await Promise.allSettled([api.quotes(codes)]);
+    const now = Date.now();
+    let changed = false;
+    for (const r of rs) {
+      if (r.status !== "fulfilled") continue;
+      for (const [code, q] of Object.entries(r.value)) {
+        const next: HubQuote = {
+          name: typeof q.name === "string" ? q.name : undefined,
+          price: num(q.price),
+          pct: num(q.pct),
+          amount: q.amount != null ? num(q.amount) : undefined,
+          turnover: q.turnover != null ? num(q.turnover) : undefined,
+          updated: now,
+        };
+        const old = entries.get(code);
+        if (!old || old.price !== next.price || old.pct !== next.pct || old.amount !== next.amount || old.turnover !== next.turnover) {
+          entries.set(code, next);
+          changed = true;
+        }
       }
     }
+    if (changed) emit();
+    // TV 调试角标读取: 上次报价心跳时间与是否有变化(定位"面板不更新"是轮询死了还是行情静止)
+    (window as unknown as { __hubStatus?: { t: number; changed: boolean } }).__hubStatus = { t: Date.now(), changed };
+  } finally {
+    ticking = false;
   }
-  if (changed) emit();
-  // TV 调试角标读取: 上次报价心跳时间与是否有变化(定位"面板不更新"是轮询死了还是行情静止)
-  (window as unknown as { __hubStatus?: { t: number; changed: boolean } }).__hubStatus = { t: Date.now(), changed };
 }
 
 function onVisibility() {
@@ -100,11 +110,11 @@ function maybeStopLoop() {
   }
 }
 
-/** 新代码注册后防抖立即补拉(节流 ≥2s, 防滚动订阅风暴直冲上游) */
+/** 新代码注册后防抖立即补拉(节流 ≥4s, 防冷启动多面板同时注册时的补拉风暴直冲上游) */
 let lastFlush = 0;
 function scheduleFlush() {
   if (flushTimer != null || document.hidden) return;
-  const wait = Math.max(250, 2000 - (Date.now() - lastFlush));
+  const wait = Math.max(500, 4000 - (Date.now() - lastFlush));
   flushTimer = window.setTimeout(() => {
     flushTimer = null;
     lastFlush = Date.now();
