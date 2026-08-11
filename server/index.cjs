@@ -3506,7 +3506,31 @@ server.listen(PORT, () => {
   scheduleDailyBoardsRefresh(); // 每日行业/概念批量刷新(启动后立即检查一次, 之后每小时)
   scheduleMsDaily(); // 市场情绪收盘定格(15:00后保存离线快照, 每30s检查)
   ensureThsGateway(); // 确保 THS 数据网关运行(未启动则自动拉起)
+  scheduleColdWarmup(); // 冷启动预热长 TTL 缓存, 用户首次打开页面即命中而非等待上游
 });
+
+/* ---------------- 冷启动缓存预热 ----------------
+ * 冷启动时前端一次性并发发起十余个面板请求, 而 treasuries/board-flow/fengk-front/
+ * leader-pool/minutes 等接口首次无缓存需等待上游(2.5~5s), 慢请求占满前端并发队列
+ * (REQ_CAP=6), 后续请求排队过久导致面板显示「连接失败」。
+ * 服务启动 2s 后后台预热长 TTL 缓存, 用户打开页面时这些接口直接命中后端缓存(毫秒级)。
+ * 预热失败静默(上游/网关未就绪时), 不影响启动。 */
+function scheduleColdWarmup() {
+  const warm = async () => {
+    const jobs = [
+      cached("treasuries", 30000, () => handleTreasuries()),
+      cached("bf:20", 120000, () => handleBoardFlow("20")),
+      getFengFrontBase(""),
+      getLeaderPool(false),
+      // 指数面板分时: 预热常见指数代码, 避免冷启动时 usN225/usKS11 5s 慢请求占队列
+      ...(["sh000001", "sz399001", "sz399006", "sh000688", "hkHSI", "usIXIC", "usN225", "usKS11"].map((c) => getMinute(c))),
+    ];
+    const results = await Promise.allSettled(jobs);
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    console.log(`[warmup] 冷启动缓存预热完成: ${ok}/${results.length} 项命中`);
+  };
+  setTimeout(() => { warm().catch(() => {}); }, 2000).unref();
+}
 
 /* ---------------- THS 数据网关自动拉起 ----------------
  * 个股分时/新闻等依赖同花顺 thsdk, 由 server/ths-gateway.py 提供。

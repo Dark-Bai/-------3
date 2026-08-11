@@ -301,7 +301,7 @@ function timeoutSignal(ms: number): AbortSignal {
 }
 
 /* ---------- 前端 API 调用机制(均衡型): 并发上限 + 超时 + 重试 + 429 冷却 ---------- */
-const REQ_CAP = 6;         // 同时在途请求上限(均衡型 8 × 下调20% = 6.4 → 6)
+const REQ_CAP = 8;         // 同时在途请求上限(冷启动一次性并发十余面板请求, 6 偏紧易排队超时)
 const REQ_TIMEOUT = 8000;  // 单请求超时(ms)
 const REQ_MAX_RETRY = 2;   // 幂等 GET 最大重试次数
 const RETRY_BASE = 500;    // 首次重试基础退避(ms)
